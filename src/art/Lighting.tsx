@@ -1,5 +1,8 @@
-import { Environment, Lightformer } from '@react-three/drei'
+import { Cloud, Clouds, Environment, Lightformer } from '@react-three/drei'
+import { MeshBasicMaterial } from 'three'
 import { palette } from './palette'
+import { SkyDome } from './SkyDome'
+import { useQuality } from './useQuality'
 
 /**
  * Lighting is per-scene rather than global, which is one of the main payoffs of
@@ -22,8 +25,58 @@ export function Lighting({ variant }: { variant: LightingVariant }) {
 }
 
 function HubLighting() {
+  const quality = useQuality()
+
   return (
     <>
+      {/*
+        The sky, which is also the backdrop the whole island is read against.
+
+        Turbidity and the Rayleigh coefficient are pulled well away from their
+        physical defaults on purpose. Left alone, the Preetham model produces a
+        convincing but resolutely realistic blue that fights the saturated
+        palette everything else in the world is built from. Lifting turbidity
+        and dropping Rayleigh softens it toward the pastel horizon the island
+        was designed to sit inside.
+
+        The sun is placed to agree with the key light below. A sky whose sun is
+        somewhere other than where the shadows say it is reads as wrong long
+        before anyone can say why.
+      */}
+      {/*
+        `distance` has to stay inside the camera's far plane, which is 250. The
+        usual value for this component is in the thousands, matching three's own
+        example where the far plane is in the millions; at that scale here the
+        sky sphere sits entirely beyond far, and what renders instead is a
+        white-out with the world nowhere in it.
+      */}
+      <SkyDome sunDirection={[8, 14, 6]} />
+
+      {/*
+        Clouds have to be inside <Clouds>, which provides the context that
+        batches them into a single instanced draw. A bare <Cloud> finds no
+        parent and does not simply render on its own.
+      */}
+      {quality.cloudCount > 0 && (
+        <Clouds material={MeshBasicMaterial} limit={200} range={quality.cloudCount * 40}>
+          {Array.from({ length: quality.cloudCount }, (_, i) => (
+            <Cloud
+              key={i}
+              seed={i + 1}
+              segments={16}
+              bounds={[12, 2, 8]}
+              volume={7}
+              // Well above the play space and spread around it, so clouds read
+              // as distance rather than as something the player might jump to.
+              position={[Math.cos(i * 2.3) * 34, 30 + (i % 3) * 6, Math.sin(i * 2.3) * 34]}
+              opacity={0.28}
+              speed={0.08}
+              color="#ffffff"
+            />
+          ))}
+        </Clouds>
+      )}
+
       {/* Warm key. The only shadow caster, kept tight so the shadow map stays sharp. */}
       <directionalLight
         castShadow
@@ -36,9 +89,24 @@ function HubLighting() {
         */
         intensity={1.3}
         color="#fff2dd"
-        shadow-mapSize={[2048, 2048]}
+        shadow-mapSize={[quality.shadowMapSize, quality.shadowMapSize]}
         shadow-bias={-0.0005}
-        shadow-normalBias={0.02}
+        /*
+          Raised from 0.02 now that grass is in the scene. Normal bias offsets
+          the shadow lookup along the surface normal, and a blade is a thin
+          double-sided strip whose normal barely relates to the direction the
+          light arrives from, which is the exact case that produces shadow acne.
+          Too high and contact shadows detach from what casts them, so this is a
+          balance rather than a number to maximise.
+        */
+        shadow-normalBias={0.06}
+        /*
+          Blur radius, in shadow-map texels. Only has any effect under variance
+          shadow maps, which App selects for the tiers that ask for softness.
+          Under the percentage-closer default it is silently ignored.
+        */
+        shadow-radius={quality.softShadows ? 4 : 0}
+        shadow-blurSamples={quality.softShadows ? 12 : 0}
         /*
           Fitted to the island rather than to a round number. The plateau is
           radius 16 and nothing casts a shadow beyond it, so the previous +/-30

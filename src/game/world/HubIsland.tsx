@@ -1,14 +1,45 @@
-import { RigidBody, CuboidCollider, CylinderCollider } from '@react-three/rapier'
+import { RigidBody, CuboidCollider } from '@react-three/rapier'
 import { RoundedBox } from '@react-three/drei'
 import { palette } from '@/art/palette'
 import { emissive, mattePlastic, plastic, stone } from '@/art/materials'
-import { useStoneTextures } from '@/art/textures'
+import { usePbrTextures } from '@/art/textures'
+import { Grass, type GrassExclusion } from '@/art/Grass'
+import { Scatter } from '@/art/Scatter'
 import { useGame } from '../GameContext'
 import { useGameStore, useProgress } from '@/state/gameStore'
 import { LESSONS, ZONES } from '@/state/lessons'
 import { isSceneAccessible, isLessonComplete } from '@/state/progression'
 import { Portal } from './Portal'
 import { LessonTotem } from './LessonTotem'
+import { Terrain, PLATEAU_RADIUS } from './Terrain'
+
+/**
+ * Where nothing is planted.
+ *
+ * Grass and scatter share this list so a rock never grows through the ramp and
+ * a fern never sprouts inside a plinth. Radii are generous rather than exact:
+ * a blade poking through the edge of a platform is far more noticeable than a
+ * bare centimetre of ground beside it.
+ *
+ * Derived by hand from the geometry below rather than computed, because these
+ * are authored positions and a mismatch should be a visible bug in review
+ * rather than something that silently drifts.
+ */
+const GRASS_EXCLUSIONS: GrassExclusion[] = [
+  // Portal platform, 7 x 5 centred at (9, -5), plus its ramp running to x=2.
+  { x: 9, z: -5, radius: 4.6 },
+  { x: 4, z: -5, radius: 2.6 },
+  // Lesson totem plinths.
+  ...LESSONS.filter((l) => l.zoneId === 'basics').map((l) => ({
+    x: l.position[0],
+    z: l.position[2],
+    radius: 1.5,
+  })),
+  // Stepping blocks on the west side.
+  { x: -9, z: 6, radius: 1.9 },
+  { x: -11, z: 3.5, radius: 1.9 },
+  { x: -9.5, z: 1, radius: 1.9 },
+]
 
 /**
  * The hub island.
@@ -39,9 +70,9 @@ export function HubIsland() {
 
     Platform top face is 7 x 5, ramp is 3.59 x 3.
   */
-  const platformStone = useStoneTextures([6, 4])
-  const rampStone = useStoneTextures([3, 3])
-  const ringStone = useStoneTextures([8, 8])
+  const platformStone = usePbrTextures('stone', [6, 4])
+  const rampStone = usePbrTextures('stone', [3, 3])
+  const ringStone = usePbrTextures('stone', [8, 8])
 
   return (
     <group>
@@ -68,23 +99,10 @@ export function HubIsland() {
         player={player}
         onEnter={() => travel('cave', 'entrance', 'The Prompt Cave')}
       />
-      {/* Main plateau */}
-      <RigidBody type="fixed" colliders={false}>
-        <mesh position={[0, -0.5, 0]} receiveShadow castShadow>
-          <cylinderGeometry args={[16, 14.5, 1, 48]} />
-          <meshPhysicalMaterial {...mattePlastic(palette.grass)} />
-        </mesh>
-        {/* Soil band beneath, which gives the island thickness from low angles. */}
-        <mesh position={[0, -1.8, 0]} castShadow>
-          <cylinderGeometry args={[14.5, 9, 2, 48]} />
-          <meshPhysicalMaterial {...mattePlastic(palette.soil)} />
-        </mesh>
-        <mesh position={[0, -4.2, 0]} castShadow>
-          <coneGeometry args={[9, 4, 32]} />
-          <meshPhysicalMaterial {...mattePlastic(palette.soilDeep)} />
-        </mesh>
-        <CylinderCollider args={[0.5, 16]} position={[0, -0.5, 0]} />
-      </RigidBody>
+      {/* Ground, and the field growing on it. */}
+      <Terrain />
+      <Grass radius={PLATEAU_RADIUS} exclusions={GRASS_EXCLUSIONS} />
+      <Scatter radius={PLATEAU_RADIUS} exclusions={GRASS_EXCLUSIONS} />
 
       {/* Raised platform toward the cave, so the portal reads as a destination
           rather than as another object sitting on the lawn. */}
@@ -192,7 +210,7 @@ function PortalRing({
   lit,
 }: {
   center: [number, number, number]
-  textures: ReturnType<typeof useStoneTextures>
+  textures: ReturnType<typeof usePbrTextures>
   lit: boolean
 }) {
   return (

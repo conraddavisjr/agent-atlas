@@ -1,9 +1,10 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useRapier } from '@react-three/rapier'
 import { Vector3, type Group } from 'three'
 import { CAMERA } from '../player/tuning'
-import { stepCameraYaw } from '../player/movement'
+import { stepCameraYaw, stepInputYaw } from '../player/movement'
+import { cameraFrame, resetCameraFrame } from './cameraFrame'
 import type { InputIntent } from '../input/useInput'
 
 /**
@@ -20,6 +21,10 @@ import type { InputIntent } from '../input/useInput'
  * character resumes it immediately, which is the behaviour players expect from
  * a third-person platformer: the camera tidies up after you, but never argues
  * while you are actively aiming it.
+ *
+ * This component owns both angles in cameraFrame. The distinction between them
+ * is the difference between a camera that trails the player forever and one
+ * that arrives; the reasoning lives in cameraFrame.ts and stepInputYaw.
  */
 export function FollowCamera({
   target,
@@ -35,6 +40,16 @@ export function FollowCamera({
 
   const yaw = useRef(0)
   const pitch = useRef(0.25)
+
+  /*
+    The frame is a module singleton, so it outlives this component. Since the
+    camera is keyed by scene and its own yaw restarts at zero on every remount,
+    the shared copy has to be put back in step or the new scene would resolve
+    movement input against the previous scene's orientation.
+  */
+  useEffect(() => {
+    resetCameraFrame(yaw.current)
+  }, [])
   /** Current distance, which eases back out after a collision rather than popping. */
   const distance = useRef<number>(CAMERA.distance)
 
@@ -94,8 +109,14 @@ export function FollowCamera({
     const lookX = intent.current.lookX
     const lookingManually = lookX !== 0 || intent.current.lookY !== 0
 
+    // Kept as its own value rather than folded straight into yaw, because it is
+    // the one part of the camera's rotation that is allowed to move the input
+    // frame with it.
+    let manualLookDelta = 0
+
     if (!inputLocked.current) {
-      yaw.current -= lookX * CAMERA.mouseSensitivity
+      manualLookDelta = -lookX * CAMERA.mouseSensitivity
+      yaw.current += manualLookDelta
       pitch.current += intent.current.lookY * CAMERA.mouseSensitivity
       pitch.current = Math.max(CAMERA.minPitch, Math.min(CAMERA.maxPitch, pitch.current))
     }
@@ -123,6 +144,19 @@ export function FollowCamera({
         dt,
       })
     }
+
+    /*
+      Publish both angles. Order matters: inputYaw is stepped from the drag
+      alone, so it must be computed from the manual delta rather than from the
+      new yaw, which already has the realignment folded into it.
+    */
+    cameraFrame.yaw = yaw.current
+    cameraFrame.inputYaw = stepInputYaw({
+      inputYaw: cameraFrame.inputYaw,
+      cameraYaw: yaw.current,
+      hasMoveInput: cameraFrame.hasMoveInput,
+      manualLookDelta,
+    })
 
     scratch.lookAt.copy(focus.position)
     scratch.lookAt.y += CAMERA.lookHeight

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { useFrame, useThree } from '@react-three/fiber'
+import { useFrame } from '@react-three/fiber'
 import {
   CapsuleCollider,
   RigidBody,
@@ -13,6 +13,7 @@ import { BODY, JUMP, MOVEMENT, REVIVAL, SQUASH } from './tuning'
 import { approachAngle, stepHorizontal, stepVertical } from './movement'
 import { RobotModel } from './RobotModel'
 import { createRobotAnimState } from './robotAnim'
+import { cameraFrame } from '../camera/cameraFrame'
 import type { InputIntent } from '../input/useInput'
 import type { SocketName } from '@/state/types'
 
@@ -60,7 +61,6 @@ export function PlayerController({
   const bodyRef = useRef<RapierRigidBody>(null)
   const visualRef = useRef<Group>(null)
   const { world } = useRapier()
-  const camera = useThree((s) => s.camera)
 
   const anim = useRef(createRobotAnimState())
 
@@ -97,7 +97,6 @@ export function PlayerController({
     camForward: Vector3
     camRight: Vector3
     move: Vector3
-    up: Vector3
   } | null>(null)
   if (scratchRef.current === null) {
     scratchRef.current = {
@@ -105,7 +104,6 @@ export function PlayerController({
       camForward: new Vector3(),
       camRight: new Vector3(),
       move: new Vector3(),
-      up: new Vector3(0, 1, 0),
     }
   }
   const scratch = scratchRef.current
@@ -205,12 +203,23 @@ export function PlayerController({
     const grounded = controller.computedGrounded()
 
     // ---- Horizontal movement, camera relative ------------------------------
-    // Forward always means away from the camera, which is the only scheme that
-    // stays intuitive while the camera is orbiting.
-    camera.getWorldDirection(scratch.camForward)
-    scratch.camForward.y = 0
-    scratch.camForward.normalize()
-    scratch.camRight.crossVectors(scratch.camForward, scratch.up).normalize()
+    /*
+      Forward means away from the camera, which is the only scheme that stays
+      intuitive while the camera is orbiting.
+
+      Built from cameraFrame.inputYaw rather than from the camera's own world
+      direction. Those are the same angle right up until the camera starts
+      moving itself, and reading the live camera there is what used to stop
+      auto-alignment ever converging: the correction turned the input by exactly
+      as much as it turned the camera. See cameraFrame.ts.
+    */
+    const basis = cameraFrame.inputYaw
+    const sinB = Math.sin(basis)
+    const cosB = Math.cos(basis)
+    // The camera sits at player + (sin, cos) * distance and looks back at it,
+    // so its forward on the ground plane is the negation of that offset.
+    scratch.camForward.set(-sinB, 0, -cosB)
+    scratch.camRight.set(cosB, 0, -sinB)
 
     scratch.desired
       .set(0, 0, 0)
@@ -219,6 +228,15 @@ export function PlayerController({
 
     const hasInput = scratch.desired.lengthSq() > 0.0001
     if (hasInput) scratch.desired.normalize()
+
+    /*
+      Published for the camera, which owns inputYaw but cannot know whether a
+      direction is being held. Uses the raw input rather than `hasInput` so that
+      a locked frame during a transition reads as "not steering" and lets the
+      frame re-sync, rather than freezing it at whatever was held when the iris
+      closed.
+    */
+    cameraFrame.hasMoveInput = hasInput
 
     const targetX = scratch.desired.x * MOVEMENT.maxSpeed
     const targetZ = scratch.desired.z * MOVEMENT.maxSpeed
@@ -372,6 +390,14 @@ export function PlayerController({
         facing: facing.current,
         reviving: reviving.current,
         dead: dead.current,
+        /*
+          Both camera angles, because the interesting question about them is
+          whether they have diverged and by how much. Auto-realignment moves
+          only `camYaw`, so `camYaw - inputYaw` is exactly how far round the
+          camera has swung on its own since the player last let go.
+        */
+        camYaw: cameraFrame.yaw,
+        inputYaw: cameraFrame.inputYaw,
         peakY: debug.current.peakY,
         jumps: debug.current.jumps,
         resetPeak: () => {

@@ -2,6 +2,7 @@ import { useGameStore, useProgress } from '@/state/gameStore'
 import { LESSONS, ZONES } from '@/state/lessons'
 import { zoneProgress } from '@/state/progression'
 import { getScene } from '@/game/scenes/registry'
+import { QualitySelector } from './QualitySelector'
 
 /**
  * DOM overlay rather than in-canvas UI.
@@ -36,6 +37,7 @@ export function HUD() {
         <Key label="WASD / Arrows" action="Move" />
         <Key label="Space" action="Jump" />
         <Key label="Drag" action="Look" />
+        <QualitySelector />
       </div>
 
       {/*

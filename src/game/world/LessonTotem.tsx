@@ -5,7 +5,7 @@ import { Billboard, RoundedBox, Text } from '@react-three/drei'
 import type { Group, Mesh } from 'three'
 import { palette } from '@/art/palette'
 import { emissive, gel, plastic, stone } from '@/art/materials'
-import { useStoneTextures } from '@/art/textures'
+import { usePbrTextures } from '@/art/textures'
 import { useProximity } from '../interaction/useProximity'
 import type { Lesson } from '@/state/types'
 
@@ -40,7 +40,7 @@ export function LessonTotem({
 
   /* The plinth is a cylinder about 5m around, so 4 repeats lands a stone at
      roughly the same 1.2m as the platform and the arch. */
-  const plinthStone = useStoneTextures([4, 1])
+  const plinthStone = usePbrTextures('stone', [4, 1])
 
   useProximity(
     anchor,

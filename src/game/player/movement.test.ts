@@ -5,6 +5,7 @@ import {
   initialVerticalState,
   stepCameraYaw,
   stepHorizontal,
+  stepInputYaw,
   stepVertical,
   wrapAngle,
 } from './movement'
@@ -221,7 +222,16 @@ describe('camera realignment', () => {
     // The target is facing + pi. Starting at 0 and needing to reach 3pi/2, the
     // short way around is downward through negative yaw.
     expect(next).toBeLessThan(walking.yaw)
-    expect(Math.abs(next - walking.yaw)).toBeCloseTo(CAMERA.realignSpeed * DT, 5)
+  })
+
+  it('corrects proportionally, so a big error moves further than a small one', () => {
+    // The property a fixed radians-per-second could not have. It is what lets
+    // one number serve both a half-turn recovery and an imperceptible nudge.
+    const far = stepCameraYaw({ ...walking, yaw: 0 })
+    const near = stepCameraYaw({ ...walking, yaw: walking.facing + Math.PI - 0.4 })
+    expect(Math.abs(far - 0)).toBeGreaterThan(
+      Math.abs(near - (walking.facing + Math.PI - 0.4)),
+    )
   })
 
   it('leaves the camera alone while the player is aiming it', () => {
@@ -243,8 +253,7 @@ describe('camera realignment', () => {
   })
 
   it('holds still inside the deadzone', () => {
-    // Already behind the player, give or take a couple of degrees.
-    const aligned = { ...walking, yaw: walking.facing + Math.PI - 0.05 }
+    const aligned = { ...walking, yaw: walking.facing + Math.PI - 0.02 }
     expect(stepCameraYaw(aligned)).toBe(aligned.yaw)
   })
 
@@ -259,13 +268,88 @@ describe('camera realignment', () => {
     )
   })
 
+  it('recovers from a half turn in well under a second', () => {
+    // The case the whole redesign exists for: the player turns to walk toward
+    // the camera. A fixed rate slow enough to be invisible at small angles took
+    // roughly two seconds to do this, which is what read as the camera trailing.
+    let yaw = 0
+    const target = walking.facing + Math.PI
+    let steps = 0
+    while (Math.abs(wrapAngle(yaw - target)) > CAMERA.realignDeadzone && steps < 600) {
+      yaw = stepCameraYaw({ ...walking, yaw })
+      steps++
+    }
+    expect(steps * DT).toBeLessThan(1)
+  })
+
   it('never turns the long way around the circle', () => {
     // Camera just past the wrap point from its target. The short path crosses
     // pi; taking the long path would be a visible whip-pan through the front.
     const yaw = -Math.PI + 0.05
     const next = stepCameraYaw({ ...walking, facing: Math.PI / 2, yaw })
-    expect(Math.abs(wrapAngle(next - yaw))).toBeLessThanOrEqual(
-      CAMERA.realignSpeed * DT + 1e-9,
-    )
+    // A step of at most half the remaining error, taken the short way, can never
+    // exceed the error itself.
+    expect(Math.abs(wrapAngle(next - yaw))).toBeLessThan(Math.PI)
+  })
+})
+
+describe('movement input frame', () => {
+  const held = {
+    inputYaw: 1,
+    cameraYaw: 2,
+    hasMoveInput: true,
+    manualLookDelta: 0,
+  }
+
+  it('re-syncs to the camera when no direction is held', () => {
+    expect(stepInputYaw({ ...held, hasMoveInput: false })).toBe(held.cameraYaw)
+  })
+
+  it('ignores where the camera has moved to while a direction is held', () => {
+    // The heart of the fix. The camera realigning must not turn the direction
+    // the player is walking, or the correction moves its own target and the
+    // error never closes.
+    expect(stepInputYaw({ ...held, cameraYaw: 99 })).toBe(held.inputYaw)
+  })
+
+  it('follows a manual drag even while a direction is held', () => {
+    // Aiming the camera is also choosing which way forward points, so this one
+    // does have to feed through.
+    expect(stepInputYaw({ ...held, manualLookDelta: 0.25 })).toBeCloseTo(1.25, 6)
+  })
+
+  it('lets the camera converge on a player walking toward it', () => {
+    /*
+      The regression test for the bug this replaced. Holding back means the
+      heading sits exactly half a turn from the camera. Resolving input against
+      the live camera made that a fixed point the correction could never escape,
+      because every degree the camera gained it immediately gave back.
+    */
+    let cameraYaw = 0
+    let inputYaw = 0
+
+    for (let i = 0; i < 600; i++) {
+      // "Back" is the input frame's forward, reversed: the player walks toward
+      // where the camera was when they pressed the key.
+      const facing = wrapAngle(inputYaw)
+      cameraYaw = stepCameraYaw({
+        yaw: cameraYaw,
+        facing,
+        speed: MOVEMENT.maxSpeed,
+        lookingManually: false,
+        dt: DT,
+      })
+      inputYaw = stepInputYaw({
+        inputYaw,
+        cameraYaw,
+        hasMoveInput: true,
+        manualLookDelta: 0,
+      })
+    }
+
+    // The camera ends up behind the player rather than stuck opposite them.
+    expect(Math.abs(wrapAngle(cameraYaw - Math.PI))).toBeLessThan(CAMERA.realignDeadzone)
+    // And the direction of travel never moved while the key was held.
+    expect(inputYaw).toBe(0)
   })
 })

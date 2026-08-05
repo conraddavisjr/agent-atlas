@@ -162,6 +162,14 @@ export type RealignInput = {
  * heading is mostly noise, since facing is derived from velocity. And inside the
  * deadzone there is nothing worth correcting, which is what stops the camera
  * wobbling behind someone walking in a straight line.
+ *
+ * The step is exponential rather than a constant rate, which is the same
+ * frame-rate independent damping the camera already uses for its position. A
+ * fixed radians-per-second cannot be right at both ends of the range: slow
+ * enough that a two degree correction is invisible is far too slow to bring the
+ * camera round from half a turn, and fast enough to do that whips the view on
+ * every small heading change. Damping is proportional to the error, so it is
+ * both at once.
  */
 export function stepCameraYaw(input: RealignInput): number {
   const { yaw, facing, speed, lookingManually, dt } = input
@@ -176,8 +184,54 @@ export function stepCameraYaw(input: RealignInput): number {
     player is going. Half a turn apart.
   */
   const target = facing + Math.PI
+  const error = wrapAngle(target - yaw)
 
-  if (Math.abs(wrapAngle(target - yaw)) < CAMERA.realignDeadzone) return yaw
+  if (Math.abs(error) < CAMERA.realignDeadzone) return yaw
 
-  return approachAngle(yaw, target, CAMERA.realignSpeed * dt)
+  return yaw + error * (1 - Math.exp(-CAMERA.realignDamping * dt))
+}
+
+export type InputYawInput = {
+  /** The frame movement input is currently resolved against. */
+  inputYaw: number
+  /** Where the camera actually is. */
+  cameraYaw: number
+  /** Whether the player is holding a movement direction this step. */
+  hasMoveInput: boolean
+  /** Radians the player added to the camera by dragging, this step only. */
+  manualLookDelta: number
+}
+
+/**
+ * One step of the frame that movement input is resolved against.
+ *
+ * This is the function that makes auto-alignment converge, and it is worth
+ * being precise about why. Reading the movement direction off the live camera
+ * means that rotating the camera rotates the input, so the correction moves its
+ * own target by exactly as much as it moved itself. Holding back is then a
+ * fixed point: the heading sits half a turn from the camera and stays there no
+ * matter how long or how fast the camera chases it.
+ *
+ * Two rules break that:
+ *
+ * Dragging feeds through, because a player aiming the camera is also choosing
+ * which way "forward" should point.
+ *
+ * Auto-realignment does not, because it is not represented here at all. While a
+ * direction is held the frame only moves by what the player did to it, so the
+ * character travels a fixed world heading and the camera can actually arrive.
+ *
+ * Releasing re-syncs to wherever the camera ended up, so the next press is
+ * relative to what the player is now looking at.
+ *
+ * Deliberately no re-sync while a direction is still held, not even once the
+ * camera has caught up. Re-syncing at that moment would redefine the held key
+ * to mean the opposite of what it meant when it was pressed, and the character
+ * would reverse under the player's hand.
+ */
+export function stepInputYaw(input: InputYawInput): number {
+  const { inputYaw, cameraYaw, hasMoveInput, manualLookDelta } = input
+
+  if (!hasMoveInput) return cameraYaw
+  return inputYaw + manualLookDelta
 }

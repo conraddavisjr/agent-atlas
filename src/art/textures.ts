@@ -10,92 +10,67 @@ import {
 } from 'three'
 
 /**
- * The stone surfacing used for rock across the world.
+ * Surfacing for the world's ground materials.
  *
- * One image ships: an albedo photograph. The normal and roughness maps are
- * derived from it at load time rather than downloaded alongside it.
+ * Each set ships three files: colour, a tangent-space normal map, and an ORM
+ * pack with ambient occlusion in red and roughness in green. The pack is the
+ * glTF convention and it is doing real work rather than saving a download:
+ * three reads ambient occlusion from a texture's red channel and roughness from
+ * its green, so one image fills two material slots and is uploaded once.
  *
- * That is a deliberate trade. Shipping the full PBR set would be three files
- * and roughly 800KB instead of one file and 291KB, and for stone the derivation
- * is genuinely good rather than a compromise: rock is lit by the same crevices
- * that darken it, so albedo luminance tracks height closely enough that a Sobel
- * gradient produces a convincing normal. That correlation is what makes this
- * work here and what would make it fail on, say, painted metal, where the
- * pattern in the albedo has nothing to do with the surface relief.
- *
- * The derivation runs once per document, not once per material. It is a
- * megapixel of canvas work, which is fine on a cold load and absurd per mesh.
+ * Earlier versions derived the normal and roughness maps from the colour map
+ * with a Sobel pass, because only one file could be afforded. Authored maps are
+ * better in every way that matters here, so the derivation is gone. What
+ * survives from it is the levelling below, which solves a different problem.
  */
 
-const ALBEDO_URL = '/textures/stone-albedo.webp'
+export type PbrSetName = 'grass' | 'dirt' | 'stone'
 
-/** Tuning for the derived maps. Small numbers here, large visual consequences. */
-const DERIVE = {
+type SetConfig = {
   /**
-   * Sobel gain, applied after the gradient is normalised to [-1, 1].
+   * Where the albedo's mean value is moved to, out of 255, or null to use the
+   * photograph as it is.
    *
-   * Higher reads as deeper relief, but pushes the normals toward horizontal,
-   * which both darkens the surface and makes it shimmer under a moving camera.
-   * Past about 3 the stone starts going black in shadow.
+   * Only stone needs this. A colour map multiplies the material colour, so a
+   * dark photograph cannot tint, it can only dim: the rock averages around
+   * RGB(79,76,69) and every stone surface came out near black no matter what
+   * colour it was given. Levelling turns the photograph into what it is
+   * actually wanted for on a palette-driven surface, which is grain.
+   *
+   * Grass and dirt are left alone. They are meant to read as themselves rather
+   * than as a tint of something else, and both are already mid-value.
    */
-  normalStrength: 2.2,
-  /** Roughness floor and ceiling. Stone is never mirror-smooth nor fully matte. */
-  roughnessMin: 0.55,
-  roughnessMax: 0.95,
-
-  /**
-   * Where the levelled albedo's mean value lands, out of 255.
-   *
-   * The source photograph is a dark basalt averaging about RGB(79,76,69). Used
-   * as-is it is not a tint, it is a dimmer: a colour map multiplies the
-   * material colour, so a dark photograph can only ever darken, and every
-   * stone surface came out near black no matter what colour it was given.
-   *
-   * Levelling to a high mean turns the photograph into what it is actually
-   * wanted for here, which is grain. Value comes from the palette, variation
-   * comes from the photo.
-   *
-   * Has to leave headroom above it, which is the trap: the source runs from 37
-   * to 148 around a mean of 79, so it reaches about 70 above its own mean.
-   * Levelled to 236 the entire bright half of the rock clips at 255 and the
-   * stone comes out looking like flat plastic with a few dark speckles. Sitting
-   * the mean near 195 keeps both tails inside the range.
-   */
-  albedoLevel: 195,
-
+  level: number | null
   /**
    * How much of the photograph's own contrast survives levelling.
    *
-   * At 0 the albedo is flat and the stone is plastic again. At 1 the full
-   * dynamic range of a rock shot in hard light comes through, which is far too
-   * much next to flat-shaded neighbours.
+   * Has to leave headroom: the rock reaches about 70 above its own mean, so
+   * levelling too high clips its entire bright half and the stone comes out
+   * looking like flat plastic with dark speckles.
    */
-  albedoDetail: 0.75,
-} as const
+  detail: number
+}
 
-type DerivedMaps = { albedo: Texture; normalMap: Texture; roughnessMap: Texture }
+const SETS: Record<PbrSetName, SetConfig> = {
+  grass: { level: null, detail: 1 },
+  dirt: { level: null, detail: 1 },
+  stone: { level: 188, detail: 0.8 },
+}
 
-/**
- * Cached per image element rather than globally, so a second stone texture
- * added later derives its own maps instead of silently reusing these.
- */
-const derivedCache = new WeakMap<HTMLImageElement, DerivedMaps>()
+/** Cached per image element, so the levelling pass runs once per document. */
+const leveledCache = new WeakMap<HTMLImageElement, CanvasTexture>()
 
-function luminance(data: Uint8ClampedArray, i: number) {
-  // Rec. 601 luma. The exact coefficients matter less than being consistent,
-  // but using a proper luma rather than a channel average keeps red-brown rock
-  // from reading as uniformly flat.
-  return 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
+function clamp255(v: number) {
+  return v < 0 ? 0 : v > 255 ? 255 : v
 }
 
 /**
- * Build a tangent-space normal map and a roughness map from an albedo image.
- *
- * Both come out of a single pass over the pixels because the expensive part is
- * the read, not the arithmetic.
+ * Re-centre an albedo on a target mean while keeping each channel's distance
+ * from its own mean, so mottling and subtle warm and cool patches both survive
+ * but the overall darkness does not.
  */
-function deriveMaps(image: HTMLImageElement): DerivedMaps {
-  const cached = derivedCache.get(image)
+function levelAlbedo(image: HTMLImageElement, level: number, detail: number): CanvasTexture {
+  const cached = leveledCache.get(image)
   if (cached) return cached
 
   const w = image.naturalWidth
@@ -106,177 +81,85 @@ function deriveMaps(image: HTMLImageElement): DerivedMaps {
   source.height = h
   const sourceCtx = source.getContext('2d', { willReadFrequently: true })!
   sourceCtx.drawImage(image, 0, 0)
-  const src = sourceCtx.getImageData(0, 0, w, h).data
+  const src = sourceCtx.getImageData(0, 0, w, h)
+  const data = src.data
 
-  /*
-    Per-channel means, so levelling below preserves the rock's own colour
-    variation instead of flattening it to grey. Cheap: one pass, and it only
-    ever runs once per image for the life of the document.
-  */
   let sumR = 0
   let sumG = 0
   let sumB = 0
   const pixels = w * h
-  for (let i = 0; i < src.length; i += 4) {
-    sumR += src[i]
-    sumG += src[i + 1]
-    sumB += src[i + 2]
+  for (let i = 0; i < data.length; i += 4) {
+    sumR += data[i]
+    sumG += data[i + 1]
+    sumB += data[i + 2]
   }
   const meanR = sumR / pixels
   const meanG = sumG / pixels
   const meanB = sumB / pixels
 
-  const albedoCanvas = document.createElement('canvas')
-  albedoCanvas.width = w
-  albedoCanvas.height = h
-  const albedoCtx = albedoCanvas.getContext('2d')!
-  const albedo = albedoCtx.createImageData(w, h)
-
-  const normalCanvas = document.createElement('canvas')
-  normalCanvas.width = w
-  normalCanvas.height = h
-  const normalCtx = normalCanvas.getContext('2d')!
-  const normal = normalCtx.createImageData(w, h)
-
-  const roughCanvas = document.createElement('canvas')
-  roughCanvas.width = w
-  roughCanvas.height = h
-  const roughCtx = roughCanvas.getContext('2d')!
-  const rough = roughCtx.createImageData(w, h)
-
-  // Wrap rather than clamp at the edges. The texture tiles, so clamping would
-  // put a seam of flat normals along every tile boundary, which is exactly
-  // where a repeating texture is most likely to be noticed.
-  const at = (x: number, y: number) => {
-    const wx = ((x % w) + w) % w
-    const wy = ((y % h) + h) % h
-    return luminance(src, (wy * w + wx) * 4)
+  // Written back into the same buffer. There is no reason to allocate a second
+  // megapixel of ImageData when nothing reads the original again.
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = clamp255(level + (data[i] - meanR) * detail)
+    data[i + 1] = clamp255(level + (data[i + 1] - meanG) * detail)
+    data[i + 2] = clamp255(level + (data[i + 2] - meanB) * detail)
   }
 
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4
+  const out = document.createElement('canvas')
+  out.width = w
+  out.height = h
+  out.getContext('2d')!.putImageData(src, 0, 0)
 
-      // Sobel gradients. The 3x3 kernel is unrolled rather than looped; this
-      // runs a million times and the loop overhead is not free.
-      const tl = at(x - 1, y - 1)
-      const tc = at(x, y - 1)
-      const tr = at(x + 1, y - 1)
-      const ml = at(x - 1, y)
-      const mr = at(x + 1, y)
-      const bl = at(x - 1, y + 1)
-      const bc = at(x, y + 1)
-      const br = at(x + 1, y + 1)
-
-      const gx = tl + 2 * ml + bl - (tr + 2 * mr + br)
-      const gy = tl + 2 * tc + tr - (bl + 2 * bc + br)
-
-      /*
-        Normalise by the kernel's own maximum, not by 255.
-
-        A Sobel kernel has weights summing to 4 on each side, so with 0..255
-        input its output spans +/-1020. Dividing by 255 instead leaves gradients
-        up to 4 before the strength gain is even applied, which tips the
-        surface normal almost flat against the surface and drops the diffuse
-        term to nearly nothing. That is what "textured stone renders black"
-        looks like, and it is not obvious from the map itself: viewed as an
-        image the normal map still looks broadly correct.
-      */
-      const nx = (gx / (4 * 255)) * DERIVE.normalStrength
-      const ny = (gy / (4 * 255)) * DERIVE.normalStrength
-      const len = Math.hypot(nx, ny, 1)
-
-      // Encode to the usual 0..1 range stored in 0..255.
-      normal.data[i] = ((nx / len) * 0.5 + 0.5) * 255
-      normal.data[i + 1] = ((ny / len) * 0.5 + 0.5) * 255
-      normal.data[i + 2] = ((1 / len) * 0.5 + 0.5) * 255
-      normal.data[i + 3] = 255
-
-      /*
-        Levelled albedo. Each channel is re-centred on albedoLevel while keeping
-        its distance from its own mean, so the stone's mottling and its subtle
-        warm and cool patches both survive, but its overall darkness does not.
-      */
-      albedo.data[i] = clamp255(
-        DERIVE.albedoLevel + (src[i] - meanR) * DERIVE.albedoDetail,
-      )
-      albedo.data[i + 1] = clamp255(
-        DERIVE.albedoLevel + (src[i + 1] - meanG) * DERIVE.albedoDetail,
-      )
-      albedo.data[i + 2] = clamp255(
-        DERIVE.albedoLevel + (src[i + 2] - meanB) * DERIVE.albedoDetail,
-      )
-      albedo.data[i + 3] = 255
-
-      // Roughness from inverted luminance: the dark recesses of stone are the
-      // parts that hold grit and scatter light, the raised faces are the parts
-      // rain and boots have polished.
-      const lum = at(x, y) / 255
-      const r =
-        (DERIVE.roughnessMax - (DERIVE.roughnessMax - DERIVE.roughnessMin) * lum) * 255
-      rough.data[i] = r
-      rough.data[i + 1] = r
-      rough.data[i + 2] = r
-      rough.data[i + 3] = 255
-    }
-  }
-
-  albedoCtx.putImageData(albedo, 0, 0)
-  normalCtx.putImageData(normal, 0, 0)
-  roughCtx.putImageData(rough, 0, 0)
-
-  const albedoTex = new CanvasTexture(albedoCanvas)
-  const normalMap = new CanvasTexture(normalCanvas)
-  const roughnessMap = new CanvasTexture(roughCanvas)
-
-  albedoTex.colorSpace = SRGBColorSpace
-
-  // Both are data, not colour. Tagging them sRGB would have three.js apply a
-  // decode curve to vectors and gloss values, which bends normals toward the
-  // surface and makes everything read shinier than authored.
-  normalMap.colorSpace = LinearSRGBColorSpace
-  roughnessMap.colorSpace = LinearSRGBColorSpace
-
-  const maps = { albedo: albedoTex, normalMap, roughnessMap }
-  derivedCache.set(image, maps)
-  return maps
+  const texture = new CanvasTexture(out)
+  texture.colorSpace = SRGBColorSpace
+  leveledCache.set(image, texture)
+  return texture
 }
 
-function clamp255(v: number) {
-  return v < 0 ? 0 : v > 255 ? 255 : v
-}
-
-export type StoneTextures = {
+export type PbrTextures = {
   map: Texture
   normalMap: Texture
+  /** The ORM pack. three reads roughness from its green channel. */
   roughnessMap: Texture
+  /** The same ORM pack. three reads occlusion from its red channel. */
+  aoMap: Texture
 }
 
 /**
- * Stone maps at a given tiling density.
+ * A tiled PBR set at a given density.
  *
  * `repeat` is in tiles across the mesh's UV space, so a large floor wants a
- * larger number than a doorframe does. Every caller gets its own clones, which
+ * larger number than a doorframe does. Callers get their own clones, which
  * share the underlying image and cost only a texture descriptor.
  *
- * Suspends while the albedo loads, so callers need a <Suspense> boundary above
+ * Suspends while the images load, so callers need a Suspense boundary above
  * them. Both scenes already sit inside one.
  */
-export function useStoneTextures(repeat: [number, number] = [1, 1]): StoneTextures {
-  const albedo = useTexture(ALBEDO_URL)
+export function usePbrTextures(
+  name: PbrSetName,
+  repeat: [number, number] = [1, 1],
+): PbrTextures {
+  const [color, normal, orm] = useTexture([
+    `/textures/${name}-color.webp`,
+    `/textures/${name}-normal.webp`,
+    `/textures/${name}-orm.webp`,
+  ])
   const gl = useThree((s) => s.gl)
 
   const [ru, rv] = repeat
 
   return useMemo(() => {
-    // The raw photograph is only ever the input to the derivation. What the
-    // material samples is the levelled version, for the reasons in DERIVE.
-    const derived = deriveMaps(albedo.image as HTMLImageElement)
+    const config = SETS[name]
+    const base =
+      config.level === null
+        ? color
+        : levelAlbedo(color.image as HTMLImageElement, config.level, config.detail)
 
-    // Anisotropy is the single biggest quality difference on the portal
-    // platform, which is a floor seen at a grazing angle. Without it the tiling
-    // dissolves into aliased mush a few metres out; with it the stone stays
-    // legible to the horizon.
+    /*
+      Anisotropy is the single biggest quality difference on ground. Without it
+      a tiled surface viewed at a grazing angle dissolves into aliased mush a
+      few metres out, which is most of what makes tiling obvious.
+    */
     const maxAnisotropy = gl.capabilities.getMaxAnisotropy()
 
     const prepare = (source: Texture, srgb: boolean) => {
@@ -289,13 +172,34 @@ export function useStoneTextures(repeat: [number, number] = [1, 1]): StoneTextur
       t.repeat.set(ru, rv)
       t.anisotropy = maxAnisotropy
       t.colorSpace = srgb ? SRGBColorSpace : LinearSRGBColorSpace
+      /*
+        Ambient occlusion defaults to the second UV set, which none of this
+        geometry has. Pinning every map to channel 0 means the ORM pack lines up
+        with the colour map instead of silently sampling nothing.
+      */
+      t.channel = 0
       return t
     }
 
+    // Normal and ORM are data rather than colour. Tagging them sRGB would apply
+    // a decode curve to vectors and gloss values, bending normals toward the
+    // surface and making everything read shinier than authored.
+    const packed = prepare(orm, false)
+
     return {
-      map: prepare(derived.albedo, true),
-      normalMap: prepare(derived.normalMap, false),
-      roughnessMap: prepare(derived.roughnessMap, false),
+      map: prepare(base, true),
+      normalMap: prepare(normal, false),
+      roughnessMap: packed,
+      aoMap: packed,
     }
-  }, [albedo, gl, ru, rv])
+  }, [color, normal, orm, gl, name, ru, rv])
+}
+
+/** Preload paths, so a scene's ground is not the last thing to arrive. */
+export function pbrUrls(name: PbrSetName): string[] {
+  return [
+    `/textures/${name}-color.webp`,
+    `/textures/${name}-normal.webp`,
+    `/textures/${name}-orm.webp`,
+  ]
 }

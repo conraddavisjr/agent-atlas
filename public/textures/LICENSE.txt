@@ -1,21 +1,43 @@
-stone-albedo.webp
------------------
+Textures
+--------
 
-Source:  ambientCG - Rock030
-URL:     https://ambientcg.com/view?id=Rock030
-License: Creative Commons CC0 1.0 Universal (public domain dedication)
-         https://creativecommons.org/publicdomain/zero/1.0/
+All source material here is from ambientCG and is released under
+Creative Commons CC0 1.0 Universal (public domain dedication):
+
+  https://creativecommons.org/publicdomain/zero/1.0/
 
 CC0 places no restrictions on use, modification, or redistribution, and
-requires no attribution. This file is kept as a record of provenance rather
-than as a legal obligation, so that the origin of the asset stays traceable.
+requires no attribution. This file records provenance so the origin of each
+asset stays traceable, not because attribution is owed.
 
-Modifications from the original:
-  - Only the Color map is used. The pack's AmbientOcclusion, Displacement,
-    NormalDX, NormalGL, and Roughness maps were discarded.
-  - Re-encoded from JPEG to WebP at quality 82, which takes it from 1.41 MB
-    to 291 KB. Resolution is unchanged at 1024x1024.
+  stone-*   Rock030     https://ambientcg.com/view?id=Rock030
+  grass-*   Grass004    https://ambientcg.com/view?id=Grass004
+  dirt-*    Ground037   https://ambientcg.com/view?id=Ground037
 
-The normal and roughness maps the renderer uses are not shipped. They are
-derived from this file at load time in src/art/textures.ts, which is what
-keeps this directory to a single asset. See that file for the reasoning.
+Modifications from the originals
+--------------------------------
+
+Each set ships as three files rather than the five the source provides.
+
+  *-color.webp    The Color map, re-encoded to WebP.
+  *-normal.webp   The NormalGL map, re-encoded at higher quality than the
+                  others, because banding in a normal map reads as visible
+                  faceting across a lit surface.
+  *-orm.webp      AmbientOcclusion packed into red and Roughness into green,
+                  with blue unused.
+
+The packing is the glTF convention, and it is what lets one file fill two
+material slots: three.js reads ambient occlusion from the red channel and
+roughness from the green channel, so the same texture is assigned to both
+aoMap and roughnessMap. Metalness would occupy blue, but nothing in this
+world is metal, so it is left black.
+
+The Displacement maps are discarded. Nothing here is tessellated or
+parallax-mapped, so they would be weight with no effect.
+
+All maps are resized to 1024x1024. Colour and ORM are encoded at quality 86,
+normals at 92. Total is roughly 3.9 MB.
+
+Stone additionally has its albedo levelled at load time, so the palette drives
+its colour and the photograph only supplies grain. That happens in
+src/art/textures.ts, not here, and the reasoning is in that file.

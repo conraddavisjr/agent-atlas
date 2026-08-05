@@ -4,6 +4,14 @@ import { Vector2, type Texture } from 'three'
 /** R3F v9 derives element props from three itself rather than exporting them by name. */
 type MeshPhysicalMaterialProps = ThreeElements['meshPhysicalMaterial']
 
+/** The map set produced by `usePbrTextures`. */
+type PbrMaps = {
+  map: Texture
+  normalMap: Texture
+  roughnessMap: Texture
+  aoMap: Texture
+}
+
 /**
  * Material presets that produce the toy look.
  *
@@ -99,11 +107,11 @@ export function emissive(
  * glossy, but a trace of it keeps the material sitting in the same lighting
  * response as its neighbours instead of going conspicuously dead.
  *
- * Pass maps from `useStoneTextures`, which owns the tiling density.
+ * Pass maps from `usePbrTextures('stone', ...)`, which owns the tiling density.
  */
 export function stone(
   color: string,
-  maps: { map: Texture; normalMap: Texture; roughnessMap: Texture },
+  maps: PbrMaps,
   overrides: MeshPhysicalMaterialProps = {},
 ): MeshPhysicalMaterialProps {
   return {
@@ -113,8 +121,43 @@ export function stone(
     roughness: 1,
     metalness: 0,
     normalScale: new Vector2(1, 1),
+    /*
+      Occlusion from the map is pushed past 1. Baked AO in a tiling texture is
+      averaged over every direction a surface could face, so at its authored
+      strength it reads as a faint smudge once real lighting is on top of it.
+      Overdriving it is what makes the crevices read as depth rather than as
+      dirt, and it costs nothing.
+    */
+    aoMapIntensity: 1.35,
     clearcoat: 0.15,
     clearcoatRoughness: 0.8,
+    ...overrides,
+  }
+}
+
+/**
+ * Terrain: the island's grass and the dirt at its rim.
+ *
+ * Separate from `stone` because ground is read almost entirely at a grazing
+ * angle, and that changes what matters. No clearcoat at all, since a specular
+ * sheen across a whole field reads as wet plastic. Stronger normals, because
+ * relief is the only thing giving a flat plane any form once the camera is
+ * low. And occlusion pushed harder still, since it is doing the work of the
+ * shadowing between blades that the geometry cannot afford to model.
+ */
+export function ground(
+  color: string,
+  maps: PbrMaps,
+  overrides: MeshPhysicalMaterialProps = {},
+): MeshPhysicalMaterialProps {
+  return {
+    color,
+    ...maps,
+    roughness: 1,
+    metalness: 0,
+    normalScale: new Vector2(1.4, 1.4),
+    aoMapIntensity: 1.5,
+    clearcoat: 0,
     ...overrides,
   }
 }

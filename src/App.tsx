@@ -2,7 +2,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { Physics } from '@react-three/rapier'
 import { Group } from 'three'
-import { NoToneMapping } from 'three'
+import { NoToneMapping, VSMShadowMap } from 'three'
 
 import { useInput } from './game/input/useInput'
 import { PlayerController } from './game/player/PlayerController'
@@ -15,6 +15,7 @@ import { IrisTracker } from './game/scenes/IrisTracker'
 import { SceneReady } from './game/scenes/SceneReady'
 import { Lighting } from './art/Lighting'
 import { PostFX } from './art/PostFX'
+import { useQuality } from './art/useQuality'
 import { HUD } from './ui/HUD'
 import { useGameStore, useProgress } from './state/gameStore'
 import { COSMETICS, LESSONS } from './state/lessons'
@@ -34,6 +35,7 @@ const DISABLE_POSTFX = new URLSearchParams(window.location.search).has('nofx')
 
 export default function App() {
   const { intent, sample, endFrame } = useInput()
+  const quality = useQuality()
 
   /**
    * Input lock as a ref rather than state. It is read inside the physics step,
@@ -126,8 +128,18 @@ export default function App() {
   return (
     <>
       <Canvas
-        shadows
-        dpr={[1, 1.75]}
+        /*
+          Variance shadow maps on the tiers that ask for soft shadows, because
+          they are the only type three still supports a blur radius on.
+
+          drei's <SoftShadows> was the obvious choice and had to be abandoned:
+          it patches three's shadow shader chunk, and three 0.185 reworked those
+          internals, which produced a full white-out of the scene rather than a
+          visible error. The same release deprecated PCFSoftShadowMap, which is
+          the warning that gave the game away.
+        */
+        shadows={quality.softShadows ? { type: VSMShadowMap } : true}
+        dpr={[1, quality.maxDpr]}
         camera={{ fov: 55, near: 0.1, far: 250, position: [0, 6, 14] }}
         /*
           Tone mapping is disabled on the renderer and applied once at the end of

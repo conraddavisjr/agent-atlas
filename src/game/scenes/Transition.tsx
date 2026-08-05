@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { useProgress } from '@react-three/drei'
 import { iris } from './irisHandle'
 
 /**
@@ -26,6 +27,20 @@ import { iris } from './irisHandle'
  */
 export function Transition({ active, label }: { active: boolean; label?: string }) {
   const ref = useRef<HTMLDivElement>(null)
+
+  /*
+    Load progress, shown only while something is genuinely outstanding.
+
+    The world now ships several megabytes of texture, and until it arrives the
+    iris simply stays shut, which is indistinguishable from the game having
+    failed to start. A number under the destination name is the difference
+    between "loading" and "broken".
+
+    `active` is not part of the condition on purpose: the very first load is not
+    a transition, the screen is just covered, and that is exactly when the wait
+    is longest.
+  */
+  const { active: loading, progress } = useProgress()
 
   useEffect(() => {
     iris.el = ref.current
@@ -70,6 +85,49 @@ export function Transition({ active, label }: { active: boolean; label?: string 
           {label}
         </div>
       )}
+
+      {loading && (
+        <div style={loadingStyle}>
+          <div style={loadingBarTrack}>
+            <div style={{ ...loadingBarFill, width: `${Math.round(progress)}%` }} />
+          </div>
+          <div style={loadingText}>Loading {Math.round(progress)}%</div>
+        </div>
+      )}
     </div>
   )
+}
+
+const loadingStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: '50%',
+  bottom: '22%',
+  transform: 'translateX(-50%)',
+  width: 200,
+  fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
+  textAlign: 'center',
+}
+
+const loadingBarTrack: React.CSSProperties = {
+  height: 2,
+  background: 'rgba(150,200,255,0.18)',
+  borderRadius: 2,
+  overflow: 'hidden',
+}
+
+const loadingBarFill: React.CSSProperties = {
+  height: '100%',
+  background: 'rgba(120,215,255,0.85)',
+  // Eased, because raw loader progress arrives in jumps as each file lands and
+  // an unsmoothed bar reads as stuttering rather than as loading.
+  transition: 'width 240ms ease-out',
+}
+
+const loadingText: React.CSSProperties = {
+  marginTop: 10,
+  fontSize: '0.66rem',
+  letterSpacing: '0.18em',
+  textTransform: 'uppercase',
+  color: 'rgba(180,220,255,0.5)',
+  fontVariantNumeric: 'tabular-nums',
 }

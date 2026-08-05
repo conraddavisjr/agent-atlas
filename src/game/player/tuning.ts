@@ -158,17 +158,20 @@ export const CAMERA = {
   pullOutSpeed: 4,
 
   /**
-   * How fast the camera swings back behind the player, in radians per second.
+   * How hard the camera pulls back behind the player, as an exponential
+   * damping rate rather than a fixed angular speed.
    *
-   * This is the dial to reach for first if auto-align feels wrong, and it is
-   * deliberately far below MOVEMENT.turnSpeed. Movement is camera-relative, so
-   * rotating the camera changes what "left" means, and holding a strafe
-   * direction therefore walks a slow circle. That feedback loop is inherent to
-   * having both auto-align and camera-relative input; every game with the pair
-   * has it. Keeping the rate low is what turns it from disorienting into a
-   * gentle arc the player reads as the camera being helpful.
+   * Higher arrives sooner. Because the step is proportional to how far off the
+   * camera is, one number covers both ends: turning to walk toward the camera
+   * brings it round in well under a second, while the constant small
+   * corrections of ordinary walking stay imperceptible.
+   *
+   * This replaced a fixed radians-per-second, which could not do both. It also
+   * no longer has to be kept artificially low to tame a feedback loop, because
+   * the loop is gone: input is resolved against cameraFrame.inputYaw, which
+   * auto-realignment deliberately does not touch. See stepInputYaw.
    */
-  realignSpeed: 1.6,
+  realignDamping: 5.5,
 
   /**
    * Below this speed the camera stops chasing the heading.
@@ -181,10 +184,12 @@ export const CAMERA = {
   /**
    * Angular slack, in radians, before realignment engages at all.
    *
-   * Roughly 9 degrees. Without it the camera micro-corrects forever behind a
-   * player walking in a straight line, which is visible as a faint wobble.
+   * Roughly 2 degrees, down from 9. Exponential damping already tapers to
+   * nothing as it converges, so this no longer has to hide the tail of the
+   * correction. All it has to do now is stop the camera reacting to the last
+   * fraction of a degree of jitter in a velocity-derived heading.
    */
-  realignDeadzone: 0.16,
+  realignDeadzone: 0.035,
 } as const
 
 export const INTERACTION = {

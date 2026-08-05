@@ -4,7 +4,7 @@ import { Billboard, RoundedBox, Text } from '@react-three/drei'
 import type { Group } from 'three'
 import { palette } from '@/art/palette'
 import { emissive, mattePlastic, plastic, stone } from '@/art/materials'
-import { useStoneTextures } from '@/art/textures'
+import { usePbrTextures } from '@/art/textures'
 import { PortalShimmer } from '@/art/PortalShimmer'
 import { useProximity } from '../interaction/useProximity'
 
@@ -41,7 +41,7 @@ export function Portal({
     would stretch a single stone over the whole leg and read as a photograph
     pasted on rather than as masonry.
   */
-  const archStone = useStoneTextures([1.4, 3])
+  const archStone = usePbrTextures('stone', [1.4, 3])
 
   useProximity(
     anchor,

@@ -29,8 +29,10 @@ Saves written under the old `ai-academy-progress` key are copied across once on 
 | E or Enter | Interact with the totem you are standing at |
 | Gamepad | Left stick moves, A jumps, X interacts, right stick orbits |
 
-The camera swings back behind the direction you are travelling on its own.
+The camera swings back behind the direction you are travelling on its own, and it arrives rather than trailing.
 Dragging always wins while you are dragging, and auto-alignment resumes the moment you move again, with no cooldown in between.
+
+Graphics quality is guessed from your GPU on first load and can be changed in the top right, or forced with `?quality=low|medium|high`.
 
 Falling off the island kills you.
 Dying and arriving through a portal are the same event: the screen closes to a circle centred on the robot, and reopens as it drops back into the world.
@@ -46,11 +48,14 @@ Dying and arriving through a portal are the same event: the screen closes to a c
 - `src/game/scenes/registry.ts` maps scene ids to lazily loaded components, named spawn points, and each scene's kill plane.
   Adding a zone means adding an entry here and a scene component.
 - `src/state/lessons.ts` and `src/state/progression.ts` hold the progression rules.
-- `src/art/textures.ts` owns the stone surfacing, including the tiling density each caller asks for.
+- `src/art/quality.ts` holds the three tiers and the pure function that guesses one from the GPU string.
+  Anything expensive in the renderer reads from there rather than deciding for itself.
+- `src/art/textures.ts` owns ground surfacing and the tiling density each caller asks for.
+- `src/art/Grass.tsx` is the instanced grass field, and `Scatter.tsx` the rocks, pebbles and flowers around it.
 - `src/game/scenes/SceneHost.tsx` is the phase machine behind travel and death.
   `irisHandle.ts` and `IrisTracker.tsx` are what keep the transition circle centred on the robot.
 
-## Three constraints worth knowing before changing things
+## Constraints worth knowing before changing things
 
 **Bloom runs before tone mapping**, so it sees raw HDR values.
 Light intensities in `Lighting.tsx` are budgeted to keep lit diffuse surfaces below the bloom threshold in `PostFX.tsx`.
@@ -60,11 +65,29 @@ Raising a light without checking that threshold makes the entire world glow rath
 Player progress survives a scene swap because it lives in the zustand store; anything held in scene components does not.
 This is what keeps zones decoupled, so adding a zone later cannot regress an existing one.
 
-**One stone photograph ships, and the maps the renderer uses are derived from it at load time.**
-`src/art/textures.ts` builds the normal and roughness maps with a Sobel pass, and levels the albedo so the palette drives colour while the photograph only supplies grain.
-Two numbers in there are easy to get wrong and hard to diagnose from the map itself.
-The Sobel output must be normalised by the kernel maximum rather than by 255, or the surface normals tip almost flat and every stone surface renders near black.
-And the levelled albedo has to leave headroom above its mean, or the bright half of the rock clips and the stone comes out looking like flat plastic.
+**Three libraries have sharp edges that this project has already been cut on, and none of them failed loudly.**
+
+drei's `SoftShadows` patches three's shadow shader chunk, and three 0.185 reworked those internals.
+The result is not an error, it is the entire scene rendering flat white.
+Soft shadows come from variance shadow maps selected on the renderer in `App.tsx` instead.
+The same release deprecated `PCFSoftShadowMap`, which is the console warning that gives this away.
+
+drei's `Cloud` must be inside a `Clouds` parent, which provides the context that batches it.
+A bare `Cloud` does not render on its own.
+
+drei's `Sky` scales its geometry by its `distance` prop, and the usual value is in the thousands, matching three's own example where the camera far plane is in the millions.
+Ours is 250.
+It was replaced by a palette-driven gradient dome in `src/art/SkyDome.tsx`, which is also the better call for a world whose whole look is a chosen palette.
+
+**Ground textures ship as three files per set, not five.**
+Colour, a normal map, and an ORM pack with ambient occlusion in red and roughness in green.
+That packing is the glTF convention and it is load-bearing rather than a saving: three reads occlusion from a texture's red channel and roughness from its green, so one image fills two material slots.
+Occlusion also has to be pinned to UV channel 0 in `textures.ts`, because it otherwise defaults to a second UV set that none of this geometry has, and then silently samples nothing.
+
+**Stone has its albedo levelled at load, and the level is easy to get wrong.**
+A colour map multiplies the material colour, so a dark photograph cannot tint a surface, it can only dim it: the rock averages around RGB(79,76,69), and used raw it made every stone surface render near black regardless of the colour it was given.
+Levelling re-centres it so the palette drives colour and the photograph only supplies grain.
+It has to leave headroom above the new mean, though, or the bright half of the rock clips and the stone comes out looking like flat plastic with dark speckles.
 
 ## Adding a lesson
 
@@ -87,5 +110,10 @@ All three send `X-Frame-Options` headers that make the browser refuse to render 
 
 ## Debugging
 
-- `?nofx` disables post-processing. First thing to try if the game runs badly or looks wrong on unfamiliar hardware.
-- In dev, `window.__player` exposes live position, velocity, grounded state, and the coyote and buffer timers.
+- `?quality=low|medium|high` forces a graphics tier. `low` turns off ambient occlusion and soft shadows and cuts grass to a ring around the player, which makes it the fastest way to tell a rendering bug from a performance one.
+- `?nofx` disables post-processing. Between it and `?quality=low`, most "the world looks wrong" reports can be bisected in two reloads.
+- In dev, `window.__player` exposes live position, velocity, grounded state, the coyote and buffer timers, and both camera angles.
+  `camYaw - inputYaw` is how far the camera has swung on its own since the player last let go, which is the number to look at if auto-alignment ever misbehaves again.
+
+A note on debugging this in a background tab: Chrome defers image decode and stops firing `requestAnimationFrame` when a window is occluded, so the loader sits at 0% and the opening iris never plays.
+The game is fine; it is waiting for a frame that will not arrive until the window is genuinely visible.
