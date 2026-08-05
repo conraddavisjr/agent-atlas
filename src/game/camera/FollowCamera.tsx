@@ -3,15 +3,23 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { useRapier } from '@react-three/rapier'
 import { Vector3, type Group } from 'three'
 import { CAMERA } from '../player/tuning'
+import { stepCameraYaw } from '../player/movement'
 import type { InputIntent } from '../input/useInput'
 
 /**
- * Third-person follow camera with spring damping and collision pull-in.
+ * Third-person follow camera with spring damping, collision pull-in, and
+ * automatic realignment behind the direction of travel.
  *
  * The collision handling is not a later polish item here. Portal scenes are
  * interiors such as caves and rooms, so the camera spends most of its life close
  * to walls. Without a pull-in raycast the player would spend that time looking
  * through geometry at the skybox.
+ *
+ * Realignment defers to the player without needing a timer. Dragging the mouse
+ * suppresses it for exactly the frames the mouse is moving, and moving the
+ * character resumes it immediately, which is the behaviour players expect from
+ * a third-person platformer: the camera tidies up after you, but never argues
+ * while you are actively aiming it.
  */
 export function FollowCamera({
   target,
@@ -63,6 +71,16 @@ export function FollowCamera({
   const smoothLook = useRef(new Vector3())
   const initialised = useRef(false)
 
+  /**
+   * The player's position last frame, for deriving speed.
+   *
+   * Measured here rather than plumbed through from the controller because the
+   * camera only needs to know whether the player is moving, not how the physics
+   * arrived at it, and a shared velocity would couple the two for no gain.
+   */
+  const lastTargetPos = useRef(new Vector3())
+  const hasLastPos = useRef(false)
+
   /** Reused collision ray. Rapier's Ray is a plain JS object, so no free is needed. */
   const rayRef = useRef<InstanceType<typeof rapier.Ray> | null>(null)
 
@@ -73,10 +91,37 @@ export function FollowCamera({
     const dt = Math.min(delta, 0.05)
 
     // Orbit. Input is already accumulated for the frame by the input layer.
+    const lookX = intent.current.lookX
+    const lookingManually = lookX !== 0 || intent.current.lookY !== 0
+
     if (!inputLocked.current) {
-      yaw.current -= intent.current.lookX * CAMERA.mouseSensitivity
+      yaw.current -= lookX * CAMERA.mouseSensitivity
       pitch.current += intent.current.lookY * CAMERA.mouseSensitivity
       pitch.current = Math.max(CAMERA.minPitch, Math.min(CAMERA.maxPitch, pitch.current))
+    }
+
+    // ---- Realign behind the direction of travel ----------------------------
+    // Horizontal speed from the frame-to-frame delta of the follow target.
+    let speed = 0
+    if (hasLastPos.current) {
+      speed =
+        Math.hypot(
+          focus.position.x - lastTargetPos.current.x,
+          focus.position.z - lastTargetPos.current.z,
+        ) / Math.max(dt, 1e-4)
+    }
+    lastTargetPos.current.copy(focus.position)
+    hasLastPos.current = true
+
+    if (!inputLocked.current) {
+      // Heading is published onto the follow target by PlayerController.
+      yaw.current = stepCameraYaw({
+        yaw: yaw.current,
+        facing: focus.rotation.y,
+        speed,
+        lookingManually,
+        dt,
+      })
     }
 
     scratch.lookAt.copy(focus.position)

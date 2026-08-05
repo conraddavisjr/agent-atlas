@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { RigidBody, CylinderCollider } from '@react-three/rapier'
-import { RoundedBox, Text } from '@react-three/drei'
+import { Billboard, RoundedBox, Text } from '@react-three/drei'
 import type { Group, Mesh } from 'three'
 import { palette } from '@/art/palette'
-import { emissive, gel, mattePlastic, plastic } from '@/art/materials'
+import { emissive, gel, plastic, stone } from '@/art/materials'
+import { useStoneTextures } from '@/art/textures'
 import { useProximity } from '../interaction/useProximity'
 import type { Lesson } from '@/state/types'
 
@@ -36,6 +37,10 @@ export function LessonTotem({
   const anchor = useRef<Group>(null)
   const node = useRef<Mesh>(null)
   const [near, setNear] = useState(false)
+
+  /* The plinth is a cylinder about 5m around, so 4 repeats lands a stone at
+     roughly the same 1.2m as the platform and the arch. */
+  const plinthStone = useStoneTextures([4, 1])
 
   useProximity(
     anchor,
@@ -70,7 +75,7 @@ export function LessonTotem({
       <RigidBody type="fixed" colliders={false}>
         <mesh position={[0, 0.25, 0]} castShadow receiveShadow>
           <cylinderGeometry args={[0.75, 0.9, 0.5, 20]} />
-          <meshPhysicalMaterial {...mattePlastic(palette.rock)} />
+          <meshPhysicalMaterial {...stone(palette.rock, plinthStone)} />
         </mesh>
         <mesh position={[0, 0.72, 0]} castShadow>
           <cylinderGeometry args={[0.42, 0.6, 0.45, 16]} />
@@ -99,10 +104,19 @@ export function LessonTotem({
         </RoundedBox>
       )}
 
+      {/*
+        Both labels sit inside one Billboard so they turn as a single unit.
+
+        Wrapping each separately would billboard them about their own centres,
+        and since they sit at different heights the two would shear apart into
+        different planes as the camera moved. The group is anchored at the
+        midpoint of the old fixed positions, 3.0 and 2.68, with the two texts
+        offset from it, which preserves the spacing exactly.
+      */}
       {near && (
-        <>
+        <Billboard position={[0, 2.84, 0]}>
           <Text
-            position={[0, 3.0, 0]}
+            position={[0, 0.16, 0]}
             fontSize={0.3}
             color="#ffffff"
             anchorX="center"
@@ -113,7 +127,7 @@ export function LessonTotem({
             {lesson.title}
           </Text>
           <Text
-            position={[0, 2.68, 0]}
+            position={[0, -0.16, 0]}
             fontSize={0.16}
             color="#cfe4ff"
             anchorX="center"
@@ -125,7 +139,7 @@ export function LessonTotem({
           >
             {completed ? 'Completed' : lesson.blurb}
           </Text>
-        </>
+        </Billboard>
       )}
 
     </group>

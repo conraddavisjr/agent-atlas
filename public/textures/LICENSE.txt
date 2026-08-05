@@ -1,0 +1,21 @@
+stone-albedo.webp
+-----------------
+
+Source:  ambientCG - Rock030
+URL:     https://ambientcg.com/view?id=Rock030
+License: Creative Commons CC0 1.0 Universal (public domain dedication)
+         https://creativecommons.org/publicdomain/zero/1.0/
+
+CC0 places no restrictions on use, modification, or redistribution, and
+requires no attribution. This file is kept as a record of provenance rather
+than as a legal obligation, so that the origin of the asset stays traceable.
+
+Modifications from the original:
+  - Only the Color map is used. The pack's AmbientOcclusion, Displacement,
+    NormalDX, NormalGL, and Roughness maps were discarded.
+  - Re-encoded from JPEG to WebP at quality 82, which takes it from 1.41 MB
+    to 291 KB. Resolution is unchanged at 1024x1024.
+
+The normal and roughness maps the renderer uses are not shipped. They are
+derived from this file at load time in src/art/textures.ts, which is what
+keeps this directory to a single asset. See that file for the reasoning.

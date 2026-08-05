@@ -1,4 +1,5 @@
 import type { ThreeElements } from '@react-three/fiber'
+import { Vector2, type Texture } from 'three'
 
 /** R3F v9 derives element props from three itself rather than exporting them by name. */
 type MeshPhysicalMaterialProps = ThreeElements['meshPhysicalMaterial']
@@ -81,6 +82,39 @@ export function emissive(
     metalness: 0,
     clearcoat: 1,
     clearcoatRoughness: 0.1,
+    ...overrides,
+  }
+}
+
+/**
+ * Textured stone, for the portal platform, ramp, arch and totem plinths.
+ *
+ * The albedo is tinted by `color` rather than used raw. That is the decision
+ * that keeps this in the same world as everything else: a photographic grey
+ * rock dropped next to flat-shaded plastic reads as an asset from a different
+ * game, whereas the same photograph multiplied by `palette.rock` reads as
+ * detail added to a surface that was already there.
+ *
+ * Clearcoat is kept far below the plastic presets but not removed. Stone is not
+ * glossy, but a trace of it keeps the material sitting in the same lighting
+ * response as its neighbours instead of going conspicuously dead.
+ *
+ * Pass maps from `useStoneTextures`, which owns the tiling density.
+ */
+export function stone(
+  color: string,
+  maps: { map: Texture; normalMap: Texture; roughnessMap: Texture },
+  overrides: MeshPhysicalMaterialProps = {},
+): MeshPhysicalMaterialProps {
+  return {
+    color,
+    ...maps,
+    // Overridden by roughnessMap per texel; this is the multiplier against it.
+    roughness: 1,
+    metalness: 0,
+    normalScale: new Vector2(1, 1),
+    clearcoat: 0.15,
+    clearcoatRoughness: 0.8,
     ...overrides,
   }
 }

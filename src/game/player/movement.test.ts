@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { approach, approachAngle, initialVerticalState, stepHorizontal, stepVertical } from './movement'
-import { JUMP, MOVEMENT } from './tuning'
+import {
+  approach,
+  approachAngle,
+  initialVerticalState,
+  stepCameraYaw,
+  stepHorizontal,
+  stepVertical,
+  wrapAngle,
+} from './movement'
+import { CAMERA, JUMP, MOVEMENT } from './tuning'
 
 const DT = 1 / 60
 
@@ -188,5 +196,76 @@ describe('helpers', () => {
     // From just below +pi to just above -pi is a short hop, not a full lap.
     const result = approachAngle(3.0, -3.0, 0.2)
     expect(result).toBeGreaterThan(3.0)
+  })
+
+  it('wrapAngle brings any angle into [-pi, pi]', () => {
+    expect(wrapAngle(0)).toBe(0)
+    expect(wrapAngle(Math.PI * 3)).toBeCloseTo(Math.PI, 5)
+    expect(wrapAngle(-Math.PI * 3)).toBeCloseTo(-Math.PI, 5)
+    expect(wrapAngle(Math.PI * 2 + 0.5)).toBeCloseTo(0.5, 5)
+  })
+})
+
+describe('camera realignment', () => {
+  /** A player walking due north at full tilt, with the camera off to one side. */
+  const walking = {
+    yaw: 0,
+    facing: Math.PI / 2,
+    speed: MOVEMENT.maxSpeed,
+    lookingManually: false,
+    dt: DT,
+  }
+
+  it('swings toward the position behind the player', () => {
+    const next = stepCameraYaw(walking)
+    // The target is facing + pi. Starting at 0 and needing to reach 3pi/2, the
+    // short way around is downward through negative yaw.
+    expect(next).toBeLessThan(walking.yaw)
+    expect(Math.abs(next - walking.yaw)).toBeCloseTo(CAMERA.realignSpeed * DT, 5)
+  })
+
+  it('leaves the camera alone while the player is aiming it', () => {
+    expect(stepCameraYaw({ ...walking, lookingManually: true })).toBe(walking.yaw)
+  })
+
+  it('resumes the moment manual look stops, with no cooldown', () => {
+    // The frame after a drag ends is an ordinary frame. This is the whole of
+    // "as soon as they move again the camera follows".
+    const during = stepCameraYaw({ ...walking, lookingManually: true })
+    const after = stepCameraYaw({ ...walking, yaw: during, lookingManually: false })
+    expect(after).not.toBe(during)
+  })
+
+  it('ignores heading below a walking pace', () => {
+    // Facing is derived from velocity, so at a standstill it is noise.
+    const crawling = { ...walking, speed: CAMERA.realignMinSpeed - 0.01 }
+    expect(stepCameraYaw(crawling)).toBe(walking.yaw)
+  })
+
+  it('holds still inside the deadzone', () => {
+    // Already behind the player, give or take a couple of degrees.
+    const aligned = { ...walking, yaw: walking.facing + Math.PI - 0.05 }
+    expect(stepCameraYaw(aligned)).toBe(aligned.yaw)
+  })
+
+  it('converges rather than oscillating around the target', () => {
+    let yaw = 0
+    for (let i = 0; i < 600; i++) {
+      yaw = stepCameraYaw({ ...walking, yaw })
+    }
+    // Ends up behind the player and stays there.
+    expect(Math.abs(wrapAngle(yaw - (walking.facing + Math.PI)))).toBeLessThan(
+      CAMERA.realignDeadzone,
+    )
+  })
+
+  it('never turns the long way around the circle', () => {
+    // Camera just past the wrap point from its target. The short path crosses
+    // pi; taking the long path would be a visible whip-pan through the front.
+    const yaw = -Math.PI + 0.05
+    const next = stepCameraYaw({ ...walking, facing: Math.PI / 2, yaw })
+    expect(Math.abs(wrapAngle(next - yaw))).toBeLessThanOrEqual(
+      CAMERA.realignSpeed * DT + 1e-9,
+    )
   })
 })

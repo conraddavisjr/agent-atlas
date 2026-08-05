@@ -28,3 +28,36 @@ canvas {
   display: block;
   outline: none;
 }
+
+/*
+  The iris transition.
+
+  The gradient is declared here rather than built in JS so that the per-frame
+  update is three custom property writes instead of reparsing a background
+  shorthand sixty times a second.
+
+  A scaled element with a large box-shadow spread would be cheaper still, since
+  it animates on the compositor, but it was tried and rejected: the browser
+  rasterises the small source element once and stretches it, so the circle edge
+  turns to mush at the scale factors this needs, and the shadow spread scales
+  along with the element and stops covering the viewport as the iris closes.
+  A full-screen repaint for the third of a second a transition lasts is the
+  cheaper problem, especially since the scene is being torn down at the time.
+*/
+.iris {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  --iris-x: 50%;
+  --iris-y: 50%;
+  --iris-r: 0px;
+  background: radial-gradient(
+    circle at var(--iris-x) var(--iris-y),
+    rgba(5, 8, 16, 0) calc(var(--iris-r) - 1px),
+    /* A cyan rim exactly on the boundary, which is what makes the iris read as
+       a powered effect rather than as the screen simply going dark. */
+      rgba(77, 226, 255, 0.32) var(--iris-r),
+    rgba(8, 12, 24, 0.88) calc(var(--iris-r) + 18px),
+    rgba(3, 5, 12, 1) calc(var(--iris-r) + 44px)
+  );
+}

@@ -11,6 +11,8 @@ import { GameContext } from './game/GameContext'
 import { useSceneTravel, type TravelRequest } from './game/scenes/SceneHost'
 import { getScene } from './game/scenes/registry'
 import { Transition } from './game/scenes/Transition'
+import { IrisTracker } from './game/scenes/IrisTracker'
+import { SceneReady } from './game/scenes/SceneReady'
 import { Lighting } from './art/Lighting'
 import { PostFX } from './art/PostFX'
 import { HUD } from './ui/HUD'
@@ -69,7 +71,18 @@ export default function App() {
     [travelTo],
   )
 
-  const { displayed, covering, label, travel, spawn } = useSceneTravel(initial, onArrive)
+  const {
+    displayed,
+    covering,
+    physicsPaused,
+    reviving,
+    respawnNonce,
+    label,
+    travel,
+    respawn,
+    notifySceneReady,
+    spawn,
+  } = useSceneTravel(initial, onArrive)
 
   const doTravel = useCallback(
     (sceneId: string, spawnId: string, displayLabel?: string) =>
@@ -77,10 +90,16 @@ export default function App() {
     [travel],
   )
 
-  // Keep the ref in sync so the physics step sees the lock without a re-render.
+  /*
+    Keep the ref in sync so the physics step sees the lock without a re-render.
+
+    Deliberately not locked while `reviving`. The player is falling in during
+    that phase and the controller holds its own lock until the feet touch down,
+    which is a beat later than any timer here could know about.
+  */
   useEffect(() => {
-    inputLocked.current = covering
-  }, [covering])
+    inputLocked.current = covering && !reviving
+  }, [covering, reviving])
 
   /** Interact key. Handled centrally so totems stay presentational. */
   useEffect(() => {
@@ -145,10 +164,14 @@ export default function App() {
         <Suspense fallback={null}>
         <GameContext.Provider value={gameContext}>
           {/*
-            Physics is paused while the screen is covered. Belt and braces with the
-            input lock: it also stops the player falling through a scene that has
-            not finished mounting its colliders, which is the failure the lock
-            alone would not catch.
+            Physics is paused only for the covered beat between scenes, not for
+            the whole transition. Belt and braces with the input lock: it stops
+            the player falling through a scene that has not finished mounting
+            its colliders, which is the failure the lock alone would not catch.
+
+            It deliberately keeps running while the iris closes, so the character
+            coasts to a stop under it, and while it opens, because that is the
+            drop-in falling.
           */}
           {/*
             World gravity is set for future dynamic props. The player is a
@@ -156,7 +179,7 @@ export default function App() {
             controller integrates its own vertical velocity from tuning.ts. The
             two never conflict.
           */}
-          <Physics timeStep={1 / 60} interpolate paused={covering} gravity={[0, -9.81, 0]}>
+          <Physics timeStep={1 / 60} interpolate paused={physicsPaused} gravity={[0, -9.81, 0]}>
             {/*
               Keyed by scene so both the world and the player fully remount on
               travel. That is what guarantees the previous scene is released and
@@ -168,10 +191,25 @@ export default function App() {
                 same key, which lets React drop one of them. */}
             <group key={`world-${displayed.sceneId}`}>
               <Lighting variant={scene.lighting} />
+              {/*
+                SceneReady is a sibling of the scene inside this boundary, not a
+                child of it. React commits neither until both resolve, so its
+                mount is proof the chunk, the colliders and the textures are all
+                live, which is what the travel machine waits on before opening
+                the iris onto the new scene.
+              */}
               <Suspense fallback={null}>
                 <SceneComponent />
+                <SceneReady onReady={notifySceneReady} />
               </Suspense>
+              {/*
+                Keyed separately from the world group so a respawn rebuilds only
+                the character. Folding the nonce into the world key would tear
+                down and remount the lighting and the entire scene every time the
+                player fell off the island.
+              */}
               <PlayerController
+                key={`player-${displayed.sceneId}-${respawnNonce}`}
                 intent={intent}
                 sampleInput={sample}
                 endInputFrame={endFrame}
@@ -179,6 +217,8 @@ export default function App() {
                 cosmetics={cosmetics}
                 playerRef={player}
                 inputLocked={inputLocked}
+                killY={scene.killY}
+                onDeath={respawn}
               />
             </group>
 
@@ -194,6 +234,14 @@ export default function App() {
               intent={intent}
               inputLocked={inputLocked}
             />
+
+            {/*
+              Inside the Canvas because centring the iris on the character means
+              projecting a world position through the live camera. Outside
+              <Physics> would work equally well; it sits here only to stay next
+              to the camera it depends on.
+            */}
+            <IrisTracker target={player} />
           </Physics>
         </GameContext.Provider>
         </Suspense>

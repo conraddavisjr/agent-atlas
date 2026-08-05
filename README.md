@@ -1,4 +1,4 @@
-# AI Academy
+# Agent Atlas
 
 A browser-based course that teaches AI from zero, delivered as a walkable 3D world rather than a page of text.
 
@@ -16,7 +16,8 @@ npm run build    # static output in dist/, deployable to any static host
 ```
 
 There is no backend and no accounts.
-All progress lives in browser local storage under `ai-academy-progress`.
+All progress lives in browser local storage under `agent-atlas-progress`.
+Saves written under the old `ai-academy-progress` key are copied across once on first load.
 
 ## Controls
 
@@ -28,6 +29,12 @@ All progress lives in browser local storage under `ai-academy-progress`.
 | E or Enter | Interact with the totem you are standing at |
 | Gamepad | Left stick moves, A jumps, X interacts, right stick orbits |
 
+The camera swings back behind the direction you are travelling on its own.
+Dragging always wins while you are dragging, and auto-alignment resumes the moment you move again, with no cooldown in between.
+
+Falling off the island kills you.
+Dying and arriving through a portal are the same event: the screen closes to a circle centred on the robot, and reopens as it drops back into the world.
+
 ## Where things are
 
 - `src/game/player/tuning.ts` is the file to open when adjusting how the game feels.
@@ -36,11 +43,14 @@ All progress lives in browser local storage under `ai-academy-progress`.
   Coyote time, jump buffering, and variable jump height are verified there rather than by eye.
 - `src/art/palette.ts` and `src/art/materials.ts` define the toy-plastic look.
   Lighting is per scene in `src/art/Lighting.tsx`.
-- `src/game/scenes/registry.ts` maps scene ids to lazily loaded components and named spawn points.
+- `src/game/scenes/registry.ts` maps scene ids to lazily loaded components, named spawn points, and each scene's kill plane.
   Adding a zone means adding an entry here and a scene component.
 - `src/state/lessons.ts` and `src/state/progression.ts` hold the progression rules.
+- `src/art/textures.ts` owns the stone surfacing, including the tiling density each caller asks for.
+- `src/game/scenes/SceneHost.tsx` is the phase machine behind travel and death.
+  `irisHandle.ts` and `IrisTracker.tsx` are what keep the transition circle centred on the robot.
 
-## Two constraints worth knowing before changing things
+## Three constraints worth knowing before changing things
 
 **Bloom runs before tone mapping**, so it sees raw HDR values.
 Light intensities in `Lighting.tsx` are budgeted to keep lit diffuse surfaces below the bloom threshold in `PostFX.tsx`.
@@ -49,6 +59,12 @@ Raising a light without checking that threshold makes the entire world glow rath
 **Scenes are discrete and only one is mounted at a time.**
 Player progress survives a scene swap because it lives in the zustand store; anything held in scene components does not.
 This is what keeps zones decoupled, so adding a zone later cannot regress an existing one.
+
+**One stone photograph ships, and the maps the renderer uses are derived from it at load time.**
+`src/art/textures.ts` builds the normal and roughness maps with a Sobel pass, and levels the albedo so the palette drives colour while the photograph only supplies grain.
+Two numbers in there are easy to get wrong and hard to diagnose from the map itself.
+The Sobel output must be normalised by the kernel maximum rather than by 255, or the surface normals tip almost flat and every stone surface renders near black.
+And the levelled albedo has to leave headroom above its mean, or the bright half of the rock clips and the stone comes out looking like flat plastic.
 
 ## Adding a lesson
 

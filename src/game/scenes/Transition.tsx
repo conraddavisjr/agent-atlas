@@ -1,7 +1,9 @@
-import { TRANSITION } from '../player/tuning'
+import { useEffect, useRef } from 'react'
+import { iris } from './irisHandle'
 
 /**
- * The portal transition overlay.
+ * The portal and revival overlay: a circle that collapses onto the character
+ * and later opens back out from wherever they reappear.
  *
  * This is a feel element, not a loading indicator. Three things make it work:
  *
@@ -10,48 +12,59 @@ import { TRANSITION } from '../player/tuning'
  *    vanishes almost instantly, reading as a flicker rather than as travel.
  * 2. Input stays locked for its whole duration, so the player cannot walk into
  *    geometry that is still being built.
- * 3. A vignette wipe rather than a plain fade, which reads as deliberate travel
- *    rather than as the game stalling.
+ * 3. It is anchored to the character rather than to the middle of the screen.
+ *    A centred iris reads as a screen effect; one that collapses onto the robot
+ *    reads as something happening to the robot.
  *
  * Rendered as DOM rather than in the canvas on purpose: it must cover the screen
  * even during the frames where the canvas contents are being torn down.
  *
- * Always mounted and driven purely by `active`. Mounting and unmounting it would
- * mean the fade-out has no element to animate, and tracking that with state would
- * add a render cascade for something CSS already expresses directly.
+ * Deliberately does no animation of its own. Position and radius are driven by
+ * IrisTracker from inside the render loop, because the geometry depends on the
+ * live camera. This component owns the element and the label; the tracker owns
+ * what the element looks like on any given frame.
  */
 export function Transition({ active, label }: { active: boolean; label?: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    iris.el = ref.current
+    return () => {
+      iris.el = null
+    }
+  }, [])
+
   return (
     <div
+      ref={ref}
+      className="iris"
       aria-hidden={!active}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        pointerEvents: active ? 'auto' : 'none',
-        zIndex: 50,
-        opacity: active ? 1 : 0,
-        // `visibility` is transitioned with a delay so the element stops being
-        // hit-testable and readable only after the fade has finished.
-        visibility: active ? 'visible' : 'hidden',
-        transition: active
-          ? `opacity ${TRANSITION.fadeOutMs}ms ease-in-out, visibility 0s`
-          : `opacity ${TRANSITION.fadeInMs}ms ease-in-out, visibility 0s linear ${TRANSITION.fadeInMs}ms`,
-        background:
-          'radial-gradient(circle at 50% 50%, rgba(8,12,24,0.88) 0%, rgba(4,6,14,1) 45%, rgba(2,3,8,1) 100%)',
-        display: 'grid',
-        placeItems: 'center',
-      }}
+      // Never hit-testable. The overlay is decorative, and swallowing clicks
+      // would break camera drag on the frames where it is still fading out.
+      style={{ pointerEvents: 'none' }}
     >
       {label && (
         <div
           style={{
+            position: 'absolute',
+            /*
+              Anchored to the bottom of the viewport rather than centred on the
+              iris. Centring it would put the destination name directly on top
+              of the character the iris is closing in on, and the two would
+              overlap for the whole transition.
+            */
+            left: 0,
+            right: 0,
+            bottom: '12%',
+            textAlign: 'center',
             fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
             fontSize: '0.78rem',
             letterSpacing: '0.22em',
             textTransform: 'uppercase',
             color: 'rgba(180,220,255,0.72)',
+            opacity: active ? 1 : 0,
             transform: `translateY(${active ? 0 : 8}px)`,
-            transition: 'transform 400ms ease-out',
+            transition: 'transform 400ms ease-out, opacity 260ms ease-out',
           }}
         >
           {label}

@@ -39,10 +39,18 @@ function HubLighting() {
         shadow-mapSize={[2048, 2048]}
         shadow-bias={-0.0005}
         shadow-normalBias={0.02}
-        shadow-camera-left={-30}
-        shadow-camera-right={30}
-        shadow-camera-top={30}
-        shadow-camera-bottom={-30}
+        /*
+          Fitted to the island rather than to a round number. The plateau is
+          radius 16 and nothing casts a shadow beyond it, so the previous +/-30
+          frustum spent more than half its texels on empty space. Tightening to
+          +/-18 leaves a margin for the portal arch and the tallest sculpture
+          while nearly doubling the shadow density everywhere it matters, at no
+          cost: it is the same 2048 map covering a smaller area.
+        */
+        shadow-camera-left={-18}
+        shadow-camera-right={18}
+        shadow-camera-top={18}
+        shadow-camera-bottom={-18}
         shadow-camera-near={0.5}
         shadow-camera-far={60}
       />

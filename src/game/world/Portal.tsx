@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react'
-import { useFrame } from '@react-three/fiber'
 import { RigidBody, CuboidCollider } from '@react-three/rapier'
-import { RoundedBox, Text } from '@react-three/drei'
-import type { Group, Mesh, MeshPhysicalMaterial } from 'three'
+import { Billboard, RoundedBox, Text } from '@react-three/drei'
+import type { Group } from 'three'
 import { palette } from '@/art/palette'
-import { emissive, mattePlastic, plastic } from '@/art/materials'
+import { emissive, mattePlastic, plastic, stone } from '@/art/materials'
+import { useStoneTextures } from '@/art/textures'
+import { PortalShimmer } from '@/art/PortalShimmer'
 import { useProximity } from '../interaction/useProximity'
 
 /**
@@ -32,9 +33,15 @@ export function Portal({
   onEnter: () => void
 }) {
   const anchor = useRef<Group>(null)
-  const fill = useRef<Mesh>(null)
   const [near, setNear] = useState(false)
   const triggered = useRef(false)
+
+  /*
+    Tiled tightly. The arch pieces are under a metre across, so a low repeat
+    would stretch a single stone over the whole leg and read as a photograph
+    pasted on rather than as masonry.
+  */
+  const archStone = useStoneTextures([1.4, 3])
 
   useProximity(
     anchor,
@@ -53,15 +60,6 @@ export function Portal({
       triggered.current = false
     },
   )
-
-  useFrame((state) => {
-    if (!fill.current || locked) return
-    // A slow pulse on the fill so an open portal reads as active from across the
-    // island, which is what draws the player toward it without a waypoint marker.
-    const t = state.clock.elapsedTime
-    const mat = fill.current.material as MeshPhysicalMaterial
-    mat.emissiveIntensity = 1.6 + Math.sin(t * 2) * 0.4
-  })
 
   const frameColor = locked ? palette.locked : palette.accent
   /*
@@ -88,11 +86,11 @@ export function Portal({
             castShadow
             receiveShadow
           >
-            <meshPhysicalMaterial {...mattePlastic(stoneColor)} />
+            <meshPhysicalMaterial {...stone(stoneColor, archStone)} />
           </RoundedBox>
         ))}
         <RoundedBox args={[3.5, 0.5, 0.7]} radius={0.12} smoothness={3} position={[0, 3.55, 0]} castShadow>
-          <meshPhysicalMaterial {...mattePlastic(stoneColor)} />
+          <meshPhysicalMaterial {...stone(stoneColor, archStone)} />
         </RoundedBox>
 
         <CuboidCollider args={[0.25, 1.7, 0.35]} position={[-1.5, 1.7, 0]} />
@@ -112,7 +110,9 @@ export function Portal({
       {/* The opening itself. */}
       {locked ? (
         <>
-          {/* Sealed slab */}
+          {/* Sealed slab. Kept flat-shaded rather than stone: the arch around it
+              is the masonry, and texturing the door too collapses the contrast
+              that makes the sealed panel read as a separate thing filling a gap. */}
           <RoundedBox args={[2.6, 3.4, 0.24]} radius={0.08} smoothness={3} position={[0, 1.7, 0]} castShadow>
             <meshPhysicalMaterial {...mattePlastic(palette.lockedDeep)} />
           </RoundedBox>
@@ -137,30 +137,25 @@ export function Portal({
           <LockPlate position={[0, 1.75, 0.2]} />
         </>
       ) : (
-        <mesh ref={fill} position={[0, 1.7, 0]}>
-          <planeGeometry args={[2.6, 3.3]} />
-          <meshPhysicalMaterial
-            {...emissive(palette.visor, 1.8)}
-            transparent
-            opacity={0.55}
-            side={2}
-          />
-        </mesh>
+        <PortalShimmer width={2.6} height={3.3} position={[0, 1.7, 0]} />
       )}
 
-      {/* Label appears on approach rather than always, so the world stays uncluttered. */}
+      {/* Label appears on approach rather than always, so the world stays
+          uncluttered. Billboarded so it stays readable while the player circles
+          the portal or swings the camera around it. */}
       {near && (
-        <Text
-          position={[0, 4.2, 0]}
-          fontSize={0.34}
-          color={locked ? '#c3c9d4' : '#ffffff'}
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.02}
-          outlineColor="#0b1020"
-        >
-          {locked ? `${label} - Locked` : label}
-        </Text>
+        <Billboard position={[0, 4.2, 0]}>
+          <Text
+            fontSize={0.34}
+            color={locked ? '#c3c9d4' : '#ffffff'}
+            anchorX="center"
+            anchorY="middle"
+            outlineWidth={0.02}
+            outlineColor="#0b1020"
+          >
+            {locked ? `${label} - Locked` : label}
+          </Text>
+        </Billboard>
       )}
     </group>
   )

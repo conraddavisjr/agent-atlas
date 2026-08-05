@@ -1,4 +1,4 @@
-import { JUMP, MOVEMENT } from './tuning'
+import { CAMERA, JUMP, MOVEMENT } from './tuning'
 
 /**
  * The parts of the character controller that decide how movement FEELS,
@@ -126,4 +126,58 @@ export function approachAngle(current: number, target: number, maxDelta: number)
   while (diff < -Math.PI) diff += Math.PI * 2
   if (Math.abs(diff) <= maxDelta) return target
   return current + Math.sign(diff) * maxDelta
+}
+
+/** Wrap an angle into [-PI, PI]. */
+export function wrapAngle(angle: number): number {
+  let a = angle
+  while (a > Math.PI) a -= Math.PI * 2
+  while (a < -Math.PI) a += Math.PI * 2
+  return a
+}
+
+export type RealignInput = {
+  /** Current camera orbit angle. */
+  yaw: number
+  /** The direction the character is travelling, as written by the controller. */
+  facing: number
+  /** Horizontal speed in metres per second. */
+  speed: number
+  /** True on any frame the player moved the mouse or the right stick. */
+  lookingManually: boolean
+  dt: number
+}
+
+/**
+ * One step of the camera swinging back behind the player.
+ *
+ * Pure and separate from FollowCamera for the same reason the jump rules are:
+ * "does dragging the mouse still win while walking" is a question with an exact
+ * answer, and answering it by playing the game is slower and less reliable than
+ * answering it in a test.
+ *
+ * Three conditions have to hold before the camera is allowed to move itself.
+ * Manual look always wins, because a player who is actively aiming the camera is
+ * making a decision the game should not overrule. Below a walking pace the
+ * heading is mostly noise, since facing is derived from velocity. And inside the
+ * deadzone there is nothing worth correcting, which is what stops the camera
+ * wobbling behind someone walking in a straight line.
+ */
+export function stepCameraYaw(input: RealignInput): number {
+  const { yaw, facing, speed, lookingManually, dt } = input
+
+  if (lookingManually) return yaw
+  if (speed < CAMERA.realignMinSpeed) return yaw
+
+  /*
+    The camera sits behind the player, so the target is the heading turned
+    around. The offset in FollowCamera is built from sin(yaw)/cos(yaw), which
+    points from the player toward the camera, whereas facing points the way the
+    player is going. Half a turn apart.
+  */
+  const target = facing + Math.PI
+
+  if (Math.abs(wrapAngle(target - yaw)) < CAMERA.realignDeadzone) return yaw
+
+  return approachAngle(yaw, target, CAMERA.realignSpeed * dt)
 }

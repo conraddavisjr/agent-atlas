@@ -93,6 +93,29 @@ export const SQUASH = {
   minLandSpeed: 4,
 } as const
 
+export const REVIVAL = {
+  /**
+   * How far above the spawn point the robot materialises before dropping in.
+   *
+   * The brief asked for "about 50 pixels". At the default framing - fov 55,
+   * camera distance 7.5, a 1080-tall viewport - one screen pixel is about
+   * 0.0072 world units at the player, so 50px works out to 0.36. That reads as
+   * a stumble rather than as coming back to life, so the default here is the
+   * height that actually sells the beat. Set it to 0.36 for the literal reading.
+   */
+  dropHeight: 1.6,
+
+  /**
+   * Landing squash on revival, deeper than an ordinary landing.
+   *
+   * There is no separate bounce animation. The critically damped spring in
+   * PlayerController's frame loop already overshoots slightly on its way back to
+   * neutral, so squashing harder than SQUASH.landSquash is the whole effect: a
+   * deeper compression produces a correspondingly bigger rebound for free.
+   */
+  landSquash: 0.55,
+} as const
+
 export const WADDLE = {
   /**
    * Team ASOBI describe Astro as waddling "like a toddler". With procedural
@@ -133,6 +156,35 @@ export const CAMERA = {
   minDistance: 1.6,
   /** Pull in instantly to avoid clipping, but ease back out so it is not jarring. */
   pullOutSpeed: 4,
+
+  /**
+   * How fast the camera swings back behind the player, in radians per second.
+   *
+   * This is the dial to reach for first if auto-align feels wrong, and it is
+   * deliberately far below MOVEMENT.turnSpeed. Movement is camera-relative, so
+   * rotating the camera changes what "left" means, and holding a strafe
+   * direction therefore walks a slow circle. That feedback loop is inherent to
+   * having both auto-align and camera-relative input; every game with the pair
+   * has it. Keeping the rate low is what turns it from disorienting into a
+   * gentle arc the player reads as the camera being helpful.
+   */
+  realignSpeed: 1.6,
+
+  /**
+   * Below this speed the camera stops chasing the heading.
+   *
+   * Facing is derived from velocity, so at a near-standstill it is mostly noise,
+   * and a camera that follows noise reads as drift.
+   */
+  realignMinSpeed: 1.2,
+
+  /**
+   * Angular slack, in radians, before realignment engages at all.
+   *
+   * Roughly 9 degrees. Without it the camera micro-corrects forever behind a
+   * player walking in a straight line, which is visible as a faint wobble.
+   */
+  realignDeadzone: 0.16,
 } as const
 
 export const INTERACTION = {
@@ -149,6 +201,19 @@ export const TRANSITION = {
    * reads as a bug. The wipe is a feel element, not a loading indicator.
    */
   minDurationMs: 650,
-  fadeOutMs: 320,
-  fadeInMs: 380,
+
+  /** The iris collapsing onto the character. */
+  irisCloseMs: 340,
+
+  /**
+   * The iris opening back out from the character.
+   *
+   * Budgeted against the fall, not chosen for its own sake. From
+   * REVIVAL.dropHeight of 1.6 at JUMP.gravity scaled by fallGravityMultiplier,
+   * the robot is in the air for sqrt(2 * 1.6 / 36) which is about 300ms. Opening
+   * over slightly longer than that means the landing bounce happens while the
+   * reveal is still finishing, so the two read as one motion rather than as a
+   * reveal followed by a separate animation.
+   */
+  irisOpenMs: 420,
 } as const

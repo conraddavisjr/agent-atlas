@@ -25,6 +25,15 @@ export type SceneDefinition = {
   spawns: Record<SpawnId, [number, number, number]>
   /** Sky colours, or null for scenes that are fully enclosed. */
   sky: { top: string; horizon: string } | null
+  /**
+   * Fall below this height and the scene kills you.
+   *
+   * Required rather than optional so that adding a scene forces the question to
+   * be answered. An optional field would default to "no kill plane", which is
+   * the failure mode where a player falls off a new zone forever and the only
+   * way out is to reload.
+   */
+  killY: number
 }
 
 export const SCENES: Record<string, SceneDefinition> = {
@@ -46,6 +55,13 @@ export const SCENES: Record<string, SceneDefinition> = {
       'from-cave': [9, 2, -3.2],
     },
     sky: { top: '#7fd4f5', horizon: '#ffe6c4' },
+    /*
+      The island's soil cone bottoms out at about y=-6.2. Set well below that so
+      a player who walks off the edge gets a real moment of falling before the
+      iris takes the screen, rather than being snatched back the instant they
+      clear the lip.
+    */
+    killY: -12,
   },
   cave: {
     id: 'cave',
@@ -62,6 +78,12 @@ export const SCENES: Record<string, SceneDefinition> = {
       entrance: [0, 2, 3],
     },
     sky: null,
+    /*
+      The cave is a sealed box with a floor at y=0, so nothing can reach this.
+      It is here because the field is required, and it is required so that the
+      next enclosed scene cannot quietly ship without a floor of last resort.
+    */
+    killY: -20,
   },
 }
 

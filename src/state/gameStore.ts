@@ -13,7 +13,32 @@ import type { ProgressState } from './types'
  * version to migrate from.
  */
 const SCHEMA_VERSION = 1
-const STORAGE_KEY = 'ai-academy-progress'
+const STORAGE_KEY = 'agent-atlas-progress'
+/** The key used before the project was renamed to Agent Atlas. */
+const LEGACY_STORAGE_KEY = 'ai-academy-progress'
+
+/**
+ * Carry saves across the rename.
+ *
+ * This has to run before `create()`, not inside `migrate()`. zustand looks up
+ * STORAGE_KEY, finds nothing, and never calls migrate at all, so a bare rename
+ * silently wipes every existing save rather than upgrading it.
+ *
+ * The old key is left in place. Deleting it would make rolling back to a build
+ * from before the rename a data-loss event, and an orphaned key costs nothing.
+ */
+function adoptLegacySave() {
+  try {
+    if (localStorage.getItem(STORAGE_KEY) !== null) return
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)
+    if (legacy !== null) localStorage.setItem(STORAGE_KEY, legacy)
+  } catch {
+    // Private browsing and blocked-storage modes throw on access. Losing the
+    // carry-over is survivable; failing to boot the game is not.
+  }
+}
+
+adoptLegacySave()
 
 type GameStore = ProgressState & {
   /** Runtime-only. Deliberately excluded from persistence via partialize below. */

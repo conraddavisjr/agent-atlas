@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import {
   CapsuleCollider,
@@ -9,7 +9,7 @@ import {
   type RapierRigidBody,
 } from '@react-three/rapier'
 import { Vector3, type Group } from 'three'
-import { BODY, JUMP, MOVEMENT, SQUASH } from './tuning'
+import { BODY, JUMP, MOVEMENT, REVIVAL, SQUASH } from './tuning'
 import { approachAngle, stepHorizontal, stepVertical } from './movement'
 import { RobotModel } from './RobotModel'
 import { createRobotAnimState } from './robotAnim'
@@ -41,6 +41,8 @@ export function PlayerController({
   cosmetics,
   playerRef,
   inputLocked,
+  killY,
+  onDeath,
 }: {
   intent: React.RefObject<InputIntent>
   sampleInput: () => void
@@ -50,6 +52,10 @@ export function PlayerController({
   /** Exposed so the camera can follow without prop-drilling per frame. */
   playerRef: React.RefObject<Group | null>
   inputLocked: React.RefObject<boolean>
+  /** Fall below this and the scene kills you. Owned by the scene registry. */
+  killY: number
+  /** Fired once when the kill plane is crossed. */
+  onDeath: () => void
 }) {
   const bodyRef = useRef<RapierRigidBody>(null)
   const visualRef = useRef<Group>(null)
@@ -65,6 +71,16 @@ export function PlayerController({
   const wasGrounded = useRef(true)
   const facing = useRef(0)
   const squashVelocity = useRef(0)
+
+  /**
+   * True from the moment the robot is placed above the spawn until it first
+   * touches down. Input stays locked for that window so the fall cannot be
+   * steered, which is what makes it read as an arrival rather than as a jump
+   * the player somehow started mid-air.
+   */
+  const reviving = useRef(true)
+  /** Latches so a body still below the kill plane cannot fire death every step. */
+  const dead = useRef(false)
 
   /** Dev-only counters, sampled per physics step. See window.__player. */
   const debug = useRef({ peakY: 0, jumps: 0 })
@@ -95,6 +111,12 @@ export function PlayerController({
   const scratch = scratchRef.current
 
   const controllerRef = useRef<CharacterController | null>(null)
+
+  /** Where the body is seeded: the spawn, lifted by the revival drop height. */
+  const dropSpawn = useMemo<[number, number, number]>(
+    () => [spawn[0], spawn[1] + REVIVAL.dropHeight, spawn[2]],
+    [spawn],
+  )
 
   /**
    * The character controller is a WASM-backed resource, so it is created and
@@ -134,15 +156,24 @@ export function PlayerController({
     }
   }, [world])
 
-  /** Place the robot at the scene's spawn point on mount. */
+  /**
+   * Place the robot above the scene's spawn point on mount, so it drops in.
+   *
+   * The drop is the revival: the character falls the last short stretch into
+   * the world while the iris opens around them, then lands with a spring. See
+   * REVIVAL in tuning.ts for the height and for why it is not literally 50px.
+   */
   useEffect(() => {
     const body = bodyRef.current
     if (!body) return
-    body.setNextKinematicTranslation({ x: spawn[0], y: spawn[1], z: spawn[2] })
-    body.setTranslation({ x: spawn[0], y: spawn[1], z: spawn[2] }, true)
+    const y = spawn[1] + REVIVAL.dropHeight
+    body.setNextKinematicTranslation({ x: spawn[0], y, z: spawn[2] })
+    body.setTranslation({ x: spawn[0], y, z: spawn[2] }, true)
     velocity.current.set(0, 0, 0)
     coyoteTimer.current = 0
     bufferTimer.current = 0
+    reviving.current = true
+    dead.current = false
   }, [spawn])
 
   useBeforePhysicsStep(() => {
@@ -158,7 +189,11 @@ export function PlayerController({
 
     sampleInput()
     const input = intent.current
-    const locked = inputLocked.current
+    // Two independent locks. The scene machine owns the first, for the frames
+    // where the world is being torn down and rebuilt. The controller owns the
+    // second, for the fall on arrival, because only it knows when the feet
+    // actually touch down.
+    const locked = inputLocked.current || reviving.current
 
     // During a transition the world is being torn down and rebuilt. Reading input
     // here would let the player walk into geometry that no longer exists.
@@ -221,11 +256,26 @@ export function PlayerController({
 
     // ---- Landing -----------------------------------------------------------
     if (grounded && !wasGrounded.current) {
-      const impact = Math.abs(anim.current.verticalVelocity)
-      if (impact > SQUASH.minLandSpeed) {
-        const strength = Math.min(1, impact / Math.abs(JUMP.maxFallSpeed))
-        anim.current.squash = 1 - (1 - SQUASH.landSquash) * strength
+      if (reviving.current) {
+        /*
+          The revival landing ignores impact speed and squashes to a fixed
+          depth. Scaling it by velocity the way an ordinary landing does would
+          make the bounce depend on REVIVAL.dropHeight, so tuning the drop for
+          how it looks would silently retune how the landing feels.
+
+          The bounce itself is the existing spring in the frame loop below
+          recovering from this compression. There is no separate animation.
+        */
+        anim.current.squash = REVIVAL.landSquash
         squashVelocity.current = 0
+        reviving.current = false
+      } else {
+        const impact = Math.abs(anim.current.verticalVelocity)
+        if (impact > SQUASH.minLandSpeed) {
+          const strength = Math.min(1, impact / Math.abs(JUMP.maxFallSpeed))
+          anim.current.squash = 1 - (1 - SQUASH.landSquash) * strength
+          squashVelocity.current = 0
+        }
       }
     }
     wasGrounded.current = grounded
@@ -246,6 +296,14 @@ export function PlayerController({
     // upward velocity rather than pressing into it for the rest of the arc.
     if (velocity.current.y > 0 && corrected.y < scratch.move.y * 0.5) {
       velocity.current.y = 0
+    }
+
+    // ---- Kill plane --------------------------------------------------------
+    // Latched, because the body keeps falling for the whole close of the iris
+    // and would otherwise re-fire death on every step of the way down.
+    if (!dead.current && t.y + corrected.y < killY) {
+      dead.current = true
+      onDeath()
     }
 
     // ---- Feed the animation ------------------------------------------------
@@ -287,6 +345,13 @@ export function PlayerController({
     if (playerRef.current && bodyRef.current) {
       const t = bodyRef.current.translation()
       playerRef.current.position.set(t.x, t.y, t.z)
+      /*
+        Publish the heading too. The follow target is the one thing the camera
+        already holds a reference to, so writing facing onto it is what lets the
+        camera swing round behind the player without a per-frame prop or a
+        second subscription. The visual group above uses the same value.
+      */
+      playerRef.current.rotation.y = facing.current
     }
 
     if (import.meta.env.DEV) {
@@ -305,6 +370,8 @@ export function PlayerController({
         buffer: bufferTimer.current,
         squash: anim.current.squash,
         facing: facing.current,
+        reviving: reviving.current,
+        dead: dead.current,
         peakY: debug.current.peakY,
         jumps: debug.current.jumps,
         resetPeak: () => {
@@ -319,7 +386,11 @@ export function PlayerController({
       ref={bodyRef}
       type="kinematicPosition"
       colliders={false}
-      position={spawn}
+      // The drop height is applied here as well as in the effect above. The
+      // effect runs after the first commit, so seeding the body at ground level
+      // would render one frame of the robot standing at the spawn before it
+      // teleports up to fall, which is visible as a flicker.
+      position={dropSpawn}
       // Rotation is driven visually rather than physically; a rotating capsule
       // buys nothing and complicates the collision response.
       enabledRotations={[false, false, false]}
