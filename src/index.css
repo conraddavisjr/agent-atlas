@@ -1,0 +1,30 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0a0d16;
+}
+
+body {
+  /* The camera orbits on mouse drag, so text selection would otherwise highlight
+     the page every time the player looks around. */
+  user-select: none;
+  -webkit-user-select: none;
+  /* Prevents the default touch pan/zoom fighting future touch controls. */
+  touch-action: none;
+}
+
+canvas {
+  display: block;
+  outline: none;
+}

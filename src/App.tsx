@@ -1,0 +1,208 @@
+import { Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
+import { Canvas } from '@react-three/fiber'
+import { Physics } from '@react-three/rapier'
+import { Group } from 'three'
+import { NoToneMapping } from 'three'
+
+import { useInput } from './game/input/useInput'
+import { PlayerController } from './game/player/PlayerController'
+import { FollowCamera } from './game/camera/FollowCamera'
+import { GameContext } from './game/GameContext'
+import { useSceneTravel, type TravelRequest } from './game/scenes/SceneHost'
+import { getScene } from './game/scenes/registry'
+import { Transition } from './game/scenes/Transition'
+import { Lighting } from './art/Lighting'
+import { PostFX } from './art/PostFX'
+import { HUD } from './ui/HUD'
+import { useGameStore, useProgress } from './state/gameStore'
+import { COSMETICS, LESSONS } from './state/lessons'
+import { earnedCosmetics } from './state/progression'
+
+/**
+ * Escape hatch: `?nofx` renders without post-processing.
+ *
+ * Kept in production builds on purpose. Post-processing is the first thing to
+ * suspect when the game runs badly or looks wrong on unfamiliar hardware, and
+ * with no accounts and no telemetry, asking a player to reload with one query
+ * parameter is the only remote diagnostic available.
+ *
+ * Read once at module scope rather than per render.
+ */
+const DISABLE_POSTFX = new URLSearchParams(window.location.search).has('nofx')
+
+export default function App() {
+  const { intent, sample, endFrame } = useInput()
+
+  /**
+   * Input lock as a ref rather than state. It is read inside the physics step,
+   * and routing it through React state would mean a re-render of the whole scene
+   * tree on every transition boundary.
+   */
+  const inputLocked = useRef(false)
+
+  /**
+   * Follow target, kept in sync with the interpolated physics transform.
+   * Lazily initialised so a new Group is not allocated on every render.
+   */
+  const player = useRef<Group | null>(null)
+  if (player.current === null) player.current = new Group()
+
+  const storedScene = useGameStore((s) => s.currentSceneId)
+  const storedSpawn = useGameStore((s) => s.currentSpawnId)
+  const travelTo = useGameStore((s) => s.travelTo)
+  const completeLesson = useGameStore((s) => s.completeLesson)
+  const progress = useProgress()
+
+  /**
+   * Where to start. Read once on mount rather than tracked, so restoring a save
+   * does not trigger a transition on load: the player should simply already be
+   * where they left off.
+   */
+  const initial = useMemo<TravelRequest>(
+    () => ({ sceneId: storedScene, spawnId: storedSpawn }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
+  const onArrive = useCallback(
+    (request: TravelRequest) => travelTo(request.sceneId, request.spawnId),
+    [travelTo],
+  )
+
+  const { displayed, covering, label, travel, spawn } = useSceneTravel(initial, onArrive)
+
+  const doTravel = useCallback(
+    (sceneId: string, spawnId: string, displayLabel?: string) =>
+      travel({ sceneId, spawnId }, displayLabel),
+    [travel],
+  )
+
+  // Keep the ref in sync so the physics step sees the lock without a re-render.
+  useEffect(() => {
+    inputLocked.current = covering
+  }, [covering])
+
+  /** Interact key. Handled centrally so totems stay presentational. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'KeyE' && e.code !== 'Enter') return
+      if (covering) return
+      const id = useGameStore.getState().activeTotemId
+      if (id) completeLesson(id)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [covering, completeLesson])
+
+  const scene = getScene(displayed.sceneId)
+  const SceneComponent = scene.Component
+
+  const cosmetics = useMemo(
+    () => earnedCosmetics(COSMETICS, LESSONS, progress),
+    [progress],
+  )
+
+  const gameContext = useMemo(() => ({ player, travel: doTravel }), [doTravel])
+
+  return (
+    <>
+      <Canvas
+        shadows
+        dpr={[1, 1.75]}
+        camera={{ fov: 55, near: 0.1, far: 250, position: [0, 6, 14] }}
+        /*
+          Tone mapping is disabled on the renderer and applied once at the end of
+          the effect chain instead. Leaving it on here means ACES runs twice, once
+          into the composer's render target and again on the way out, which
+          crushes contrast and washes the whole palette out to pastel.
+        */
+        gl={{ antialias: false, toneMapping: NoToneMapping }}
+        style={{ position: 'fixed', inset: 0 }}
+      >
+        {scene.sky && (
+          <>
+            <color attach="background" args={[scene.sky.horizon]} />
+            <fog attach="fog" args={[scene.sky.horizon, 40, 150]} />
+          </>
+        )}
+        {!scene.sky && (
+          <>
+            <color attach="background" args={['#0a0d16']} />
+            <fog attach="fog" args={['#0a0d16', 12, 45]} />
+          </>
+        )}
+
+        {/*
+          This boundary is load-bearing, not defensive.
+
+          <Physics> suspends while the Rapier WASM module loads, and lazily
+          imported scenes suspend on their chunk. Without a boundary inside the
+          Canvas, that suspension propagates all the way to the root, which blanks
+          the HUD and the transition overlay along with the 3D view. Confining it
+          here means the DOM overlay stays visible while the world is still coming
+          up, which is exactly when the player most needs something on screen.
+        */}
+        <Suspense fallback={null}>
+        <GameContext.Provider value={gameContext}>
+          {/*
+            Physics is paused while the screen is covered. Belt and braces with the
+            input lock: it also stops the player falling through a scene that has
+            not finished mounting its colliders, which is the failure the lock
+            alone would not catch.
+          */}
+          {/*
+            World gravity is set for future dynamic props. The player is a
+            kinematic body, which Rapier does not apply gravity to at all, so the
+            controller integrates its own vertical velocity from tuning.ts. The
+            two never conflict.
+          */}
+          <Physics timeStep={1 / 60} interpolate paused={covering} gravity={[0, -9.81, 0]}>
+            {/*
+              Keyed by scene so both the world and the player fully remount on
+              travel. That is what guarantees the previous scene is released and
+              the character controller is rebuilt against the new colliders,
+              rather than quietly accumulating across transitions.
+            */}
+            {/* Keys are namespaced because this group and the camera below are
+                siblings. Keying both with the bare scene id gave two children the
+                same key, which lets React drop one of them. */}
+            <group key={`world-${displayed.sceneId}`}>
+              <Lighting variant={scene.lighting} />
+              <Suspense fallback={null}>
+                <SceneComponent />
+              </Suspense>
+              <PlayerController
+                intent={intent}
+                sampleInput={sample}
+                endInputFrame={endFrame}
+                spawn={spawn}
+                cosmetics={cosmetics}
+                playerRef={player}
+                inputLocked={inputLocked}
+              />
+            </group>
+
+            {/*
+              Inside <Physics> because the camera raycasts against the physics
+              world to avoid clipping through geometry, and useRapier is only
+              available within the provider. Keyed by scene so it snaps to the new
+              spawn instead of springing in from wherever the last scene left it.
+            */}
+            <FollowCamera
+              key={`camera-${displayed.sceneId}`}
+              target={player}
+              intent={intent}
+              inputLocked={inputLocked}
+            />
+          </Physics>
+        </GameContext.Provider>
+        </Suspense>
+
+        {!DISABLE_POSTFX && <PostFX />}
+      </Canvas>
+
+      <HUD />
+      <Transition active={covering} label={label} />
+    </>
+  )
+}

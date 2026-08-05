@@ -1,0 +1,157 @@
+import { useRef } from 'react'
+import { useFrame, useThree } from '@react-three/fiber'
+import { useRapier } from '@react-three/rapier'
+import { Vector3, type Group } from 'three'
+import { CAMERA } from '../player/tuning'
+import type { InputIntent } from '../input/useInput'
+
+/**
+ * Third-person follow camera with spring damping and collision pull-in.
+ *
+ * The collision handling is not a later polish item here. Portal scenes are
+ * interiors such as caves and rooms, so the camera spends most of its life close
+ * to walls. Without a pull-in raycast the player would spend that time looking
+ * through geometry at the skybox.
+ */
+export function FollowCamera({
+  target,
+  intent,
+  inputLocked,
+}: {
+  target: React.RefObject<Group | null>
+  intent: React.RefObject<InputIntent>
+  inputLocked: React.RefObject<boolean>
+}) {
+  const camera = useThree((s) => s.camera)
+  const { world, rapier } = useRapier()
+
+  const yaw = useRef(0)
+  const pitch = useRef(0.25)
+  /** Current distance, which eases back out after a collision rather than popping. */
+  const distance = useRef<number>(CAMERA.distance)
+
+  /**
+   * Scratch vectors, allocated once and mutated every frame.
+   *
+   * A ref rather than a memo: these are explicitly mutable per-frame buffers, and
+   * useMemo values are not allowed to be mutated after render. Allocating fresh
+   * vectors each frame instead would create garbage at 60Hz and show up as
+   * collection stutter.
+   */
+  const scratchRef = useRef<{
+    desired: Vector3
+    lookAt: Vector3
+    offset: Vector3
+    dir: Vector3
+  } | null>(null)
+  if (scratchRef.current === null) {
+    scratchRef.current = {
+      desired: new Vector3(),
+      lookAt: new Vector3(),
+      offset: new Vector3(),
+      dir: new Vector3(),
+    }
+  }
+  const scratch = scratchRef.current
+
+  /**
+   * The smoothed look target, persisted across frames.
+   *
+   * Damping the look point separately from the camera position is what stops the
+   * view snapping when the player changes direction quickly.
+   */
+  const smoothLook = useRef(new Vector3())
+  const initialised = useRef(false)
+
+  /** Reused collision ray. Rapier's Ray is a plain JS object, so no free is needed. */
+  const rayRef = useRef<InstanceType<typeof rapier.Ray> | null>(null)
+
+  useFrame((_, delta) => {
+    const focus = target.current
+    if (!focus) return
+
+    const dt = Math.min(delta, 0.05)
+
+    // Orbit. Input is already accumulated for the frame by the input layer.
+    if (!inputLocked.current) {
+      yaw.current -= intent.current.lookX * CAMERA.mouseSensitivity
+      pitch.current += intent.current.lookY * CAMERA.mouseSensitivity
+      pitch.current = Math.max(CAMERA.minPitch, Math.min(CAMERA.maxPitch, pitch.current))
+    }
+
+    scratch.lookAt.copy(focus.position)
+    scratch.lookAt.y += CAMERA.lookHeight
+
+    // Ideal camera position on a sphere around the look target.
+    const horizontal = Math.cos(pitch.current) * CAMERA.distance
+    scratch.offset.set(
+      Math.sin(yaw.current) * horizontal,
+      CAMERA.height + Math.sin(pitch.current) * CAMERA.distance,
+      Math.cos(yaw.current) * horizontal,
+    )
+
+    scratch.desired.copy(scratch.lookAt).add(scratch.offset)
+
+    // ---- Collision pull-in -------------------------------------------------
+    // Cast from the look target toward the ideal position. If anything is in the
+    // way, sit just in front of it.
+    scratch.dir.copy(scratch.desired).sub(scratch.lookAt)
+    const idealDistance = scratch.dir.length()
+    scratch.dir.normalize()
+
+    let allowed = idealDistance
+
+    // The ray is allocated once and mutated, rather than constructed each frame.
+    // A fresh Ray plus two vector literals every frame is 180 short-lived objects
+    // a second for no benefit, and that garbage shows up as collection stutter in
+    // exactly the moments the camera is working hardest.
+    if (rayRef.current === null) {
+      rayRef.current = new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 })
+    }
+    const ray = rayRef.current
+    ray.origin.x = scratch.lookAt.x
+    ray.origin.y = scratch.lookAt.y
+    ray.origin.z = scratch.lookAt.z
+    ray.dir.x = scratch.dir.x
+    ray.dir.y = scratch.dir.y
+    ray.dir.z = scratch.dir.z
+    // solid = true so a ray starting inside geometry still reports a hit rather
+    // than passing straight through and leaving the camera embedded in a wall.
+    const hit = world.castRay(ray, idealDistance, true)
+    if (hit) {
+      allowed = Math.max(CAMERA.minDistance, hit.timeOfImpact - CAMERA.collisionPadding)
+    }
+
+    // Pull in immediately to avoid clipping, but ease back out. Snapping outward
+    // the instant an obstruction clears is jarring and draws attention to the camera.
+    if (allowed < distance.current) {
+      distance.current = allowed
+    } else {
+      distance.current += Math.min(allowed - distance.current, CAMERA.pullOutSpeed * dt)
+    }
+
+    scratch.desired.copy(scratch.lookAt).addScaledVector(scratch.dir, distance.current)
+
+    // ---- Spring damping ----------------------------------------------------
+    // Frame-rate independent exponential smoothing. The naive lerp(a, b, 0.1)
+    // form is tied to frame rate and makes the camera feel different on a 144Hz
+    // monitor than on a 60Hz one.
+    const posT = 1 - Math.exp(-CAMERA.positionDamping * dt)
+    const lookT = 1 - Math.exp(-CAMERA.targetDamping * dt)
+
+    // On the first frame of a scene, snap rather than spring. Otherwise the camera
+    // visibly flies in from wherever the previous scene left it.
+    if (!initialised.current) {
+      camera.position.copy(scratch.desired)
+      smoothLook.current.copy(scratch.lookAt)
+      initialised.current = true
+    } else {
+      camera.position.lerp(scratch.desired, posT)
+      smoothLook.current.lerp(scratch.lookAt, lookT)
+    }
+
+    camera.lookAt(smoothLook.current)
+  })
+
+  return null
+}
