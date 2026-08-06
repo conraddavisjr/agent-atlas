@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef } from 'react'
 import {
   Color,
+  CylinderGeometry,
   IcosahedronGeometry,
   Object3D,
   type BufferGeometry,
@@ -10,7 +11,7 @@ import { palette } from './palette'
 import { plastic, stone } from './materials'
 import { usePbrTextures } from './textures'
 import { useQuality } from './useQuality'
-import type { GrassExclusion } from './Grass'
+import { evenPlacements, mulberry32, type Exclusion, type Placement } from './placement'
 
 /**
  * Rocks, pebbles, clover and flowers scattered across the island.
@@ -24,16 +25,13 @@ import type { GrassExclusion } from './Grass'
  * anything the player can touch is what keeps the ground walkable.
  */
 
-/** Same generator as the grass, for the same reason: placement must not reshuffle. */
-function mulberry32(seed: number) {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
+/**
+ * How far a flower head sits above the ground, in the geometry's own units.
+ *
+ * Shared by the head's placement offset and the stem's height so the two
+ * cannot drift apart: change it and both move together.
+ */
+const FLOWER_HEIGHT = 3.4
 
 /**
  * An irregular lump from a subdivided icosahedron.
@@ -60,51 +58,6 @@ function createRockGeometry(seed: number, detail = 1): BufferGeometry {
   pos.needsUpdate = true
   geometry.computeVertexNormals()
   return geometry
-}
-
-type Placement = {
-  x: number
-  z: number
-  yaw: number
-  scale: number
-}
-
-function scatterPlacements({
-  count,
-  radius,
-  exclusions,
-  seed,
-  minRadius = 0,
-}: {
-  count: number
-  radius: number
-  exclusions: GrassExclusion[]
-  seed: number
-  minRadius?: number
-}): Placement[] {
-  const rand = mulberry32(seed)
-  const out: Placement[] = []
-
-  for (let attempt = 0; attempt < count * 4 && out.length < count; attempt++) {
-    const r = Math.sqrt(rand()) * radius
-    if (r < minRadius) continue
-    const a = rand() * Math.PI * 2
-    const x = Math.cos(a) * r
-    const z = Math.sin(a) * r
-
-    let blocked = false
-    for (const e of exclusions) {
-      if ((x - e.x) ** 2 + (z - e.z) ** 2 < e.radius * e.radius) {
-        blocked = true
-        break
-      }
-    }
-    if (blocked) continue
-
-    out.push({ x, z, yaw: rand() * Math.PI * 2, scale: 0.6 + rand() * 0.8 })
-  }
-
-  return out
 }
 
 /**
@@ -142,7 +95,7 @@ export function Scatter({
   exclusions = [],
 }: {
   radius: number
-  exclusions?: GrassExclusion[]
+  exclusions?: Exclusion[]
 }) {
   const quality = useQuality()
   const rockStone = usePbrTextures('stone', [2, 2])
@@ -159,7 +112,7 @@ export function Scatter({
 
   const rockPlacements = useMemo(
     () =>
-      scatterPlacements({
+      evenPlacements({
         count: Math.round(26 * density),
         radius: radius * 0.95,
         exclusions,
@@ -173,7 +126,7 @@ export function Scatter({
 
   const pebblePlacements = useMemo(
     () =>
-      scatterPlacements({
+      evenPlacements({
         count: Math.round(120 * density),
         radius: radius * 0.98,
         exclusions,
@@ -184,7 +137,7 @@ export function Scatter({
 
   const cloverPlacements = useMemo(
     () =>
-      scatterPlacements({
+      evenPlacements({
         count: Math.round(340 * density),
         radius: radius * 0.9,
         exclusions,
@@ -195,7 +148,7 @@ export function Scatter({
 
   const flowerPlacements = useMemo(
     () =>
-      scatterPlacements({
+      evenPlacements({
         count: Math.round(90 * density),
         radius: radius * 0.88,
         exclusions,
@@ -211,7 +164,8 @@ export function Scatter({
   */
   const pebbles = useInstancedPlacements(pebblePlacements, 0.09, 0.45)
   const clover = useInstancedPlacements(cloverPlacements, 0.1, 0.35)
-  const flowers = useInstancedPlacements(flowerPlacements, 0.05, 3.4)
+  const flowers = useInstancedPlacements(flowerPlacements, 0.05, FLOWER_HEIGHT)
+  const stems = useInstancedPlacements(flowerPlacements, 0.05, 0)
 
   /*
     Leaf clumps.
@@ -227,8 +181,31 @@ export function Scatter({
     return g
   }, [])
 
-  /* Flowers get the smooth variant too, for the same reason. */
-  const flowerGeometry = useMemo(() => createRockGeometry(61, 2), [])
+  /*
+    The flower head: a small dome, wider than it is tall so it reads as facing
+    upward, and smooth enough at this size not to show facets.
+  */
+  const flowerGeometry = useMemo(() => {
+    const g = createRockGeometry(61, 2)
+    g.scale(1, 0.6, 1)
+    return g
+  }, [])
+
+  /*
+    The stem, authored tall and thin in its own units rather than scaled that
+    way at placement, because placements scale uniformly and a uniform scale
+    cannot make something both thinner and taller.
+
+    Its height matches the head's vertical offset exactly, so the two meet:
+    both are multiplied by the same per-instance scale, and the head sits at
+    3.4 units up, so the stem is 3.4 units tall. Its origin is moved to its
+    base so it grows up from the ground rather than being centred on it.
+  */
+  const stemGeometry = useMemo(() => {
+    const g = new CylinderGeometry(0.09, 0.14, FLOWER_HEIGHT, 5)
+    g.translate(0, FLOWER_HEIGHT / 2, 0)
+    return g
+  }, [])
 
   return (
     <group>
@@ -259,14 +236,35 @@ export function Scatter({
         <meshPhysicalMaterial {...plastic(palette.grassDeep)} roughness={0.7} clearcoat={0.2} />
       </instancedMesh>
 
-      {/* Flowers, in the palette's accent rather than a botanical colour. They
-          are here to punctuate the green, not to be identifiable species. */}
+      {/*
+        Flowers, as a stem and a head rather than one tinted lump.
+
+        Two instanced meshes over the same placements instead of one merged
+        geometry. Merging would save a draw call and cost the ability to give
+        the two parts different materials, which is the entire reason a flower
+        reads as a flower: a green stalk holding up something that is not green.
+      */}
+      <instancedMesh
+        ref={stems}
+        args={[stemGeometry, undefined, flowerPlacements.length]}
+        receiveShadow
+      >
+        <meshPhysicalMaterial {...plastic(palette.grassDeep)} roughness={0.8} clearcoat={0} />
+      </instancedMesh>
+
       <instancedMesh
         ref={flowers}
         args={[flowerGeometry, undefined, flowerPlacements.length]}
+        castShadow
         receiveShadow
       >
-        <meshPhysicalMaterial {...plastic(palette.token)} emissive={new Color(palette.token)} emissiveIntensity={0.25} />
+        {/* Faintly emissive so the heads hold their colour in shadow, well under
+            the bloom threshold so they never actually glow. */}
+        <meshPhysicalMaterial
+          {...plastic(palette.token)}
+          emissive={new Color(palette.token)}
+          emissiveIntensity={0.35}
+        />
       </instancedMesh>
     </group>
   )

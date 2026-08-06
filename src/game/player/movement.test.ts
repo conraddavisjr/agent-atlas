@@ -3,9 +3,10 @@ import {
   approach,
   approachAngle,
   initialVerticalState,
+  headingVector,
   stepCameraYaw,
+  stepDrive,
   stepHorizontal,
-  stepInputYaw,
   stepVertical,
   wrapAngle,
 } from './movement'
@@ -208,148 +209,159 @@ describe('helpers', () => {
 })
 
 describe('camera realignment', () => {
-  /** A player walking due north at full tilt, with the camera off to one side. */
-  const walking = {
+  /** A robot pointing due east, with the camera off to one side. */
+  const driving = {
     yaw: 0,
     facing: Math.PI / 2,
-    speed: MOVEMENT.maxSpeed,
+    following: true,
     lookingManually: false,
     dt: DT,
   }
 
-  it('swings toward the position behind the player', () => {
-    const next = stepCameraYaw(walking)
-    // The target is facing + pi. Starting at 0 and needing to reach 3pi/2, the
-    // short way around is downward through negative yaw.
-    expect(next).toBeLessThan(walking.yaw)
+  it('swings toward the position behind the robot', () => {
+    // The target is facing plus half a turn. Starting at zero and needing to
+    // reach three quarters of a turn, the short way is downward through
+    // negative yaw.
+    expect(stepCameraYaw(driving)).toBeLessThan(driving.yaw)
   })
 
   it('corrects proportionally, so a big error moves further than a small one', () => {
     // The property a fixed radians-per-second could not have. It is what lets
     // one number serve both a half-turn recovery and an imperceptible nudge.
-    const far = stepCameraYaw({ ...walking, yaw: 0 })
-    const near = stepCameraYaw({ ...walking, yaw: walking.facing + Math.PI - 0.4 })
+    const far = stepCameraYaw({ ...driving, yaw: 0 })
+    const near = stepCameraYaw({ ...driving, yaw: driving.facing + Math.PI - 0.4 })
     expect(Math.abs(far - 0)).toBeGreaterThan(
-      Math.abs(near - (walking.facing + Math.PI - 0.4)),
+      Math.abs(near - (driving.facing + Math.PI - 0.4)),
     )
   })
 
   it('leaves the camera alone while the player is aiming it', () => {
-    expect(stepCameraYaw({ ...walking, lookingManually: true })).toBe(walking.yaw)
+    expect(stepCameraYaw({ ...driving, lookingManually: true })).toBe(driving.yaw)
   })
 
-  it('resumes the moment manual look stops, with no cooldown', () => {
-    // The frame after a drag ends is an ordinary frame. This is the whole of
-    // "as soon as they move again the camera follows".
-    const during = stepCameraYaw({ ...walking, lookingManually: true })
-    const after = stepCameraYaw({ ...walking, yaw: during, lookingManually: false })
-    expect(after).not.toBe(during)
+  it('holds a view the player set once they stop driving', () => {
+    // Otherwise a camera someone deliberately pointed somewhere creeps back on
+    // its own the moment they let go, which reads as the game arguing.
+    expect(stepCameraYaw({ ...driving, following: false })).toBe(driving.yaw)
   })
 
-  it('ignores heading below a walking pace', () => {
-    // Facing is derived from velocity, so at a standstill it is noise.
-    const crawling = { ...walking, speed: CAMERA.realignMinSpeed - 0.01 }
-    expect(stepCameraYaw(crawling)).toBe(walking.yaw)
+  it('follows a rotation on the spot', () => {
+    /*
+      The reason the gate is "driving" rather than "moving fast enough".
+      Turning in place has no speed at all, and the previous speed gate would
+      leave the camera parked on the robot's side through every turn, which is
+      most of what would make tank controls feel broken.
+    */
+    expect(stepCameraYaw({ ...driving, following: true })).not.toBe(driving.yaw)
   })
 
   it('holds still inside the deadzone', () => {
-    const aligned = { ...walking, yaw: walking.facing + Math.PI - 0.02 }
+    const aligned = { ...driving, yaw: driving.facing + Math.PI - 0.02 }
     expect(stepCameraYaw(aligned)).toBe(aligned.yaw)
   })
 
   it('converges rather than oscillating around the target', () => {
     let yaw = 0
-    for (let i = 0; i < 600; i++) {
-      yaw = stepCameraYaw({ ...walking, yaw })
-    }
-    // Ends up behind the player and stays there.
-    expect(Math.abs(wrapAngle(yaw - (walking.facing + Math.PI)))).toBeLessThan(
+    for (let i = 0; i < 600; i++) yaw = stepCameraYaw({ ...driving, yaw })
+    expect(Math.abs(wrapAngle(yaw - (driving.facing + Math.PI)))).toBeLessThan(
       CAMERA.realignDeadzone,
     )
   })
 
   it('recovers from a half turn in well under a second', () => {
-    // The case the whole redesign exists for: the player turns to walk toward
-    // the camera. A fixed rate slow enough to be invisible at small angles took
-    // roughly two seconds to do this, which is what read as the camera trailing.
     let yaw = 0
-    const target = walking.facing + Math.PI
+    const target = driving.facing + Math.PI
     let steps = 0
     while (Math.abs(wrapAngle(yaw - target)) > CAMERA.realignDeadzone && steps < 600) {
-      yaw = stepCameraYaw({ ...walking, yaw })
+      yaw = stepCameraYaw({ ...driving, yaw })
       steps++
     }
     expect(steps * DT).toBeLessThan(1)
   })
 
   it('never turns the long way around the circle', () => {
-    // Camera just past the wrap point from its target. The short path crosses
-    // pi; taking the long path would be a visible whip-pan through the front.
+    // Just past the wrap point from its target. Taking the long path would be a
+    // visible whip-pan through the front.
     const yaw = -Math.PI + 0.05
-    const next = stepCameraYaw({ ...walking, facing: Math.PI / 2, yaw })
-    // A step of at most half the remaining error, taken the short way, can never
-    // exceed the error itself.
+    const next = stepCameraYaw({ ...driving, yaw })
     expect(Math.abs(wrapAngle(next - yaw))).toBeLessThan(Math.PI)
   })
 })
 
-describe('movement input frame', () => {
-  const held = {
-    inputYaw: 1,
-    cameraYaw: 2,
-    hasMoveInput: true,
-    manualLookDelta: 0,
-  }
+describe('tank controls', () => {
+  const still = { moveX: 0, moveY: 0, facing: 0, dt: DT }
 
-  it('re-syncs to the camera when no direction is held', () => {
-    expect(stepInputYaw({ ...held, hasMoveInput: false })).toBe(held.cameraYaw)
+  it('rotates in place without moving', () => {
+    // The rule the whole scheme rests on: left and right turn, and never translate.
+    const turning = stepDrive({ ...still, moveX: -1 })
+    expect(turning.facing).not.toBe(0)
+    // Negated input, so an idle axis arrives as negative zero. Numerically zero,
+    // but not zero to Object.is, which is what toBe uses.
+    expect(turning.throttle).toBeCloseTo(0, 10)
   })
 
-  it('ignores where the camera has moved to while a direction is held', () => {
-    // The heart of the fix. The camera realigning must not turn the direction
-    // the player is walking, or the correction moves its own target and the
-    // error never closes.
-    expect(stepInputYaw({ ...held, cameraYaw: 99 })).toBe(held.inputYaw)
+  it('turns left on left input and right on right', () => {
+    // Forward is (sin f, cos f), whose derivative points to its left, so a
+    // rising facing is a left turn.
+    expect(stepDrive({ ...still, moveX: -1 }).facing).toBeGreaterThan(0)
+    expect(stepDrive({ ...still, moveX: 1 }).facing).toBeLessThan(0)
   })
 
-  it('follows a manual drag even while a direction is held', () => {
-    // Aiming the camera is also choosing which way forward points, so this one
-    // does have to feed through.
-    expect(stepInputYaw({ ...held, manualLookDelta: 0.25 })).toBeCloseTo(1.25, 6)
+  it('drives along its own facing rather than the camera', () => {
+    // A quarter turn from north should point due east.
+    const heading = headingVector(Math.PI / 2)
+    expect(heading.x).toBeCloseTo(1, 6)
+    expect(heading.z).toBeCloseTo(0, 6)
   })
 
-  it('lets the camera converge on a player walking toward it', () => {
+  it('moves forward without turning when only forward is held', () => {
+    const forward = stepDrive({ ...still, moveY: -1 })
+    expect(forward.facing).toBe(0)
+    expect(forward.throttle).toBe(1)
+  })
+
+  it('reverses on back input', () => {
+    expect(stepDrive({ ...still, moveY: 1 }).throttle).toBe(-1)
+  })
+
+  it('combines into an arc when turning and driving together', () => {
     /*
-      The regression test for the bug this replaced. Holding back means the
-      heading sits exactly half a turn from the camera. Resolving input against
-      the live camera made that a fixed point the correction could never escape,
-      because every degree the camera gained it immediately gave back.
+      Neither input is a special case: the heading rotates, the throttle drives
+      along it, and a curve is what falls out. Integrated here the way the
+      controller does it, so this would catch the two being applied in an order
+      that straightens the path back out.
     */
-    let cameraYaw = 0
-    let inputYaw = 0
-
-    for (let i = 0; i < 600; i++) {
-      // "Back" is the input frame's forward, reversed: the player walks toward
-      // where the camera was when they pressed the key.
-      const facing = wrapAngle(inputYaw)
-      cameraYaw = stepCameraYaw({
-        yaw: cameraYaw,
-        facing,
-        speed: MOVEMENT.maxSpeed,
-        lookingManually: false,
-        dt: DT,
-      })
-      inputYaw = stepInputYaw({
-        inputYaw,
-        cameraYaw,
-        hasMoveInput: true,
-        manualLookDelta: 0,
-      })
+    /*
+      Half a second, which is a turn of about 86 degrees. Deliberately not
+      longer: run it far enough and the arc doubles back on itself, so the net
+      displacement along the starting axis shrinks toward nothing and an
+      assertion about it would fail on a perfectly good curve.
+    */
+    const steps = 30
+    let facing = 0
+    let x = 0
+    let z = 0
+    for (let i = 0; i < steps; i++) {
+      const step = stepDrive({ moveX: -1, moveY: -1, facing, dt: DT })
+      facing = step.facing
+      const heading = headingVector(facing)
+      x += heading.x * step.throttle * MOVEMENT.maxSpeed * DT
+      z += heading.z * step.throttle * MOVEMENT.maxSpeed * DT
     }
 
-    // The camera ends up behind the player rather than stuck opposite them.
-    expect(Math.abs(wrapAngle(cameraYaw - Math.PI))).toBeLessThan(CAMERA.realignDeadzone)
-    // And the direction of travel never moved while the key was held.
-    expect(inputYaw).toBe(0)
+    expect(facing).toBeCloseTo(MOVEMENT.turnRate * DT * steps, 5)
+    // Travelled a real distance, and along both axes rather than down one,
+    // which is what distinguishes an arc from a straight line.
+    expect(Math.hypot(x, z)).toBeGreaterThan(2)
+    expect(Math.abs(x)).toBeGreaterThan(0.8)
+    expect(Math.abs(z)).toBeGreaterThan(0.8)
+  })
+
+  it('keeps facing inside a single turn of the circle', () => {
+    // Facing feeds trigonometry and a camera target every step, so letting it
+    // grow without bound would eventually cost precision.
+    let facing = 0
+    for (let i = 0; i < 600; i++) facing = stepDrive({ ...still, moveX: -1, facing }).facing
+    expect(Math.abs(facing)).toBeLessThanOrEqual(Math.PI + 1e-9)
   })
 })

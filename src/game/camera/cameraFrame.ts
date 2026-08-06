@@ -1,50 +1,41 @@
 /**
- * The two horizontal angles the game needs to keep apart, and why keeping them
- * apart is the whole point.
+ * The small amount of camera state the controller and the camera both need.
  *
- * Movement is camera-relative, so "back" means "toward the camera". That makes
- * the character's heading exactly half a turn from the camera whenever the
- * player holds back. If the camera then rotates to get behind them, and the
- * input direction is read off that same rotating camera, the input direction
- * turns by exactly as much as the camera did and the error stays at half a turn
- * forever. The camera chases its own tail and never arrives.
+ * This used to carry a second angle, the frame movement input was resolved
+ * against, which existed to stop auto-alignment feeding back into the direction
+ * of travel. Under tank controls that loop cannot form: forward means along the
+ * robot's own facing, and facing comes straight from input, so the camera has
+ * no way to influence where the player is going. The second angle went with it.
  *
- * Splitting the two breaks the loop:
- *
- *   yaw       where the camera actually is.
- *   inputYaw  the frame movement input is resolved against.
- *
- * Manual drag moves both, because aiming the camera should re-aim movement.
- * Auto-realignment moves only `yaw`, so a correction can never feed back into
- * the direction being corrected. That single asymmetry is what makes the camera
- * converge instead of trail.
- *
- * A mutable module singleton rather than React state or context: these are read
+ * A mutable module singleton rather than React state, because these are read
  * and written inside the physics step and the render loop, and routing them
- * through React would re-render the scene tree at 60Hz. Same reasoning as
- * irisHandle.ts.
+ * through React would re-render the scene tree at 60Hz.
  *
- * Exactly one owner per field, which is what keeps this honest:
- *   yaw, inputYaw   written by FollowCamera
- *   hasMoveInput    written by PlayerController
+ * One owner per field:
+ *   yaw        written by FollowCamera
+ *   following  written by PlayerController
  */
 export const cameraFrame = {
-  /** Camera orbit angle, including both manual drag and auto-realignment. */
+  /** Camera orbit angle, from both manual drag and auto-realignment. */
   yaw: 0,
-  /** Orbit angle that movement input is interpreted against. */
-  inputYaw: 0,
-  /** Whether the player is currently holding a movement direction. */
-  hasMoveInput: false,
+  /**
+   * Whether the player is actively driving, by moving or by turning.
+   *
+   * The camera realigns only while this is true. Turning counts, which is what
+   * lets the camera come round behind a robot rotating on the spot; without
+   * that, tank controls leave you staring at the character's side. Standing
+   * still does not, so the view stays where it was left after a drag.
+   */
+  following: false,
 }
 
 /**
- * Reset both angles to a known value.
+ * Reset to a known angle.
  *
  * Called when a scene is entered, so the frame does not carry the previous
  * scene's orientation into the new one's opening shot.
  */
 export function resetCameraFrame(yaw = 0) {
   cameraFrame.yaw = yaw
-  cameraFrame.inputYaw = yaw
-  cameraFrame.hasMoveInput = false
+  cameraFrame.following = false
 }

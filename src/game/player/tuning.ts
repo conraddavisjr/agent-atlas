@@ -27,8 +27,19 @@ export const MOVEMENT = {
    * where players feel in control without the jump losing its commitment.
    */
   airControl: 0.35,
-  /** How fast the robot rotates to face travel direction. */
-  turnSpeed: 14,
+  /**
+   * How fast left and right rotate the robot, in radians per second.
+   *
+   * Roughly 170 degrees a second, so a full about-turn takes a little under
+   * two. This is the main dial for how the game feels to drive: lower is
+   * ponderous and hard to line a jump up with, higher starts to spin the camera
+   * fast enough to be disorienting, because the camera follows the turn.
+   *
+   * Replaced turnSpeed, which was how quickly the robot rotated to face the
+   * direction it was already travelling. Under tank controls facing is not
+   * chasing anything, it is the input.
+   */
+  turnRate: 3.0,
 } as const
 
 export const JUMP = {
@@ -167,27 +178,20 @@ export const CAMERA = {
    * corrections of ordinary walking stay imperceptible.
    *
    * This replaced a fixed radians-per-second, which could not do both. It also
-   * no longer has to be kept artificially low to tame a feedback loop, because
-   * the loop is gone: input is resolved against cameraFrame.inputYaw, which
-   * auto-realignment deliberately does not touch. See stepInputYaw.
+   * no longer has to be kept low to tame a feedback loop: under tank controls
+   * the direction of travel never consults the camera, so realigning the camera
+   * cannot change where the player is going.
    */
   realignDamping: 5.5,
 
-  /**
-   * Below this speed the camera stops chasing the heading.
-   *
-   * Facing is derived from velocity, so at a near-standstill it is mostly noise,
-   * and a camera that follows noise reads as drift.
-   */
-  realignMinSpeed: 1.2,
 
   /**
    * Angular slack, in radians, before realignment engages at all.
    *
-   * Roughly 2 degrees, down from 9. Exponential damping already tapers to
-   * nothing as it converges, so this no longer has to hide the tail of the
-   * correction. All it has to do now is stop the camera reacting to the last
-   * fraction of a degree of jitter in a velocity-derived heading.
+   * Roughly 2 degrees. Exponential damping already tapers to nothing as it
+   * converges, so this does not have to hide the tail of the correction; it
+   * only stops the camera reacting to the last fraction of a degree once the
+   * player has stopped turning.
    */
   realignDeadzone: 0.035,
 } as const

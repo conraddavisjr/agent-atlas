@@ -12,6 +12,7 @@ import {
   type WebGLProgramParametersWithUniforms,
 } from 'three'
 import { palette } from './palette'
+import { clusteredPlacements, type Exclusion } from './placement'
 import { useQuality } from './useQuality'
 
 /**
@@ -92,32 +93,6 @@ function createBladeGeometry(): BufferGeometry {
   return geometry
 }
 
-export type GrassExclusion = {
-  /** Centre on the ground plane. */
-  x: number
-  z: number
-  /** Nothing is planted within this distance of the centre. */
-  radius: number
-}
-
-/**
- * Deterministic pseudo-random.
- *
- * Placement must be identical between the visual pass and any later pass that
- * needs to agree with it, and it must not change between reloads. Math.random
- * gives a field that reshuffles every time the scene remounts, which is visible
- * as the world rearranging itself behind a portal transition.
- */
-function mulberry32(seed: number) {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-
 export function Grass({
   radius,
   exclusions = [],
@@ -126,7 +101,7 @@ export function Grass({
   /** Outer radius of the plantable area. */
   radius: number
   /** Circles to keep clear: platforms, ramps, plinths. */
-  exclusions?: GrassExclusion[]
+  exclusions?: Exclusion[]
   seed?: number
 }) {
   const quality = useQuality()
@@ -225,71 +200,62 @@ export function Grass({
   }, [])
 
   const { count, offsets, params, colors } = useMemo(() => {
-    const rand = mulberry32(seed)
-    const target = quality.grassBlades
     const plantRadius = Math.min(radius, quality.grassRadius)
 
-    const offsets = new Float32Array(target * 3)
-    const params = new Float32Array(target * 3)
-    const colors = new Float32Array(target * 3)
-
     /*
-      Blades run lighter than the ground texture they stand in, not darker.
-      Matching the ground was the first attempt and it made the field disappear
-      into it: a blade is thin, and at any distance it survives by contrasting
-      with what is behind it rather than by its own shape. Real grass helps
-      here, since a blade catches sky along its length while the soil between
-      blades does not.
+      Clumped, through the same sampler the flowers use, and that shared sampler
+      matters as much as the clumping. Three layers of ground cover scattered
+      independently would each fill the gaps the others left and average back
+      out to a uniform mat, which is the look the clumping exists to avoid.
     */
-    const base = new Color(palette.grass).lerp(new Color('#ffffff'), 0.22)
+    const placements = clusteredPlacements({
+      count: quality.grassBlades,
+      radius: plantRadius,
+      clusters: Math.max(8, Math.round(quality.grassBlades / 1400)),
+      clusterRadius: 2.2,
+      exclusions,
+      seed,
+      minScale: 0.7,
+      maxScale: 1.35,
+    })
+
+    const n = placements.length
+    const offsets = new Float32Array(n * 3)
+    const params = new Float32Array(n * 3)
+    const colors = new Float32Array(n * 3)
+
+    const base = new Color(palette.grass)
+    const tip = new Color(palette.grassTip)
     const deep = new Color(palette.grassDeep)
     const scratch = new Color()
 
-    let n = 0
-    // Bounded rather than "until we have enough", so heavy exclusion can only
-    // thin the field, never hang the load.
-    for (let attempt = 0; attempt < target * 3 && n < target; attempt++) {
-      // sqrt keeps the distribution even per unit area. Sampling the radius
-      // uniformly instead crowds everything into the middle.
-      const r = Math.sqrt(rand()) * plantRadius
-      const a = rand() * Math.PI * 2
-      const x = Math.cos(a) * r
-      const z = Math.sin(a) * r
-
-      let blocked = false
-      for (const e of exclusions) {
-        if ((x - e.x) ** 2 + (z - e.z) ** 2 < e.radius * e.radius) {
-          blocked = true
-          break
-        }
-      }
-      if (blocked) continue
-
-      // Thin toward the rim so the field fades out instead of ending on a line.
-      const edge = r / plantRadius
-      if (edge > 0.82 && rand() < (edge - 0.82) / 0.18) continue
-
-      const i3 = n * 3
-      offsets[i3] = x
+    placements.forEach((p, i) => {
+      const i3 = i * 3
+      offsets[i3] = p.x
       offsets[i3 + 1] = 0
-      offsets[i3 + 2] = z
+      offsets[i3 + 2] = p.z
 
-      // Yaw, then height and width in metres. A blade is roughly ankle high and
-      // a few centimetres across; the ratio between the two is what makes it
-      // read as grass rather than as a leaf or a shard.
-      params[i3] = rand() * Math.PI * 2
-      params[i3 + 1] = 0.3 + rand() * 0.34
-      params[i3 + 2] = 0.035 + rand() * 0.03
+      /*
+        Height and width in metres, not multipliers. Taller toward the middle of
+        a clump, which gives the field a silhouette instead of a flat top, and
+        is the same gradient the flowers use so the two agree about where a
+        patch is thickest.
+      */
+      params[i3] = p.yaw
+      params[i3 + 1] = (0.3 + p.density * 0.34) * p.scale
+      params[i3 + 2] = 0.035 + p.density * 0.028
 
-      // Colour varies per blade, and the strip is darkened toward its root
-      // through the vertex colour gradient applied below.
-      scratch.copy(base).lerp(deep, rand() * 0.45)
+      /*
+        Blades run lighter than the ground they stand in. Matching the ground
+        made the field disappear into it: a blade is thin, and at any distance
+        it survives by contrasting with what is behind it rather than by its
+        own shape.
+      */
+      scratch.copy(base).lerp(tip, p.density * 0.6).lerp(deep, (1 - p.density) * 0.35)
       colors[i3] = scratch.r
       colors[i3 + 1] = scratch.g
       colors[i3 + 2] = scratch.b
-
-      n++
-    }
+    })
 
     return { count: n, offsets, params, colors }
   }, [quality.grassBlades, quality.grassRadius, radius, exclusions, seed])

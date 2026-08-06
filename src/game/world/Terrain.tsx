@@ -1,24 +1,30 @@
+import { useMemo } from 'react'
+import { useThree } from '@react-three/fiber'
 import { RigidBody, CylinderCollider } from '@react-three/rapier'
 import { DoubleSide } from 'three'
 import { palette } from '@/art/palette'
 import { ground, mattePlastic } from '@/art/materials'
 import { usePbrTextures } from '@/art/textures'
+import { createGroundTexture, GROUND_METRES_PER_TILE } from '@/art/groundTexture'
 
 /**
  * The island's ground.
  *
- * Replaces the flat 48-segment cylinder the layout was blocked out on: the
- * plateau now carries a real PBR grass set with a dirt rim, and the grass field
- * is planted on top of it.
+ * **The walkable surface is deliberately flat, in both senses.**
  *
- * **The walkable surface is deliberately flat.**
+ * Geometrically flat, because the collider is a flat cylinder and Rapier will
+ * not follow a displaced mesh: every bump would be somewhere the robot hovers
+ * and every dip somewhere it sinks to the shins.
  *
- * Rolling ground is the obvious next thing to reach for and it is a trap here.
- * The collider is a flat cylinder, and Rapier will not follow a displaced mesh,
- * so every bump would be somewhere the robot hovers and every dip somewhere it
- * sinks to the shins. Relief on the plateau comes from the normal map instead,
- * which costs nothing and cannot disagree with physics. Same call as leaving
- * the ramp a smooth slope rather than stepping it.
+ * And flat in its shading, because that is what lets the things standing on it
+ * read. The plateau carries a generated pale surface with circuit traces worn
+ * into it and no normal map at all, so nothing on it catches a specular
+ * highlight. The grass, the flowers and the scatter supply the relief, as
+ * actual geometry.
+ *
+ * The rim below keeps its photographic material. It is a cliff face rather than
+ * a lawn, it is never walked on, and it is the one place where real rock detail
+ * is doing the right job.
  */
 
 export const PLATEAU_RADIUS = 16
@@ -27,25 +33,38 @@ export const PLATEAU_RADIUS = 16
 const RIM_SEGMENTS = 128
 
 export function Terrain() {
-  /*
-    Tiled so one repeat covers roughly two and a half metres. Ground is seen at
-    a grazing angle almost all the time, which is the condition that makes
-    tiling obvious, so the repeat is kept tight enough that no single feature of
-    the photograph is large enough to recognise twice across the island.
-  */
-  const grass = usePbrTextures('grass', [13, 13])
+  const gl = useThree((s) => s.gl)
+
+  const surface = useMemo(() => {
+    const texture = createGroundTexture()
+    const repeat = (PLATEAU_RADIUS * 2) / GROUND_METRES_PER_TILE
+    texture.repeat.set(repeat, repeat)
+    // The plateau is seen at a grazing angle almost all the time, which is
+    // exactly the condition that turns a tiled surface into aliased mush.
+    texture.anisotropy = gl.capabilities.getMaxAnisotropy()
+    texture.needsUpdate = true
+    return texture
+  }, [gl])
+
   const dirt = usePbrTextures('dirt', [10, 10])
 
   return (
     <>
-      {/*
-        Plateau. A flat disc, lit per fragment from the normal map, with the
-        collider matching it exactly.
-      */}
       <RigidBody type="fixed" colliders={false}>
         <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
           <circleGeometry args={[PLATEAU_RADIUS, RIM_SEGMENTS]} />
-          <meshPhysicalMaterial {...ground(palette.grass, grass)} />
+          {/*
+            No normal map, no clearcoat, and roughness near the top of its
+            range. Every one of those is deliberate: this surface is meant to
+            take light evenly and never produce a highlight that suggests a
+            material it is not.
+          */}
+          <meshPhysicalMaterial
+            map={surface}
+            roughness={0.95}
+            metalness={0}
+            clearcoat={0}
+          />
         </mesh>
         <CylinderCollider args={[0.5, PLATEAU_RADIUS]} position={[0, -0.5, 0]} />
       </RigidBody>

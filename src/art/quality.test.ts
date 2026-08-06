@@ -62,6 +62,8 @@ describe('tier settings', () => {
     const { low, medium, high } = QUALITY
     expect(low.grassBlades).toBeLessThan(medium.grassBlades)
     expect(medium.grassBlades).toBeLessThan(high.grassBlades)
+    expect(low.flowers).toBeLessThan(medium.flowers)
+    expect(medium.flowers).toBeLessThan(high.flowers)
     expect(low.shadowMapSize).toBeLessThan(medium.shadowMapSize)
     expect(medium.shadowMapSize).toBeLessThan(high.shadowMapSize)
     expect(low.propDensity).toBeLessThan(medium.propDensity)

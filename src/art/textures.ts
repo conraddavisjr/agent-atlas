@@ -10,7 +10,13 @@ import {
 } from 'three'
 
 /**
- * Surfacing for the world's ground materials.
+ * Surfacing for the world's rock and earth.
+ *
+ * The plateau is not here. Its surface is generated in groundTexture.ts,
+ * because a photographic grass map gives the whole island the relief of gravel
+ * and reads as wet rock the moment a highlight crosses it. Photographs earn
+ * their place on the cliff face and the stonework, which are meant to look like
+ * rock, and nowhere else.
  *
  * Each set ships three files: colour, a tangent-space normal map, and an ORM
  * pack with ambient occlusion in red and roughness in green. The pack is the
@@ -24,7 +30,7 @@ import {
  * survives from it is the levelling below, which solves a different problem.
  */
 
-export type PbrSetName = 'grass' | 'dirt' | 'stone'
+export type PbrSetName = 'dirt' | 'stone'
 
 type SetConfig = {
   /**
@@ -37,8 +43,8 @@ type SetConfig = {
    * colour it was given. Levelling turns the photograph into what it is
    * actually wanted for on a palette-driven surface, which is grain.
    *
-   * Grass and dirt are left alone. They are meant to read as themselves rather
-   * than as a tint of something else, and both are already mid-value.
+   * Dirt is left alone. The cliff face is meant to read as earth rather than as
+   * a tint of something else, and it is already mid-value.
    */
   level: number | null
   /**
@@ -52,7 +58,6 @@ type SetConfig = {
 }
 
 const SETS: Record<PbrSetName, SetConfig> = {
-  grass: { level: null, detail: 1 },
   dirt: { level: null, detail: 1 },
   stone: { level: 188, detail: 0.8 },
 }

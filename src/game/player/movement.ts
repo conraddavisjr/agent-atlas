@@ -139,10 +139,16 @@ export function wrapAngle(angle: number): number {
 export type RealignInput = {
   /** Current camera orbit angle. */
   yaw: number
-  /** The direction the character is travelling, as written by the controller. */
+  /** The direction the robot is pointing, which is now driven straight by input. */
   facing: number
-  /** Horizontal speed in metres per second. */
-  speed: number
+  /**
+   * Whether the player is actively driving, by moving or by turning.
+   *
+   * Turning counts, and that is the point. Under tank controls a rotation on
+   * the spot has no speed at all, and gating on speed the way this used to
+   * would leave the camera parked on the character's side through every turn.
+   */
+  following: boolean
   /** True on any frame the player moved the mouse or the right stick. */
   lookingManually: boolean
   dt: number
@@ -152,16 +158,14 @@ export type RealignInput = {
  * One step of the camera swinging back behind the player.
  *
  * Pure and separate from FollowCamera for the same reason the jump rules are:
- * "does dragging the mouse still win while walking" is a question with an exact
+ * "does dragging the mouse still win while turning" is a question with an exact
  * answer, and answering it by playing the game is slower and less reliable than
  * answering it in a test.
  *
- * Three conditions have to hold before the camera is allowed to move itself.
- * Manual look always wins, because a player who is actively aiming the camera is
- * making a decision the game should not overrule. Below a walking pace the
- * heading is mostly noise, since facing is derived from velocity. And inside the
- * deadzone there is nothing worth correcting, which is what stops the camera
- * wobbling behind someone walking in a straight line.
+ * Manual look always wins, because a player actively aiming the camera is
+ * making a decision the game should not overrule. Otherwise the camera follows
+ * whenever the player is driving, and holds still when they are not, so a view
+ * someone deliberately set does not creep back on its own.
  *
  * The step is exponential rather than a constant rate, which is the same
  * frame-rate independent damping the camera already uses for its position. A
@@ -172,10 +176,10 @@ export type RealignInput = {
  * both at once.
  */
 export function stepCameraYaw(input: RealignInput): number {
-  const { yaw, facing, speed, lookingManually, dt } = input
+  const { yaw, facing, following, lookingManually, dt } = input
 
   if (lookingManually) return yaw
-  if (speed < CAMERA.realignMinSpeed) return yaw
+  if (!following) return yaw
 
   /*
     The camera sits behind the player, so the target is the heading turned
@@ -191,47 +195,62 @@ export function stepCameraYaw(input: RealignInput): number {
   return yaw + error * (1 - Math.exp(-CAMERA.realignDamping * dt))
 }
 
-export type InputYawInput = {
-  /** The frame movement input is currently resolved against. */
-  inputYaw: number
-  /** Where the camera actually is. */
-  cameraYaw: number
-  /** Whether the player is holding a movement direction this step. */
-  hasMoveInput: boolean
-  /** Radians the player added to the camera by dragging, this step only. */
-  manualLookDelta: number
+export type DriveInput = {
+  /** Lateral input, -1 for left. Turns the robot and nothing else. */
+  moveX: number
+  /** Forward input, -1 for forward. Screen convention, as the input layer emits it. */
+  moveY: number
+  /** The robot's current heading. */
+  facing: number
+  dt: number
+}
+
+export type DriveResult = {
+  /** The new heading after this step's rotation. */
+  facing: number
+  /**
+   * How hard to drive along that heading, from -1 to 1.
+   *
+   * Kept separate from the heading so the caller can scale it by top speed and
+   * hand it to the same acceleration curve everything else uses. Turning does
+   * not contribute to it at all, which is the whole rule: left and right rotate
+   * and never translate.
+   */
+  throttle: number
 }
 
 /**
- * One step of the frame that movement input is resolved against.
+ * Tank controls: turn in place, drive along your own facing.
  *
- * This is the function that makes auto-alignment converge, and it is worth
- * being precise about why. Reading the movement direction off the live camera
- * means that rotating the camera rotates the input, so the correction moves its
- * own target by exactly as much as it moved itself. Holding back is then a
- * fixed point: the heading sits half a turn from the camera and stays there no
- * matter how long or how fast the camera chases it.
+ * Left and right rotate the robot and move it nowhere. Forward and back drive
+ * it along wherever it is currently pointing. Held together they produce an arc
+ * without either being a special case, which is the reason for doing it this
+ * way rather than adding a curve to camera-relative movement.
  *
- * Two rules break that:
+ * Facing is now authoritative state rather than something derived from
+ * velocity. That is the substantive change: a heading read back from velocity
+ * can only ever describe where the character has already been, so it cannot be
+ * turned on the spot, and it is noisy at low speed.
  *
- * Dragging feeds through, because a player aiming the camera is also choosing
- * which way "forward" should point.
- *
- * Auto-realignment does not, because it is not represented here at all. While a
- * direction is held the frame only moves by what the player did to it, so the
- * character travels a fixed world heading and the camera can actually arrive.
- *
- * Releasing re-syncs to wherever the camera ended up, so the next press is
- * relative to what the player is now looking at.
- *
- * Deliberately no re-sync while a direction is still held, not even once the
- * camera has caught up. Re-syncing at that moment would redefine the held key
- * to mean the opposite of what it meant when it was pressed, and the character
- * would reverse under the player's hand.
+ * It also removes the problem the previous two rounds were spent on. Direction
+ * of travel no longer consults the camera, so realigning the camera cannot
+ * change where the player is going, and the feedback loop that made
+ * auto-alignment chase its own tail has nowhere to form.
  */
-export function stepInputYaw(input: InputYawInput): number {
-  const { inputYaw, cameraYaw, hasMoveInput, manualLookDelta } = input
+export function stepDrive({ moveX, moveY, facing, dt }: DriveInput): DriveResult {
+  /*
+    Left is negative moveX and has to increase facing. Forward is
+    (sin f, 0, cos f), so its derivative with respect to f is (cos f, 0, -sin f),
+    which points to the left of forward. A rising facing therefore swings the
+    robot left.
+  */
+  const next = facing - moveX * MOVEMENT.turnRate * dt
 
-  if (!hasMoveInput) return cameraYaw
-  return inputYaw + manualLookDelta
+  // The input layer uses screen convention, where forward is negative.
+  return { facing: wrapAngle(next), throttle: -moveY }
+}
+
+/** The unit heading vector for a facing angle, on the ground plane. */
+export function headingVector(facing: number): { x: number; z: number } {
+  return { x: Math.sin(facing), z: Math.cos(facing) }
 }

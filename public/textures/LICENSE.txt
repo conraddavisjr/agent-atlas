@@ -11,8 +11,12 @@ requires no attribution. This file records provenance so the origin of each
 asset stays traceable, not because attribution is owed.
 
   stone-*   Rock030     https://ambientcg.com/view?id=Rock030
-  grass-*   Grass004    https://ambientcg.com/view?id=Grass004
   dirt-*    Ground037   https://ambientcg.com/view?id=Ground037
+
+A grass set from the same source was shipped briefly and has been removed. The
+plateau's surface is generated in src/art/groundTexture.ts instead: a
+photographic grass map gives the whole island the relief of gravel, and reads
+as wet rock the moment a highlight crosses it.
 
 Modifications from the originals
 --------------------------------

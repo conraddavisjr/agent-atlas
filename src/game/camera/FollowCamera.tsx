@@ -3,7 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { useRapier } from '@react-three/rapier'
 import { Vector3, type Group } from 'three'
 import { CAMERA } from '../player/tuning'
-import { stepCameraYaw, stepInputYaw } from '../player/movement'
+import { stepCameraYaw } from '../player/movement'
 import { cameraFrame, resetCameraFrame } from './cameraFrame'
 import type { InputIntent } from '../input/useInput'
 
@@ -86,16 +86,6 @@ export function FollowCamera({
   const smoothLook = useRef(new Vector3())
   const initialised = useRef(false)
 
-  /**
-   * The player's position last frame, for deriving speed.
-   *
-   * Measured here rather than plumbed through from the controller because the
-   * camera only needs to know whether the player is moving, not how the physics
-   * arrived at it, and a shared velocity would couple the two for no gain.
-   */
-  const lastTargetPos = useRef(new Vector3())
-  const hasLastPos = useRef(false)
-
   /** Reused collision ray. Rapier's Ray is a plain JS object, so no free is needed. */
   const rayRef = useRef<InstanceType<typeof rapier.Ray> | null>(null)
 
@@ -121,42 +111,25 @@ export function FollowCamera({
       pitch.current = Math.max(CAMERA.minPitch, Math.min(CAMERA.maxPitch, pitch.current))
     }
 
-    // ---- Realign behind the direction of travel ----------------------------
-    // Horizontal speed from the frame-to-frame delta of the follow target.
-    let speed = 0
-    if (hasLastPos.current) {
-      speed =
-        Math.hypot(
-          focus.position.x - lastTargetPos.current.x,
-          focus.position.z - lastTargetPos.current.z,
-        ) / Math.max(dt, 1e-4)
-    }
-    lastTargetPos.current.copy(focus.position)
-    hasLastPos.current = true
-
+    // ---- Realign behind the direction the robot is pointing ----------------
+    /*
+      Whether the player is driving comes from the controller rather than from
+      measuring how fast the follow target is moving. Under tank controls those
+      are different questions: rotating on the spot has no speed at all, and it
+      is precisely when the camera most needs to come round.
+    */
     if (!inputLocked.current) {
       // Heading is published onto the follow target by PlayerController.
       yaw.current = stepCameraYaw({
         yaw: yaw.current,
         facing: focus.rotation.y,
-        speed,
+        following: cameraFrame.following,
         lookingManually,
         dt,
       })
     }
 
-    /*
-      Publish both angles. Order matters: inputYaw is stepped from the drag
-      alone, so it must be computed from the manual delta rather than from the
-      new yaw, which already has the realignment folded into it.
-    */
     cameraFrame.yaw = yaw.current
-    cameraFrame.inputYaw = stepInputYaw({
-      inputYaw: cameraFrame.inputYaw,
-      cameraYaw: yaw.current,
-      hasMoveInput: cameraFrame.hasMoveInput,
-      manualLookDelta,
-    })
 
     scratch.lookAt.copy(focus.position)
     scratch.lookAt.y += CAMERA.lookHeight

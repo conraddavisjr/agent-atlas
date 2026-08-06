@@ -20,16 +20,42 @@ export const palette = {
   visor: '#4de2ff',
   visorDim: '#1b7f96',
 
-  /** Hub island. Plastic grass, never photoreal green. */
-  grass: '#5fd68a',
-  grassDeep: '#2f9c5e',
-  soil: '#c98a56',
-  soilDeep: '#8f5a34',
-  rock: '#b8c2cc',
+  /**
+   * Hub island. Bright yellow-green rather than the previous blue-leaning
+   * green, which is most of what separates a lawn from a field.
+   */
+  grass: '#8fd94a',
+  grassDeep: '#4f9b2e',
+  /** Blade tips, lighter again, so a dense field has depth rather than a flat top. */
+  grassTip: '#c2ea6e',
+  soil: '#b98a5e',
+  soilDeep: '#7d5738',
 
-  /** Sky gradient, top to horizon. Soft and warm, the diorama sits inside it. */
-  skyTop: '#7fd4f5',
-  skyHorizon: '#ffe6c4',
+  /**
+   * Stonework. A cool light grey with lilac and gold, which is the chip-block
+   * scheme: grey substrate, coloured components, gold contacts.
+   */
+  rock: '#d5d9e0',
+  rockDeep: '#a7aebb',
+  rockAccent: '#c3a8dd',
+  gold: '#e8b84b',
+
+  /** Ground cover. Cornflower petals with a warm centre. */
+  flower: '#5aa9f5',
+  flowerPale: '#b9dcff',
+  flowerCentre: '#ffd24a',
+
+  /**
+   * Sky gradient, top to horizon, and the cloud sea the island floats above.
+   *
+   * Cool the whole way through now. The warm cream horizon it replaced made the
+   * island read as sitting in haze rather than in air, and it fought every
+   * green in the world.
+   */
+  skyTop: '#5aa8e8',
+  skyHorizon: '#d6ecfb',
+  cloud: '#ffffff',
+  cloudShadow: '#c2d8ea',
 
   /** AI motif props. These stand in for the concepts each lesson will teach. */
   node: '#7c6bff',

@@ -10,7 +10,7 @@ import {
 } from '@react-three/rapier'
 import { Vector3, type Group } from 'three'
 import { BODY, JUMP, MOVEMENT, REVIVAL, SQUASH } from './tuning'
-import { approachAngle, stepHorizontal, stepVertical } from './movement'
+import { headingVector, stepDrive, stepHorizontal, stepVertical } from './movement'
 import { RobotModel } from './RobotModel'
 import { createRobotAnimState } from './robotAnim'
 import { cameraFrame } from '../camera/cameraFrame'
@@ -94,15 +94,11 @@ export function PlayerController({
    */
   const scratchRef = useRef<{
     desired: Vector3
-    camForward: Vector3
-    camRight: Vector3
     move: Vector3
   } | null>(null)
   if (scratchRef.current === null) {
     scratchRef.current = {
       desired: new Vector3(),
-      camForward: new Vector3(),
-      camRight: new Vector3(),
       move: new Vector3(),
     }
   }
@@ -202,41 +198,33 @@ export function PlayerController({
 
     const grounded = controller.computedGrounded()
 
-    // ---- Horizontal movement, camera relative ------------------------------
+    // ---- Turning and driving -----------------------------------------------
     /*
-      Forward means away from the camera, which is the only scheme that stays
-      intuitive while the camera is orbiting.
+      Tank controls. Left and right rotate the robot where it stands; forward
+      and back drive it along whatever direction it is now pointing. Held
+      together they arc, without either being a special case.
 
-      Built from cameraFrame.inputYaw rather than from the camera's own world
-      direction. Those are the same angle right up until the camera starts
-      moving itself, and reading the live camera there is what used to stop
-      auto-alignment ever converging: the correction turned the input by exactly
-      as much as it turned the camera. See cameraFrame.ts.
+      Facing is state here, not a reading taken from velocity. That is what
+      makes turning on the spot possible at all: a heading recovered from
+      velocity can only ever report where the character has already been.
     */
-    const basis = cameraFrame.inputYaw
-    const sinB = Math.sin(basis)
-    const cosB = Math.cos(basis)
-    // The camera sits at player + (sin, cos) * distance and looks back at it,
-    // so its forward on the ground plane is the negation of that offset.
-    scratch.camForward.set(-sinB, 0, -cosB)
-    scratch.camRight.set(cosB, 0, -sinB)
+    const drive = stepDrive({ moveX, moveY, facing: facing.current, dt })
+    facing.current = drive.facing
 
-    scratch.desired
-      .set(0, 0, 0)
-      .addScaledVector(scratch.camRight, moveX)
-      .addScaledVector(scratch.camForward, -moveY)
+    const heading = headingVector(facing.current)
+    scratch.desired.set(heading.x * drive.throttle, 0, heading.z * drive.throttle)
 
-    const hasInput = scratch.desired.lengthSq() > 0.0001
-    if (hasInput) scratch.desired.normalize()
+    const hasInput = Math.abs(drive.throttle) > 0.0001
+    // Already a unit heading scaled by throttle, so normalising would throw the
+    // throttle away and make a nudge accelerate as hard as a full press.
+    if (hasInput) scratch.desired.normalize().multiplyScalar(Math.abs(drive.throttle))
 
     /*
-      Published for the camera, which owns inputYaw but cannot know whether a
-      direction is being held. Uses the raw input rather than `hasInput` so that
-      a locked frame during a transition reads as "not steering" and lets the
-      frame re-sync, rather than freezing it at whatever was held when the iris
-      closed.
+      Published for the camera, which realigns only while the player is driving.
+      Turning counts even at a standstill, because a rotation on the spot is
+      exactly when the camera most needs to come round.
     */
-    cameraFrame.hasMoveInput = hasInput
+    cameraFrame.following = hasInput || moveX !== 0
 
     const targetX = scratch.desired.x * MOVEMENT.maxSpeed
     const targetZ = scratch.desired.z * MOVEMENT.maxSpeed
@@ -330,12 +318,11 @@ export function PlayerController({
     anim.current.grounded = grounded
     anim.current.verticalVelocity = velocity.current.y
 
-    // Face the direction of travel. Rotating toward movement rather than toward
-    // the camera means the robot never moonwalks when strafing.
-    if (horizontalSpeed > 0.4) {
-      const targetFacing = Math.atan2(velocity.current.x, velocity.current.z)
-      facing.current = approachAngle(facing.current, targetFacing, MOVEMENT.turnSpeed * dt)
-    }
+    /*
+      Facing is not recomputed here any more. It was previously read back from
+      velocity, which is what made it lag the input and made turning on the spot
+      impossible; it is now set directly by stepDrive at the top of this step.
+    */
 
     endInputFrame()
   })
@@ -391,13 +378,12 @@ export function PlayerController({
         reviving: reviving.current,
         dead: dead.current,
         /*
-          Both camera angles, because the interesting question about them is
-          whether they have diverged and by how much. Auto-realignment moves
-          only `camYaw`, so `camYaw - inputYaw` is exactly how far round the
-          camera has swung on its own since the player last let go.
+          The camera's angle and whether it is currently chasing. `camYaw`
+          against `facing` is the question worth asking now: half a turn apart
+          means the camera has caught up.
         */
         camYaw: cameraFrame.yaw,
-        inputYaw: cameraFrame.inputYaw,
+        following: cameraFrame.following,
         peakY: debug.current.peakY,
         jumps: debug.current.jumps,
         resetPeak: () => {

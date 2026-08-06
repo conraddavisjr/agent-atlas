@@ -3,7 +3,9 @@ import { RoundedBox } from '@react-three/drei'
 import { palette } from '@/art/palette'
 import { emissive, mattePlastic, plastic, stone } from '@/art/materials'
 import { usePbrTextures } from '@/art/textures'
-import { Grass, type GrassExclusion } from '@/art/Grass'
+import { Grass } from '@/art/Grass'
+import { Flowers } from '@/art/Flowers'
+import type { Exclusion } from '@/art/placement'
 import { Scatter } from '@/art/Scatter'
 import { useGame } from '../GameContext'
 import { useGameStore, useProgress } from '@/state/gameStore'
@@ -25,7 +27,7 @@ import { Terrain, PLATEAU_RADIUS } from './Terrain'
  * are authored positions and a mismatch should be a visible bug in review
  * rather than something that silently drifts.
  */
-const GRASS_EXCLUSIONS: GrassExclusion[] = [
+const GRASS_EXCLUSIONS: Exclusion[] = [
   // Portal platform, 7 x 5 centred at (9, -5), plus its ramp running to x=2.
   { x: 9, z: -5, radius: 4.6 },
   { x: 4, z: -5, radius: 2.6 },
@@ -102,6 +104,7 @@ export function HubIsland() {
       {/* Ground, and the field growing on it. */}
       <Terrain />
       <Grass radius={PLATEAU_RADIUS} exclusions={GRASS_EXCLUSIONS} />
+      <Flowers radius={PLATEAU_RADIUS} exclusions={GRASS_EXCLUSIONS} />
       <Scatter radius={PLATEAU_RADIUS} exclusions={GRASS_EXCLUSIONS} />
 
       {/* Raised platform toward the cave, so the portal reads as a destination

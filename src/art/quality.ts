@@ -13,8 +13,16 @@
 export type QualityTier = 'low' | 'medium' | 'high'
 
 export type QualitySettings = {
-  /** Blades in the instanced grass field. The single most expensive number here. */
+  /** Blades in the instanced grass field. */
   grassBlades: number
+  /**
+   * Daisies in the flower field.
+   *
+   * Each one is far more geometry than a blade of grass and each one casts a
+   * shadow, so this is the most expensive number in the file despite being the
+   * smaller of the two counts.
+   */
+  flowers: number
   /**
    * Whether grass is drawn a second time into the shadow map.
    *
@@ -43,6 +51,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     // island. Paired with the smaller radius, this is a ring around the robot
     // rather than a field.
     grassBlades: 15_000,
+    flowers: 900,
     grassCastShadow: false,
     grassRadius: 9,
     shadowMapSize: 1024,
@@ -55,6 +64,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
   },
   medium: {
     grassBlades: 70_000,
+    flowers: 4_500,
     grassCastShadow: false,
     grassRadius: 16,
     shadowMapSize: 2048,
@@ -66,7 +76,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     maxDpr: 1.5,
   },
   high: {
-    grassBlades: 180_000,
+    grassBlades: 220_000,
+    flowers: 14_000,
     grassCastShadow: true,
     grassRadius: 16,
     shadowMapSize: 4096,
