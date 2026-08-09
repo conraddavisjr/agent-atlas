@@ -54,7 +54,17 @@ import { useQuality } from './useQuality'
  */
 const DAISY = {
   petals: 9,
-  stemHeight: 0.22,
+  /*
+    Measured against the field rather than derived. The spec's target is that
+    the tallest flower tops out just under the tallest grass, and 0.22 met that
+    on paper - 0.32 against 0.45 - while failing it in the frame, because the
+    grass only reaches 0.45 at the heart of a clump and a drift of daisies sits
+    across clump edges where the blades are half that. The heads stood clear of
+    the field on bare stems and the lawn read as a daisy meadow with grass in
+    it. At 0.17 the tallest flower is 0.25 and the heads sit down among the
+    blades, which is where they belong.
+  */
+  stemHeight: 0.17,
   petalLength: 0.045,
   petalWidth: 0.018,
   centreRadius: 0.016,
@@ -502,7 +512,10 @@ export function Flowers({
         exclusions,
         seed: 41,
         minScale: 0.8,
-        maxScale: 1.4,
+        // Capped below the daisies' effective maximum, so the largest dome head
+        // stays under the largest daisy head. A pink dome that outgrows the
+        // flower it is accenting stops being an accent.
+        maxScale: 1.2,
       }),
     [quality.propDensity, plantRadius, centres, exclusions],
   )

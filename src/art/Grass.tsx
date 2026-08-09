@@ -49,10 +49,10 @@ import { useQuality } from './useQuality'
  * It stays on MeshStandardMaterial, and that is a decision rather than an
  * omission. `MeshPhysicalMaterial` would give the blades the clearcoat that
  * makes everything else in this world read as moulded, and at the high tier
- * this field is 220,000 instances of a sixteen-triangle blade: putting a
- * clearcoat GGX evaluation behind three and a half million triangles to add a
- * highlight to a three centimetre strip is the worst cost-to-benefit trade
- * available in the project. The compensations are roughness and
+ * this field is 204,408 instances of an eight-triangle blade, which measures as
+ * 4.9M triangles a frame across the colour, shadow and ambient-occlusion depth
+ * passes: putting a clearcoat GGX evaluation behind that to add a highlight to
+ * a three centimetre strip is the worst cost-to-benefit trade in the project. The compensations are roughness and
  * `envMapIntensity`, and they cost nothing.
  */
 
