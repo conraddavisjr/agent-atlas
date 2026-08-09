@@ -1,11 +1,20 @@
 import { useRef, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { RoundedBox } from '@react-three/drei'
-import type { Group } from 'three'
 import { palette } from '@/art/palette'
 import { GLOW, emissive, mattePlastic, metal, plastic, rubber } from '@/art/materials'
-import { WADDLE } from './tuning'
-import { TURN_ANIM } from './animTuning'
+import {
+  createAnimRuntime,
+  createGroundSample,
+  createPose,
+  REST,
+  stepAnim,
+  type AnimRuntime,
+  type GroundSample,
+  type Pose,
+  type Vec3,
+} from './robotPose'
+import { applyPose, createRigRefs, type RigRefs } from './rig'
 import type { RobotAnimState } from './robotAnim'
 import type { SocketName } from '@/state/types'
 
@@ -21,6 +30,12 @@ import type { SocketName } from '@/state/types'
  * What we do borrow is the principle rather than the design: a compact frame with
  * a low centre of gravity, and locomotion that reads as a toddler's waddle. With
  * no skeleton, that charm has to come from whole-body motion.
+ *
+ * This component is deliberately JSX, refs, and a `useFrame` of two calls. Every
+ * piece of arithmetic that used to live here is now in `robotPose.ts`, where it
+ * is a pure function of state and time and is unit tested, and `rig.ts` writes
+ * the result onto these nodes. See the header of `robotPose.ts` for why that
+ * split is worth two extra files.
  */
 export function RobotModel({
   anim,
@@ -29,199 +44,181 @@ export function RobotModel({
   anim: RefObject<RobotAnimState>
   cosmetics: Partial<Record<SocketName, string>>
 }) {
-  const root = useRef<Group>(null)
-  const body = useRef<Group>(null)
-  const head = useRef<Group>(null)
-  const legL = useRef<Group>(null)
-  const legR = useRef<Group>(null)
-  const armL = useRef<Group>(null)
-  const armR = useRef<Group>(null)
-  const phase = useRef(0)
-  const turn = useRef(0)
+  /*
+    One struct of node refs rather than a `useRef` each.
+
+    `applyPose` iterates the pose's own joint list, so a node added to the pose
+    and forgotten here is a null that it skips, rather than a silent write into
+    whichever joint happened to be next.
+  */
+  const rigRef = useRef<RigRefs | null>(null)
+  if (rigRef.current === null) rigRef.current = createRigRefs()
+
+  /*
+    The runtime, the pose buffer and the ground sample, created once and mutated
+    forever after.
+
+    Refs rather than `useMemo` for the reason `PlayerController` gives for its
+    scratch vectors: these are explicitly mutable per-frame buffers, and a
+    `useMemo` value may not be mutated after render.
+  */
+  const rtRef = useRef<AnimRuntime | null>(null)
+  if (rtRef.current === null) rtRef.current = createAnimRuntime(0xa71a5)
+  const poseRef = useRef<Pose | null>(null)
+  if (poseRef.current === null) poseRef.current = createPose()
+  const groundRef = useRef<GroundSample | null>(null)
+  if (groundRef.current === null) groundRef.current = createGroundSample()
 
   useFrame((_, delta) => {
-    const a = anim.current
-    if (!root.current || !body.current) return
-
     // Clamp delta so a background tab that resumes after a long pause does not
-    // advance the walk cycle by a huge step and snap the limbs.
+    // advance the walk cycle by a huge step and snap the limbs. Clamped here
+    // rather than inside the solver, so a test can still hand the solver a ten
+    // second step and prove it survives one.
     const dt = Math.min(delta, 0.05)
-
-    /*
-      Turn input, eased rather than read raw.
-
-      Exponential damping, so it behaves the same at any refresh rate, matching
-      the convention the camera uses. Without the ease, tapping a turn key snaps
-      the whole upper body a tenth of a radian in one frame and reads as a
-      glitch rather than as a lean.
-    */
-    turn.current += (a.turnNorm - turn.current) * (1 - Math.exp(-TURN_ANIM.damping * dt))
-    const t = turn.current
-
-    /*
-      The step cycle runs on whichever is doing more work, travel or rotation.
-
-      A pivot on the spot moves no distance but the feet still cover ground, so
-      it has to step. Taking the max rather than the sum means walking and
-      turning at once does not double the cadence.
-    */
-    const stride = Math.max(a.speedNorm, Math.abs(t) * TURN_ANIM.stepScale)
-
-    // The walk cycle advances with actual speed, so the waddle stays in step with
-    // movement instead of drifting out of sync at different speeds.
-    phase.current += dt * WADDLE.bobFrequency * stride
-
-    const walking = a.grounded ? stride : 0
-    const p = phase.current
-
-    // Squash and stretch is applied at the root so the whole robot deforms as one
-    // object. Volume is roughly preserved by widening as it flattens, which is
-    // what stops it reading as a scaling bug.
-    const s = a.squash
-    const widen = 1 + (1 - s) * 0.6
-    root.current.scale.set(widen, s, widen)
-
-    // Vertical bob, at double the step frequency because both feet contribute.
-    const bob = Math.sin(p * 2) * WADDLE.bobAmplitude * walking
-    body.current.position.y = bob
-
-    /*
-      Side-to-side roll is the actual waddle, plus a bank into the turn.
-
-      Local +X is the robot's left, so a positive rotation about Z tips the top
-      toward its right, which is the way you want it falling in a right-hand
-      turn. Kept small: the low centre of gravity is a deliberate part of the
-      design and a deep lean fights it.
-    */
-    body.current.rotation.z = Math.sin(p) * WADDLE.rollAmplitude * walking + t * TURN_ANIM.bankAmount
-
-    /*
-      Lean into travel, which sells momentum and weight, and signed by throttle
-      so reversing leans back. It used to lean forward in both directions, which
-      read as the robot being dragged backwards against its will.
-    */
-    body.current.rotation.x = WADDLE.leanAmount * walking * Math.sign(a.throttle)
-
-    /*
-      Hips lead the turn and the torso lags behind it, with the head leading
-      further still, looking where it is about to go.
-
-      This is the part that stops a rotation reading as a turntable. The parent
-      group already carries the true facing, so these are offsets against it:
-      positive is behind the turn, because facing decreases as the robot turns
-      right.
-    */
-    body.current.rotation.y = t * TURN_ANIM.torsoLag
-    if (head.current) head.current.rotation.y = -t * (TURN_ANIM.torsoLag + TURN_ANIM.headLead)
-
-    // Limbs counter-swing. In the air they tuck instead, so a jump does not look
-    // like a mid-stride freeze.
-    const swing = Math.sin(p) * WADDLE.limbSwing * walking
-    const airborne = a.grounded ? 0 : 1
-    const tuck = airborne * 0.5
-
-    if (legL.current) legL.current.rotation.x = swing - tuck
-    if (legR.current) legR.current.rotation.x = -swing - tuck
-    if (armL.current) armL.current.rotation.x = -swing * 0.7 - tuck * 1.4
-    if (armR.current) armR.current.rotation.x = swing * 0.7 - tuck * 1.4
-
-    // Feet splay through a pivot so the stance opens into the turn rather than
-    // the legs scissoring straight through each other.
-    const splay = t * TURN_ANIM.footPivot * (a.grounded ? 1 : 0)
-    if (legL.current) legL.current.rotation.y = splay
-    if (legR.current) legR.current.rotation.y = -splay
+    stepAnim(rtRef.current!, anim.current, groundRef.current!, dt, poseRef.current!)
+    applyPose(poseRef.current!, rigRef.current!)
   })
 
   return (
-    <group ref={root}>
-      <group ref={body}>
-        {/* Torso. Rounded box rather than a capsule so the silhouette reads as a
-            manufactured object rather than a blob. */}
-        <RoundedBox args={[0.62, 0.6, 0.44]} radius={0.16} smoothness={4} position={[0, 0.62, 0]} castShadow>
-          <meshPhysicalMaterial {...plastic(palette.shell)} />
-        </RoundedBox>
-
-        {/* Amber chest panel. The single accent, kept to one place so it stays a
-            focal point instead of decoration. */}
-        <RoundedBox args={[0.3, 0.22, 0.06]} radius={0.05} smoothness={3} position={[0, 0.66, 0.22]} castShadow>
-          <meshPhysicalMaterial {...plastic(palette.accent)} />
-        </RoundedBox>
-
-        {/* Head */}
-        <group ref={head} position={[0, 1.12, 0]}>
-          <RoundedBox args={[0.56, 0.44, 0.46]} radius={0.14} smoothness={4} castShadow>
+    <group ref={(o) => void (rigRef.current!.root = o)}>
+      <group ref={(o) => void (rigRef.current!.hips = o)}>
+        <group ref={(o) => void (rigRef.current!.chest = o)}>
+          {/* Torso. Rounded box rather than a capsule so the silhouette reads as a
+              manufactured object rather than a blob. */}
+          <RoundedBox args={[0.62, 0.6, 0.44]} radius={0.16} smoothness={4} position={[0, 0.62, 0]} castShadow>
             <meshPhysicalMaterial {...plastic(palette.shell)} />
           </RoundedBox>
 
-          {/* The visor bar, and the one thing on the character that glows.
-              GLOW.bloom is 1.25 times the bloom threshold, which for cyan is an
-              emissiveIntensity of 3.46. The 2.4 this replaces reached 1.517
-              against a threshold of 1.75, so the comment claiming it pushed past
-              the threshold had never been true. */}
-          <RoundedBox args={[0.42, 0.1, 0.04]} radius={0.03} smoothness={3} position={[0, 0.02, 0.235]}>
-            <meshPhysicalMaterial {...emissive(palette.visor, GLOW.bloom)} />
+          {/* Amber chest panel. The single accent, kept to one place so it stays a
+              focal point instead of decoration. */}
+          <RoundedBox args={[0.3, 0.22, 0.06]} radius={0.05} smoothness={3} position={[0, 0.66, 0.22]} castShadow>
+            <meshPhysicalMaterial {...plastic(palette.accent)} />
           </RoundedBox>
 
-          {/* Antenna */}
-          <mesh position={[0.16, 0.28, 0]} castShadow>
-            <cylinderGeometry args={[0.018, 0.018, 0.2, 8]} />
-            <meshPhysicalMaterial {...metal(palette.rock)} />
-          </mesh>
-          <mesh position={[0.16, 0.4, 0]}>
-            <sphereGeometry args={[0.045, 12, 12]} />
-            <meshPhysicalMaterial {...emissive(palette.accent, GLOW.bloom)} />
-          </mesh>
+          {/* A zero-length pivot between chest and head, so the head can spring
+              against the torso without inheriting the torso's own lag twice. */}
+          <group ref={(o) => void (rigRef.current!.neck = o)} position={at(REST.neck)}>
+            <group ref={(o) => void (rigRef.current!.head = o)} position={at(REST.head)}>
+              <RoundedBox args={[0.56, 0.44, 0.46]} radius={0.14} smoothness={4} castShadow>
+                <meshPhysicalMaterial {...plastic(palette.shell)} />
+              </RoundedBox>
 
-          {/* Ear pods, which break up the boxy head silhouette. */}
-          {[-1, 1].map((side) => (
-            <mesh key={side} position={[side * 0.3, 0, 0]} rotation={[0, 0, Math.PI / 2]} castShadow>
-              <cylinderGeometry args={[0.08, 0.08, 0.06, 12]} />
-              <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
-            </mesh>
-          ))}
+              {/* The visor bar, and the one thing on the character that glows.
+                  GLOW.bloom is 1.25 times the bloom threshold, which for cyan is an
+                  emissiveIntensity of 3.46. The 2.4 this replaces reached 1.517
+                  against a threshold of 1.75, so the comment claiming it pushed past
+                  the threshold had never been true. */}
+              <RoundedBox args={[0.42, 0.1, 0.04]} radius={0.03} smoothness={3} position={[0, 0.02, 0.235]}>
+                <meshPhysicalMaterial {...emissive(palette.visor, GLOW.bloom)} />
+              </RoundedBox>
 
-          {/* Head socket, for the helmet earned after the first zone. */}
-          <group position={[0, 0.24, 0]}>{cosmetics.head === 'helmet' && <Helmet />}</group>
-        </group>
+              {/* Antenna, split into two nodes so the chain can whip on impact. */}
+              <group ref={(o) => void (rigRef.current!.antennaBase = o)} position={at(REST.antennaBase)}>
+                <mesh castShadow>
+                  <cylinderGeometry args={[0.018, 0.018, 0.2, 8]} />
+                  <meshPhysicalMaterial {...metal(palette.rock)} />
+                </mesh>
+                <group ref={(o) => void (rigRef.current!.antennaMid = o)} position={at(REST.antennaMid)}>
+                  <mesh>
+                    <sphereGeometry args={[0.045, 12, 12]} />
+                    <meshPhysicalMaterial {...emissive(palette.accent, GLOW.bloom)} />
+                  </mesh>
+                </group>
+              </group>
 
-        {/* Back socket, for the cape. */}
-        <group position={[0, 0.78, -0.22]}>{cosmetics.back === 'cape' && <Cape />}</group>
+              {/* Ear pods, which break up the boxy head silhouette. */}
+              <EarPod side="L" rigRef={rigRef} />
+              <EarPod side="R" rigRef={rigRef} />
 
-        {/* Arms */}
-        <group ref={armL} position={[-0.36, 0.78, 0]}>
-          <mesh position={[0, -0.16, 0]} castShadow>
-            <capsuleGeometry args={[0.09, 0.18, 4, 12]} />
-            <meshPhysicalMaterial {...plastic(palette.accent)} />
-          </mesh>
-          <group position={[0, -0.36, 0]}>{cosmetics.hand_l && <HandProp />}</group>
-        </group>
+              {/* Head socket, for the helmet earned after the first zone.
 
-        <group ref={armR} position={[0.36, 0.78, 0]}>
-          <mesh position={[0, -0.16, 0]} castShadow>
-            <capsuleGeometry args={[0.09, 0.18, 4, 12]} />
-            <meshPhysicalMaterial {...plastic(palette.accent)} />
-          </mesh>
-          <group position={[0, -0.36, 0]}>{cosmetics.hand_r && <HandProp />}</group>
+                  Created unconditionally, and that is load-bearing: a socket group
+                  that only exists once its cosmetic is earned changes the child
+                  order of everything below it, so the pose would start landing in
+                  the wrong nodes at the exact moment a player unlocked something. */}
+              <group position={[0, 0.24, 0]}>{cosmetics.head === 'helmet' && <Helmet />}</group>
+            </group>
+          </group>
+
+          {/* Back socket, for the cape. */}
+          <group position={at(REST.capeRoot)}>{cosmetics.back === 'cape' && <Cape />}</group>
+
+          <Arm side="L" rigRef={rigRef}>{cosmetics.hand_l && <HandProp />}</Arm>
+          <Arm side="R" rigRef={rigRef}>{cosmetics.hand_r && <HandProp />}</Arm>
         </group>
 
         {/* Legs. Short and wide-set, which is what gives the low centre of gravity
             that makes a platformer character read as stable and controllable. */}
-        <group ref={legL} position={[-0.17, 0.32, 0]}>
-          <mesh position={[0, -0.1, 0]} castShadow>
-            <capsuleGeometry args={[0.095, 0.1, 4, 12]} />
-            <meshPhysicalMaterial {...mattePlastic(palette.shellShadow)} />
-          </mesh>
-          <RoundedBox args={[0.22, 0.1, 0.3]} radius={0.04} smoothness={3} position={[0, -0.22, 0.04]} castShadow>
-            <meshPhysicalMaterial {...rubber(palette.lockedDeep)} />
-          </RoundedBox>
-        </group>
+        <Leg side="L" rigRef={rigRef} />
+        <Leg side="R" rigRef={rigRef} />
+      </group>
+    </group>
+  )
+}
 
-        <group ref={legR} position={[0.17, 0.32, 0]}>
-          <mesh position={[0, -0.1, 0]} castShadow>
-            <capsuleGeometry args={[0.095, 0.1, 4, 12]} />
-            <meshPhysicalMaterial {...mattePlastic(palette.shellShadow)} />
-          </mesh>
-          <RoundedBox args={[0.22, 0.1, 0.3]} radius={0.04} smoothness={3} position={[0, -0.22, 0.04]} castShadow>
+/** Spreads a rest offset into the tuple form JSX wants. */
+function at(v: Vec3): [number, number, number] {
+  return [v.x, v.y, v.z]
+}
+
+function EarPod({ side, rigRef }: { side: 'L' | 'R'; rigRef: RefObject<RigRefs | null> }) {
+  return (
+    <group
+      ref={(o) => void (side === 'L' ? (rigRef.current!.earPodL = o) : (rigRef.current!.earPodR = o))}
+      position={at(side === 'L' ? REST.earPodL : REST.earPodR)}
+    >
+      <mesh rotation={[0, 0, Math.PI / 2]} castShadow>
+        <cylinderGeometry args={[0.08, 0.08, 0.06, 12]} />
+        <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+      </mesh>
+    </group>
+  )
+}
+
+function Arm({ side, rigRef, children }: { side: 'L' | 'R'; rigRef: RefObject<RigRefs | null>; children?: React.ReactNode }) {
+  return (
+    <group
+      ref={(o) => void (side === 'L' ? (rigRef.current!.shoulderL = o) : (rigRef.current!.shoulderR = o))}
+      position={at(side === 'L' ? REST.shoulderL : REST.shoulderR)}
+    >
+      <mesh position={[0, -0.16, 0]} castShadow>
+        <capsuleGeometry args={[0.09, 0.18, 4, 12]} />
+        <meshPhysicalMaterial {...plastic(palette.accent)} />
+      </mesh>
+      <group
+        ref={(o) => void (side === 'L' ? (rigRef.current!.handSocketL = o) : (rigRef.current!.handSocketR = o))}
+        position={at(side === 'L' ? REST.handSocketL : REST.handSocketR)}
+      >
+        {children}
+      </group>
+    </group>
+  )
+}
+
+/**
+ * One leg, as leg -> knee -> foot.
+ *
+ * Three nodes rather than one even though nothing bends the knee yet, because
+ * foot IK needs a joint between the hip and the sole to absorb a height
+ * difference, and adding it later would mean re-deriving the swing offsets
+ * against a different parent.
+ */
+function Leg({ side, rigRef }: { side: 'L' | 'R'; rigRef: RefObject<RigRefs | null> }) {
+  return (
+    <group
+      ref={(o) => void (side === 'L' ? (rigRef.current!.legL = o) : (rigRef.current!.legR = o))}
+      position={at(side === 'L' ? REST.legL : REST.legR)}
+    >
+      <group ref={(o) => void (side === 'L' ? (rigRef.current!.kneeL = o) : (rigRef.current!.kneeR = o))}>
+        <mesh position={[0, -0.1, 0]} castShadow>
+          <capsuleGeometry args={[0.095, 0.1, 4, 12]} />
+          <meshPhysicalMaterial {...mattePlastic(palette.shellShadow)} />
+        </mesh>
+        <group
+          ref={(o) => void (side === 'L' ? (rigRef.current!.footL = o) : (rigRef.current!.footR = o))}
+          position={at(side === 'L' ? REST.footL : REST.footR)}
+        >
+          <RoundedBox args={[0.22, 0.1, 0.3]} radius={0.04} smoothness={3} castShadow>
             <meshPhysicalMaterial {...rubber(palette.lockedDeep)} />
           </RoundedBox>
         </group>
