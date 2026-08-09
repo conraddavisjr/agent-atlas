@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useStore, useThree } from '@react-three/fiber'
-import { Vector3, type PerspectiveCamera } from 'three'
+import { Box3, Vector3, type PerspectiveCamera } from 'three'
 import { cameraFrame } from '@/game/camera/cameraFrame'
 import { devBridge } from './devBridge'
 import { VANTAGES, type Vantage } from './vantages'
@@ -572,6 +572,70 @@ export function DevHooks() {
       }
     }
 
+    /**
+     * Where the character actually lands in the frame.
+     *
+     * `vantages.ts` opens by saying that a vantage which drifts off its subject
+     * is worse than no vantage at all, because it still produces a screenshot
+     * and the screenshot still looks like evidence. This is the check that makes
+     * that statement enforceable instead of aspirational.
+     *
+     * It caught the case it was written for immediately: `hub-character`, whose
+     * job is to judge proportions, the visor and the contact shadow, was framing
+     * the character from behind with the head cropped off the top of the frame.
+     * The vantage had not moved - the character had, when it was re-proportioned
+     * to 2.52 head-heights partway through the art pass, and nothing anywhere
+     * re-checked the shots that exist to look at it.
+     *
+     * `heightFraction` is what the shot is really about: below about 0.2 the
+     * character is an incidental detail, above about 0.9 it is cropped or about
+     * to be.
+     */
+    const framing = () => {
+      const target = devBridge.playerObject
+      if (!target) return null
+
+      const box = new Box3().setFromObject(target)
+      if (box.isEmpty()) return null
+
+      camera.updateMatrixWorld()
+      camera.updateProjectionMatrix()
+
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      let behind = false
+      const corner = new Vector3()
+
+      for (let i = 0; i < 8; i++) {
+        corner.set(
+          i & 1 ? box.max.x : box.min.x,
+          i & 2 ? box.max.y : box.min.y,
+          i & 4 ? box.max.z : box.min.z,
+        )
+        corner.applyMatrix4(camera.matrixWorldInverse)
+        if (corner.z > 0) behind = true
+        corner.applyMatrix4(camera.projectionMatrix)
+        minX = Math.min(minX, corner.x)
+        maxX = Math.max(maxX, corner.x)
+        minY = Math.min(minY, corner.y)
+        maxY = Math.max(maxY, corner.y)
+      }
+
+      const round = (n: number) => +n.toFixed(3)
+      return {
+        /** Fraction of frame height the character spans, 1.0 being edge to edge. */
+        heightFraction: round((maxY - minY) / 2),
+        /** Screen-space centre in NDC, so 0,0 is the middle of the frame. */
+        centre: [round((minX + maxX) / 2), round((minY + maxY) / 2)],
+        /** True when any part of the character is outside the frame. */
+        clipped: behind || minX < -1 || maxX > 1 || minY < -1 || maxY > 1,
+        /** Metres, so a re-proportioning that invalidates a vantage is visible. */
+        worldHeight: round(box.max.y - box.min.y),
+      }
+    }
+
     const hud = (visible: boolean) => {
       document.querySelectorAll<HTMLElement>('[data-hud]').forEach((el) => {
         el.style.visibility = visible ? '' : 'hidden'
@@ -591,6 +655,7 @@ export function DevHooks() {
       fps,
       settled,
       frameStats,
+      framing,
       /**
        * Where the camera actually ended up, as opposed to where a vantage asked
        * it to go. The two are not the same question, and only one of them can

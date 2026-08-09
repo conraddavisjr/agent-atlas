@@ -528,6 +528,19 @@ export function PlayerController({
 
     if (import.meta.env.DEV) {
       /*
+        The VISUAL group, not the follow target. `playerRef` carries position
+        and heading for the camera and has no renderable children at all, so a
+        bounding box taken from it comes back empty - which is exactly what
+        happened, and it reported "no character" rather than "wrong object".
+
+        Published per frame rather than once in an effect, because the ref is
+        not guaranteed to be populated at the moment an effect with a stable
+        dependency list runs, and that effect never runs again to correct it.
+        A single assignment is cheaper than the bug it avoids.
+      */
+      devBridge.playerObject = visualRef.current
+
+      /*
         Dev-only telemetry. Feel tuning is a play-adjust-play loop, and being able
         to read exact velocity, grounded state and timer values beats inferring
         them from how a jump looked. Stripped from production builds.

@@ -16,9 +16,23 @@
  * nothing calls them.
  */
 
+import type { Object3D } from 'three'
+
 export type TeleportFn = (x: number, y: number, z: number, facing?: number) => void
 
 export const devBridge = {
   /** Registered by PlayerController while mounted. Null between scenes. */
   teleport: null as TeleportFn | null,
+
+  /**
+   * The character's visual root, for measuring where it lands in frame.
+   *
+   * The rigid body's translation is not enough to answer that: it is a point,
+   * and the question a vantage has to be able to answer is whether the whole
+   * character is inside the frame and how much of it there is. Only the scene
+   * graph knows the bounds, and they change whenever the character is
+   * re-proportioned - which is exactly when a vantage silently stops framing
+   * what it claims to.
+   */
+  playerObject: null as Object3D | null,
 }
