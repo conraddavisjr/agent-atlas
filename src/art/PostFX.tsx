@@ -51,7 +51,14 @@ export function PostFX() {
           aoRadius={0.5}
           intensity={2.2}
           distanceFalloff={0.6}
-          quality={quality.aoSamples >= 16 ? 'medium' : 'low'}
+          /*
+            The preset, straight from the tier, rather than derived from a
+            sample count. `<N8AO>` applies `aoSamples` in one layout effect and
+            calls `setQualityMode` in a later one, so passing both means the
+            preset silently overwrites the count and the number in the source is
+            not the number in the build. Pass one or the other, never both.
+          */
+          quality={quality.aoQuality}
           // Colour bounced back into occluded areas. Pure black occlusion is
           // what makes AO look like dirt; tinting it toward the sky keeps
           // shadowed contact reading as shadow.

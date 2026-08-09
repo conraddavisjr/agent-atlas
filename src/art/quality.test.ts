@@ -82,7 +82,153 @@ describe('tier settings', () => {
 
   it('turns ambient occlusion off entirely at the bottom tier', () => {
     expect(QUALITY.low.ambientOcclusion).toBe(false)
-    expect(QUALITY.low.aoSamples).toBe(0)
+    // The preset is still the cheap one rather than a placeholder, so forcing
+    // AO on at this tier for a diagnostic does not also buy the expensive
+    // settings.
+    expect(QUALITY.low.aoQuality).toBe('low')
+    expect(QUALITY.high.aoQuality).toBe('medium')
+  })
+
+  it('defines every setting on every tier', () => {
+    /*
+      The classic failure this catches is a field added to `high` and `medium`
+      and forgotten at `low`, which then reads as `undefined` and behaves like
+      whichever falsy or NaN value the consumer happens to produce. TypeScript
+      catches a missing key at build time, but only while every tier is written
+      out by hand in one file, and this table is exactly the kind of thing that
+      later grows a spread or a generated default.
+
+      Asserting key-set equality rather than a hard-coded list means the test
+      keeps working as fields are added, and still fails the moment three tiers
+      stop agreeing on what a tier is.
+    */
+    const low = Object.keys(QUALITY.low).sort()
+    const medium = Object.keys(QUALITY.medium).sort()
+    const high = Object.keys(QUALITY.high).sort()
+
+    expect(medium).toEqual(low)
+    expect(high).toEqual(low)
+
+    for (const tier of ['low', 'medium', 'high'] as const) {
+      for (const [key, value] of Object.entries(QUALITY[tier])) {
+        expect(value, `${tier}.${key}`).not.toBeUndefined()
+        if (typeof value === 'number') expect(Number.isFinite(value), `${tier}.${key}`).toBe(true)
+      }
+    }
+  })
+
+  it('carries every field the art overhaul specs gate against', () => {
+    /*
+      Named explicitly, and not derived from the type, because the point of the
+      assertion is that this shape is the frozen interface several streams build
+      against. Deleting or renaming one of these is a cross-stream break and
+      should fail here rather than in someone else's half-finished feature.
+    */
+    const required = [
+      'rimLight',
+      'bounceFill',
+      'contactShadow',
+      'shadowRadius',
+      'shadowBlurSamples',
+      'hemisphereIntensity',
+      'envResolution',
+      'depthOfField',
+      'chromaticAberration',
+      'colourGrade',
+      'bloomLevels',
+      'aoQuality',
+      'aoHalfRes',
+      'surfaceMapSize',
+      'sheenHero',
+      'sheenWorld',
+      'anisotropy',
+      'transmission',
+      'bevelSmoothness',
+      'decals',
+      'wrapDiffuse',
+      'footIk',
+      'particleBudget',
+      'vfxDetail',
+      'faceAnimation',
+    ]
+
+    for (const tier of ['low', 'medium', 'high'] as const) {
+      for (const key of required) {
+        expect(QUALITY[tier], `${tier}.${key}`).toHaveProperty(key)
+      }
+    }
+  })
+
+  it('leaves every unbuilt system inert at every tier', () => {
+    /*
+      These fields were added before the systems they configure. Until each
+      system lands with its own acceptance evidence, none of them may be on at
+      any tier, because a gate that defaults on turns "build the rim light" into
+      "build the rim light and change the image at three tiers" in one commit,
+      which is the one thing the rollout discipline forbids.
+
+      A stream flipping one of these is expected to change this test in the same
+      commit. That is the point: the change becomes deliberate and reviewable
+      rather than a value nobody noticed.
+    */
+    for (const tier of ['low', 'medium', 'high'] as const) {
+      const q = QUALITY[tier]
+      expect(q.rimLight, tier).toBe(false)
+      expect(q.bounceFill, tier).toBe(false)
+      expect(q.contactShadow, tier).toBe(false)
+      expect(q.depthOfField, tier).toBe(false)
+      expect(q.chromaticAberration, tier).toBe(false)
+      expect(q.colourGrade, tier).toBe(false)
+      expect(q.surfaceMapSize, tier).toBe(0)
+      expect(q.decals, tier).toBe(false)
+      expect(q.wrapDiffuse, tier).toBe(false)
+      expect(q.footIk, tier).toBe(false)
+      expect(q.particleBudget, tier).toBe(0)
+      expect(q.vfxDetail, tier).toBe('off')
+      expect(q.faceAnimation, tier).toBe(false)
+    }
+  })
+
+  it('keeps the bottom tier genuinely zero-cost on every new axis', () => {
+    /*
+      "Genuinely zero-cost" is stronger than "cheap": at `low`, nothing here may
+      allocate a canvas, upload a texture, compile a shader variant, or add a
+      draw call. Every one of these assertions is a thing that would do one of
+      those.
+    */
+    const low = QUALITY.low
+    expect(low.surfaceMapSize).toBe(0)
+    expect(low.sheenHero).toBe(false)
+    expect(low.sheenWorld).toBe(false)
+    expect(low.anisotropy).toBe(false)
+    expect(low.wrapDiffuse).toBe(false)
+    expect(low.decals).toBe(false)
+    expect(low.particleBudget).toBe(0)
+    expect(low.depthOfField).toBe(false)
+    expect(low.chromaticAberration).toBe(false)
+    expect(low.ambientOcclusion).toBe(false)
+    // Never above the tier above it, on any axis that costs frame time.
+    expect(low.shadowRadius).toBeLessThanOrEqual(QUALITY.medium.shadowRadius)
+    expect(low.shadowBlurSamples).toBeLessThanOrEqual(QUALITY.medium.shadowBlurSamples)
+    expect(low.envResolution).toBeLessThanOrEqual(QUALITY.medium.envResolution)
+    expect(low.bloomLevels).toBeLessThanOrEqual(QUALITY.medium.bloomLevels)
+    expect(low.bevelSmoothness).toBeLessThanOrEqual(QUALITY.medium.bevelSmoothness)
+  })
+
+  it('orders the new numeric dials monotonically as well', () => {
+    const { low, medium, high } = QUALITY
+    expect(medium.shadowRadius).toBeLessThanOrEqual(high.shadowRadius)
+    expect(medium.shadowBlurSamples).toBeLessThanOrEqual(high.shadowBlurSamples)
+    expect(medium.envResolution).toBeLessThanOrEqual(high.envResolution)
+    expect(medium.bloomLevels).toBeLessThanOrEqual(high.bloomLevels)
+    expect(medium.bevelSmoothness).toBeLessThanOrEqual(high.bevelSmoothness)
+    expect(medium.particleBudget).toBeLessThanOrEqual(high.particleBudget)
+    expect(medium.surfaceMapSize).toBeLessThanOrEqual(high.surfaceMapSize)
+    // The hemisphere runs the other way: it is raised at `low` to absorb the
+    // bounce fill that tier does not get, so the only invariant is the cap.
+    expect(low.hemisphereIntensity).toBeLessThanOrEqual(0.6)
+    expect(medium.hemisphereIntensity).toBeLessThanOrEqual(0.6)
+    expect(high.hemisphereIntensity).toBeLessThanOrEqual(0.6)
   })
 })
 

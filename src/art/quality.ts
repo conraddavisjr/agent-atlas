@@ -12,6 +12,30 @@
 
 export type QualityTier = 'low' | 'medium' | 'high'
 
+/**
+ * How to read the values in this table, and the rule the art overhaul adds to it.
+ *
+ * Most of the fields below the existing block are gates for systems that do not
+ * exist yet: the rim light, the contact blob, the LUT, depth of field, the VFX
+ * pool, foot IK, generated surface maps. They are declared here first, all
+ * inert, so that every stream builds against one frozen shape rather than each
+ * adding its own field and colliding in the same twelve lines.
+ *
+ * The rule, and it is the art bible's section 7 rollout discipline applied to a
+ * settings table:
+ *
+ *   A gate for a system that does not exist yet is FALSE (or zero) at every
+ *   tier, no matter what its spec says, and the spec's ladder is written into
+ *   its comment. A dial that existing code already reads keeps the value the
+ *   code uses today, so moving the number into this table is provably not a
+ *   look change.
+ *
+ * That means turning a system on is a one-line diff in this file, made by the
+ * commit that also lands that system's acceptance shot, which is exactly what
+ * "one effect per commit" requires. It also means nothing here can change the
+ * image on its own, which is why this table could land before any of the work
+ * it configures.
+ */
 export type QualitySettings = {
   /** Blades in the instanced grass field. */
   grassBlades: number
@@ -37,12 +61,217 @@ export type QualitySettings = {
   /** Percentage-closer soft shadows. Costs a real amount of fragment work. */
   softShadows: boolean
   ambientOcclusion: boolean
-  aoSamples: number
+  /**
+   * N8AO's quality preset, which is the string handed to `setQualityMode`.
+   *
+   * Replaces the old `aoSamples` count, which never reached the pass. r3f's
+   * `<N8AO>` applies `aoSamples` in one layout effect and calls
+   * `setQualityMode(quality)` in a later one, so whenever both are passed the
+   * preset silently overwrites the count. Naming the preset directly is the
+   * only version of this setting that is not a lie. `'low'` is 16 AO samples
+   * with 4 denoise samples, `'medium'` is 16 with 8.
+   */
+  aoQuality: 'low' | 'medium'
   /** Scatter density multiplier for rocks, ferns, pebbles and flowers. */
   propDensity: number
   cloudCount: number
   /** Upper bound on device pixel ratio. Retina at full rate is four times the fill. */
   maxDpr: number
+
+  // ---------------------------------------------------------------------
+  // Lighting. See docs/design/01-lighting.md section 7.
+  // ---------------------------------------------------------------------
+
+  /**
+   * The camera-relative rim / kicker directional.
+   *
+   * Spec ladder: on at every tier, because it is the defining element of the
+   * look and `low` already gives up AO, soft shadows and clouds. Off here
+   * because the light does not exist yet; `Lighting.tsx` renders a slot that
+   * returns null.
+   */
+  rimLight: boolean
+  /**
+   * The camera-relative bounce fill that opposes the rim.
+   *
+   * Spec ladder: false / true / true. It is the one light cut at `low`, where
+   * the hemisphere rises to 0.60 to absorb it.
+   */
+  bounceFill: boolean
+  /**
+   * The character's multiply-blended contact blob.
+   *
+   * Spec ladder: on at every tier. `low` is the tier that needs it most,
+   * because a 1024 shadow map cannot glue the robot to the floor on its own.
+   * Deliberately not a second shadow-casting light: `WebGLShadowMap` tests
+   * `object.layers` against the main camera rather than the shadow camera, so
+   * casters cannot be masked per light at all.
+   */
+  contactShadow: boolean
+  /**
+   * Shadow blur radius in shadow-map texels, and the sample count behind it.
+   *
+   * Only has any effect under variance shadow maps, which `App.tsx` selects
+   * whenever `softShadows` is set; under the percentage-closer default three
+   * ignores both. Today's values, moved out of the inline conditional in
+   * `Lighting.tsx`. Spec ladder: 0 / 4 / 6 and 0 / 8 / 16, which belongs to the
+   * commit that also lands the following frustum, because the tighter frustum
+   * is what lets medium reach the same softness from fewer samples.
+   */
+  shadowRadius: number
+  shadowBlurSamples: number
+  /**
+   * Hemisphere light intensity.
+   *
+   * Today's 0.5 at every tier. Spec ladder: 0.60 / 0.55 / 0.55, where the extra
+   * 0.05 at `low` pays for the bounce fill that tier does not get. Retuning any
+   * light intensity is out of scope for the stream that introduced this field.
+   */
+  hemisphereIntensity: number
+  /**
+   * Cube resolution for the `Lightformer` environment.
+   *
+   * One cube render plus one PMREM pass, once, because `frames={1}`. Runtime
+   * IBL sampling costs the same at any resolution; only memory and the
+   * sharpness of the low-roughness mips differ.
+   *
+   * Today's 256 at every tier. Spec ladder: 128 / 256 / 512, which lands with
+   * the environment rebuild, because 512 exists to keep the highlight strip's
+   * streak crisp against `clearcoatRoughness 0.10` and there is no strip yet.
+   */
+  envResolution: number
+
+  // ---------------------------------------------------------------------
+  // Post-processing. See docs/design/04-post.md section 10.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Far-field depth of field.
+   *
+   * Spec ladder: off / off / available. It stays off even at high until it has
+   * passed the five acceptance criteria in the post spec's section 4.4, one of
+   * which is that the ground directly below the player is pixel-identical to a
+   * capture with the effect off. Blurring the ledge the player is lining a jump
+   * up on is a gameplay regression rather than an aesthetic one.
+   */
+  depthOfField: boolean
+  /**
+   * Chromatic aberration. Spec ladder: off / off / available, default off.
+   * A `CONVOLUTION` effect, so it can never merge and always costs a whole
+   * extra full-screen pass, for something whose own specification is that it
+   * should be almost impossible to see.
+   */
+  chromaticAberration: boolean
+  /**
+   * The LUT colour grade.
+   *
+   * Spec ladder: on at every tier, including `low`, because it replaces
+   * `HueSaturation` and `BrightnessContrast` with a single texture fetch and is
+   * therefore cheaper than what it removes. Off here because `lut.ts` does not
+   * exist yet, and because the LUT lands as an identity first and is only
+   * switched to the real grade once the identity diff has passed.
+   */
+  colourGrade: boolean
+  /**
+   * Bloom mip levels. Each level is one more render target bind, and each is a
+   * quarter of the cost of the one before it.
+   *
+   * 8 at every tier, which is `MipmapBlurPass`'s own default and therefore what
+   * the current build already does. Spec ladder: 4 / 6 / 8. Fewer levels is a
+   * tighter, less wide glow, so it is a look change as well as a saving and it
+   * belongs to the bloom commit.
+   */
+  bloomLevels: number
+  /**
+   * Resolve AO at half resolution and upsample.
+   *
+   * Spec ladder: off / on / off, which is not a typo: `halfRes` roughly
+   * quarters the AO pass's fragment count at medium, and high pays full price
+   * for the edge quality. Off everywhere here, since turning it on at medium
+   * softens every contact and is a look change.
+   */
+  aoHalfRes: boolean
+
+  // ---------------------------------------------------------------------
+  // Materials and geometry. See docs/design/02-materials.md section 10.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Generated surface map resolution. 0 means no maps are generated at all,
+   * which is what makes `low` genuinely zero-cost rather than merely cheap: no
+   * canvas work, no extra texture uploads, no extra shader variants.
+   *
+   * Spec ladder: 0 / 512 / 1024. Zero everywhere until `surfaceTexture.ts`
+   * exists.
+   */
+  surfaceMapSize: 0 | 512 | 1024
+  /**
+   * Whether presets that specify sheen actually set it, split hero from world.
+   *
+   * Sheen is a Charlie distribution plus two `IBLSheenBRDF` calls plus an
+   * energy compensation term, so it is far from free on a surface with many
+   * fragments. Spec ladder: hero false / true / true, world false / false /
+   * true.
+   *
+   * `MeshPhysicalMaterial` bumps its version when `sheen` crosses zero, which
+   * forces a shader recompile, so the tier has to be known before a material is
+   * constructed. A tier change rebuilds materials; it must never mutate them.
+   */
+  sheenHero: boolean
+  sheenWorld: boolean
+  /** Anisotropy on `anodised()`. Adds `USE_ANISOTROPY`. Spec ladder: no / no / yes. */
+  anisotropy: boolean
+  /**
+   * Whether `gel()` may use real transmission at all, or falls back to
+   * `crystal()`. Transmission costs an extra render target pass.
+   *
+   * True everywhere, which is what the world does today. Spec ladder: false /
+   * true / true, which becomes a real setting once `crystal()` has call sites.
+   */
+  transmission: boolean
+  /** `RoundedBox` smoothness for world geometry; hero parts are always 4. */
+  bevelSmoothness: 2 | 3 | 4
+  /** Screen-printed decal meshes. Spec ladder: no / no / yes. */
+  decals: boolean
+  /** Wrapped-diffuse `onBeforeCompile` on the shell. Spec ladder: no / no / yes. */
+  wrapDiffuse: boolean
+
+  // ---------------------------------------------------------------------
+  // Character and VFX. See docs/design/05-character-vfx.md.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Foot placement from ground rays.
+   *
+   * Spec ladder: no / yes / yes. `low` runs no foot rays and the feet stay on
+   * the walk cycle, which on flat ground is invisible. The body-centre ray runs
+   * at every tier regardless, because the contact blob depends on it.
+   */
+  footIk: boolean
+  /**
+   * Maximum live particles across every emitter. Zero means the pool is never
+   * allocated, which is the only version of "off" worth having.
+   *
+   * Additive quads stack, so this is also a bloom setting: dust and debris use
+   * `NormalBlending` with alpha and only energy effects are allowed to be
+   * additive, or a dense cluster of individually dim particles crosses the
+   * threshold together and produces a white blob.
+   */
+  particleBudget: number
+  /**
+   * How much of each effect is built: `'off'` runs no emitters, `'low'` runs
+   * the gameplay-legible ones (landing dust, jump puff), `'full'` adds the
+   * decorative ones.
+   */
+  vfxDetail: 'off' | 'low' | 'full'
+  /**
+   * The animated visor face: blinks, gaze, expressions.
+   *
+   * Its own gate rather than part of `vfxDetail`, because it is the one
+   * emissive surface the player looks at for hours and it is the last thing
+   * that should be cut for frame time.
+   */
+  faceAnimation: boolean
 }
 
 export const QUALITY: Record<QualityTier, QualitySettings> = {
@@ -57,10 +286,45 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     shadowMapSize: 1024,
     softShadows: false,
     ambientOcclusion: false,
-    aoSamples: 0,
+    // Unused while ambientOcclusion is false, and deliberately still the
+    // cheaper preset rather than a placeholder, so forcing AO on at this tier
+    // for a diagnostic does not also hand it the expensive settings.
+    aoQuality: 'low',
     propDensity: 0.35,
     cloudCount: 0,
     maxDpr: 1,
+
+    // Lighting.
+    rimLight: false,
+    bounceFill: false,
+    contactShadow: false,
+    shadowRadius: 0,
+    shadowBlurSamples: 0,
+    hemisphereIntensity: 0.5,
+    envResolution: 256,
+
+    // Post.
+    depthOfField: false,
+    chromaticAberration: false,
+    colourGrade: false,
+    bloomLevels: 8,
+    aoHalfRes: false,
+
+    // Materials and geometry.
+    surfaceMapSize: 0,
+    sheenHero: false,
+    sheenWorld: false,
+    anisotropy: false,
+    transmission: true,
+    bevelSmoothness: 3,
+    decals: false,
+    wrapDiffuse: false,
+
+    // Character and VFX.
+    footIk: false,
+    particleBudget: 0,
+    vfxDetail: 'off',
+    faceAnimation: false,
   },
   medium: {
     grassBlades: 70_000,
@@ -70,10 +334,42 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     shadowMapSize: 2048,
     softShadows: true,
     ambientOcclusion: true,
-    aoSamples: 8,
+    aoQuality: 'low',
     propDensity: 0.7,
     cloudCount: 3,
     maxDpr: 1.5,
+
+    // Lighting.
+    rimLight: false,
+    bounceFill: false,
+    contactShadow: false,
+    shadowRadius: 4,
+    shadowBlurSamples: 12,
+    hemisphereIntensity: 0.5,
+    envResolution: 256,
+
+    // Post.
+    depthOfField: false,
+    chromaticAberration: false,
+    colourGrade: false,
+    bloomLevels: 8,
+    aoHalfRes: false,
+
+    // Materials and geometry.
+    surfaceMapSize: 0,
+    sheenHero: false,
+    sheenWorld: false,
+    anisotropy: false,
+    transmission: true,
+    bevelSmoothness: 3,
+    decals: false,
+    wrapDiffuse: false,
+
+    // Character and VFX.
+    footIk: false,
+    particleBudget: 0,
+    vfxDetail: 'off',
+    faceAnimation: false,
   },
   high: {
     grassBlades: 220_000,
@@ -83,10 +379,42 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     shadowMapSize: 4096,
     softShadows: true,
     ambientOcclusion: true,
-    aoSamples: 16,
+    aoQuality: 'medium',
     propDensity: 1,
     cloudCount: 5,
     maxDpr: 1.75,
+
+    // Lighting.
+    rimLight: false,
+    bounceFill: false,
+    contactShadow: false,
+    shadowRadius: 4,
+    shadowBlurSamples: 12,
+    hemisphereIntensity: 0.5,
+    envResolution: 256,
+
+    // Post.
+    depthOfField: false,
+    chromaticAberration: false,
+    colourGrade: false,
+    bloomLevels: 8,
+    aoHalfRes: false,
+
+    // Materials and geometry.
+    surfaceMapSize: 0,
+    sheenHero: false,
+    sheenWorld: false,
+    anisotropy: false,
+    transmission: true,
+    bevelSmoothness: 3,
+    decals: false,
+    wrapDiffuse: false,
+
+    // Character and VFX.
+    footIk: false,
+    particleBudget: 0,
+    vfxDetail: 'off',
+    faceAnimation: false,
   },
 }
 
