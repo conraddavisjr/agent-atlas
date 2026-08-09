@@ -174,7 +174,17 @@ export type FaceParams = {
   /** Gaze offset in face-plate space, -1..1, applied to the eye cores only. */
   gazeX: number
   gazeY: number
-  /** HDR multiplier on the emissive core, budgeted against the bloom threshold. */
+  /**
+   * Multiplier on the core's bloom-crossing brightness. 1 is neutral.
+   *
+   * A multiple rather than the spec's absolute HDR value, so the solver never
+   * has to know what the bloom threshold is. `RobotFace` derives the absolute
+   * level through `emissiveIntensityFor`, which means the visor tracks
+   * BLOOM_THRESHOLD automatically when it is measured and lowered rather than
+   * quietly becoming a floodlight.
+   *
+   * Ranges from about 0.88 for a squint to 1.24 for a surprise.
+   */
   brightness: number
   /** Scanline strength. */
   scan: number
@@ -257,7 +267,7 @@ export function createFaceParams(): FaceParams {
     archL: 0, archR: 0,
     widthL: 1, widthR: 1,
     gazeX: 0, gazeY: 0,
-    brightness: 3.4,
+    brightness: 1,
     scan: 0.55,
     scanPhase: 0,
     glitch: 0,

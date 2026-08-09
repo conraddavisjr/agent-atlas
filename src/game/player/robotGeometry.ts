@@ -64,6 +64,87 @@ export const TORSO = {
 } as const
 
 /**
+ * The visor glyph's shape, in face-plate space.
+ *
+ * Plate space runs `x` over `+-aspect/2` and `y` over `+-0.5`, where aspect is
+ * the plate's own 0.56 by 0.38. These live here rather than inline in the
+ * shader string so `robotGeometry.test.ts` can assert on them: the SDF is
+ * perfectly well-formed arithmetic for any parameters, so a wrong half-extent
+ * produces an invisible bar rather than an error, and the only two places that
+ * shows are a screenshot and a test.
+ */
+export const VISOR = {
+  /** Plate aspect, 0.56 wide over 0.38 tall. */
+  aspect: 0.56 / 0.38,
+  /**
+   * Metres per unit of plate space.
+   *
+   * The fragment builds `p = (vUv - 0.5) * vec2(aspect, 1.0)`, so x runs over
+   * `+-aspect/2` and y over `+-0.5`, and BOTH axes end up at the same scale:
+   * one unit is 0.56 / aspect = 0.38 m. That is the entire point of the aspect
+   * multiply and it is what the design spec's own numbers overlook. The spec
+   * reads a half-extent of 0.215 as "0.274 m across a 0.56 m plate", which
+   * would only hold if x ran over +-0.5, and separately calls the same bar 77%
+   * of the plate width, which 0.274 over 0.56 is not either. Three figures,
+   * none of which agree.
+   */
+  metresPerUnit: 0.38,
+  /**
+   * The slot's vertical centre: 57% down the plate rather than at its middle,
+   * which is the infantile placement. Eyes at the vertical centre read as an
+   * adult on any head shape.
+   */
+  y: -0.07,
+  /**
+   * Bar half-extents and corner radius, in the iq convention where the extent
+   * IS `b` and `r` rounds the corners inward.
+   *
+   * Sized against the read rather than reverse-engineered from the spec: 0.430
+   * by 0.048 m, which is 77% of the 0.56 m plate's width and matches the
+   * proportion the previous character's 0.42 bar had against its 0.56 head. The
+   * radius equals the half-height, so the ends are true semicircles and the
+   * shape is a stadium.
+   */
+  barHalfW: 0.566,
+  barHalfH: 0.063,
+  barRadius: 0.063,
+  /**
+   * Eye core half-extents at neutral, and how far each sits from the centre.
+   *
+   * The cores sit at 74% of the way out along the bar, so they read as two
+   * distinct nodes near its ends rather than as a bright patch in the middle,
+   * and each is 0.057 by 0.042 m against a bar 0.048 m tall.
+   */
+  coreOffset: 0.42,
+  coreHalfW: 0.075,
+  coreHalfH: 0.055,
+  /** Gaze travel, deliberately small so the cores stay inside their housing. */
+  gazeX: 0.055,
+  gazeY: 0.018,
+  /** Antialias half-width in plate space, roughly 1.3 px at playing distance. */
+  aa: 0.004,
+} as const
+
+/**
+ * Signed distance to a rounded box, the standard iq form.
+ *
+ * `b` is the shape's full half-extent and `r` rounds its corners inward, so the
+ * outer extent is `b` and not `b + r`. Duplicated from the visor's fragment
+ * stage on purpose: the point of the test that uses it is to pin the geometry
+ * the shader draws, and sharing an implementation would only prove the shader
+ * equals itself.
+ */
+export function sdRoundBox(px: number, py: number, bx: number, by: number, r: number): number {
+  const dx = Math.abs(px) - bx + r
+  const dy = Math.abs(py) - by + r
+  return (
+    Math.min(Math.max(dx, dy), 0) +
+    Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) -
+    r
+  )
+}
+
+/**
  * A Lame superellipse: `|x/a|^n + |y/b|^n = 1`.
  *
  * `n = 2` is an ellipse and `n` to infinity is a rectangle. `n = 4` is the

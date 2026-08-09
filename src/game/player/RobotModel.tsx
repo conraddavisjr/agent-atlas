@@ -1,7 +1,5 @@
 import { useRef, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
-import { palette } from '@/art/palette'
-import { GLOW, emissive } from '@/art/materials'
 import { useQuality } from '@/art/useQuality'
 import type { QualitySettings } from '@/art/quality'
 import {
@@ -31,6 +29,7 @@ import {
   type Vec3,
 } from './robotPose'
 import { CAPE } from './animTuning'
+import { RobotFace } from './RobotFace'
 import { applyPose, createRigRefs, type RigRefs } from './rig'
 import type { RobotAnimState } from './robotAnim'
 import type { SocketName } from '@/state/types'
@@ -127,7 +126,7 @@ export function RobotModel({
           <group ref={(o) => void (rigRef.current!.neck = o)} position={at(REST.neck)}>
             <group ref={(o) => void (rigRef.current!.head = o)} position={at(REST.head)}>
               <HeadShell quality={quality} />
-              <Face />
+              <Face pose={pose} />
 
               <EarPodNode side="L" rigRef={rigRef} quality={quality} />
               <EarPodNode side="R" rigRef={rigRef} quality={quality} />
@@ -176,20 +175,11 @@ function at(v: Vec3): [number, number, number] {
  * it. Low on the face is the infantile placement and it is not a detail: eyes
  * at the vertical centre read as an adult on any head shape.
  */
-function Face() {
+function Face({ pose }: { pose: RefObject<Pose | null> }) {
   return (
     <group position={[0, -0.045, 0.305]}>
       <FacePlate />
-      {/*
-        One continuous horizontal slot, spanning 0.274 m of a 0.56 m plate.
-        Close the character's eyes and there is still a cyan line, which is the
-        identity: the reference's character loses its eyes on a blink and this
-        one must not.
-      */}
-      <mesh position={[0, -0.027, 0.02]}>
-        <planeGeometry args={[0.274, 0.034]} />
-        <meshPhysicalMaterial {...emissive(palette.visor, GLOW.bloom)} />
-      </mesh>
+      <RobotFace pose={pose} />
     </group>
   )
 }

@@ -5,8 +5,10 @@ import {
   FACE_PLATE,
   roundedDiscProfile,
   superellipsePoints,
+  sdRoundBox,
   taperedSuperellipsoid,
   TORSO,
+  VISOR,
 } from './robotGeometry'
 
 describe('superellipsePoints', () => {
@@ -224,5 +226,112 @@ describe('taperedSuperellipsoid', () => {
 
   it('refuses a segment count too low to close', () => {
     expect(() => taperedSuperellipsoid({ ...TORSO, latSegments: 2 })).toThrow(/segments/)
+  })
+})
+
+/*
+  The visor's SDF geometry.
+
+  This exists because the shader is not testable and its failure mode is
+  silence. The arithmetic is well-formed for any parameters, so a wrong
+  half-extent produces an invisible bar on a black plate rather than an error,
+  and the only two places that shows are a screenshot and here. It shipped
+  invisible once already, from the design spec's own numbers.
+*/
+describe('the visor SDF', () => {
+  const bar = (px: number, py: number) =>
+    sdRoundBox(px, py - VISOR.y, VISOR.barHalfW, VISOR.barHalfH, VISOR.barRadius)
+
+  it('is solid at the centre of the slot', () => {
+    // Negative is inside. Zero would mean the bar sits exactly on its own
+    // boundary everywhere, which is the degenerate case that shipped.
+    expect(bar(0, VISOR.y)).toBeCloseTo(-VISOR.barRadius, 9)
+  })
+
+  it('is a stadium 0.490 by 0.060 in plate space', () => {
+    expect(bar(0, VISOR.y + VISOR.barHalfH)).toBeCloseTo(0, 9)
+    expect(bar(0, VISOR.y - VISOR.barHalfH)).toBeCloseTo(0, 9)
+    expect(bar(VISOR.barHalfW, VISOR.y)).toBeCloseTo(0, 9)
+    expect(bar(-VISOR.barHalfW, VISOR.y)).toBeCloseTo(0, 9)
+    expect(bar(0, VISOR.y + VISOR.barHalfH * 2)).toBeGreaterThan(0)
+    expect(bar(VISOR.barHalfW * 1.5, VISOR.y)).toBeGreaterThan(0)
+  })
+
+  it('spans 77 per cent of the plate width, in world metres', () => {
+    // Both plate-space axes are at the same scale, which is the whole point of
+    // the aspect multiply and the thing the spec's three conflicting figures
+    // for this bar all miss.
+    const worldWidth = VISOR.barHalfW * 2 * VISOR.metresPerUnit
+    const worldHeight = VISOR.barHalfH * 2 * VISOR.metresPerUnit
+    expect(worldWidth).toBeCloseTo(0.43, 2)
+    expect(worldHeight).toBeCloseTo(0.048, 3)
+    expect(worldWidth / 0.56).toBeCloseTo(0.77, 2)
+  })
+
+  it('fits inside the plate on both axes', () => {
+    // Plate space x runs over +-aspect/2 and y over +-0.5. A bar that overran
+    // either would be clipped by the quad rather than by the housing.
+    expect(VISOR.barHalfW).toBeLessThan(VISOR.aspect / 2)
+    expect(Math.abs(VISOR.y) + VISOR.barHalfH).toBeLessThan(0.5)
+  })
+
+  it('makes the ends true semicircles', () => {
+    expect(VISOR.barRadius).toBeCloseTo(VISOR.barHalfH, 9)
+  })
+
+  it('puts the two cores near the ends of the slot rather than in the middle', () => {
+    expect(VISOR.coreOffset / VISOR.barHalfW).toBeGreaterThan(0.6)
+    expect(VISOR.coreOffset / VISOR.barHalfW).toBeLessThan(0.85)
+  })
+
+  /*
+    The regression this file exists for.
+
+    The spec's (0.215, 0.0) fed to the iq body it also ships gives exactly zero
+    at the centre of the bar, so `1 - smoothstep(-aa, aa, 0)` is 0.5 at the
+    brightest point and the alpha it multiplies collapses. Pinned as an explicit
+    negative, so nobody re-derives the "documented" numbers from the spec.
+  */
+  it('would be a zero-height line at the half-extents the spec gives', () => {
+    expect(sdRoundBox(0, 0, 0.215, 0.0, 0.03)).toBe(0)
+    expect(sdRoundBox(0, 0.0001, 0.215, 0.0, 0.03)).toBeGreaterThan(0)
+  })
+
+  /*
+    The identity constraint, and the one thing about this face that must not
+    regress. The reference's character loses its eyes on a blink; this one keeps
+    a lit line, and that difference is the entire reason the visor is a bar
+    rather than two panels.
+  */
+  it('keeps the bar lit through a full blink', () => {
+    // openL and openR bottom out at 0.06, never zero, and the bar is a separate
+    // shape from the cores, so the slot cannot go dark whatever they do.
+    for (const open of [1, 0.5, 0.06]) {
+      const core = sdRoundBox(
+        0 - VISOR.coreOffset,
+        0,
+        VISOR.coreHalfW,
+        VISOR.coreHalfH * open,
+        Math.min(VISOR.coreHalfH * open, VISOR.coreHalfW) * 0.92,
+      )
+      expect(Number.isFinite(core)).toBe(true)
+      // Whatever the cores do, the bar under them is still solid.
+      expect(bar(-VISOR.coreOffset, VISOR.y)).toBeLessThan(0)
+    }
+  })
+
+  /*
+    Why `coreMask *= barMask` is load-bearing rather than defensive: at full
+    gaze and full width a core genuinely does reach outside the slot, so without
+    the clip a surprised glance puts a glowing blob outside its housing.
+  */
+  it('lets a core overrun the slot, which is why it is clipped to it', () => {
+    const reach = VISOR.coreOffset + VISOR.gazeX + VISOR.coreHalfW * 1.4
+    expect(reach).toBeGreaterThan(VISOR.barHalfW)
+  })
+
+  it('puts the slot low on the plate, which is the infantile placement', () => {
+    // 57% down from the top of a plate spanning +-0.5.
+    expect(0.5 - VISOR.y).toBeCloseTo(0.57, 9)
   })
 })
