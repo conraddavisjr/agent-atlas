@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { clusteredPlacements, evenPlacements, mulberry32, type Placement } from './placement'
+import {
+  clusterCentres,
+  clusteredPlacements,
+  evenPlacements,
+  mulberry32,
+  type Placement,
+} from './placement'
 
 const base = { count: 600, radius: 16, seed: 7 }
 
@@ -133,5 +139,180 @@ describe('bounds and exclusion', () => {
     // load rather than simply coming back thin.
     const items = evenPlacements({ ...base, exclusions: [{ x: 0, z: 0, radius: 100 }] })
     expect(items).toHaveLength(0)
+  })
+
+  it('terminates when everything is excluded from a clustered layer too', () => {
+    const items = clusteredPlacements({
+      ...base,
+      clusters: 8,
+      clusterRadius: 3,
+      exclusions: [{ x: 0, z: 0, radius: 100 }],
+    })
+    expect(items).toHaveLength(0)
+  })
+
+  it('keeps clustered placements out of a rectangular exclusion', () => {
+    // A deck is a rectangle. Clearing one with a circle also strips the lawn at
+    // its corners, which is visible on the 12 x 4 approach deck.
+    const exclusion = { x: 0, z: -8.6, halfX: 6, halfZ: 2 }
+    const items = clusteredPlacements({
+      ...base,
+      count: 2000,
+      clusters: 14,
+      clusterRadius: 3,
+      exclusions: [exclusion],
+    })
+    for (const p of items) {
+      const inside = Math.abs(p.x - exclusion.x) < exclusion.halfX &&
+        Math.abs(p.z - exclusion.z) < exclusion.halfZ
+      expect(inside).toBe(false)
+    }
+    // And it must clear less than the circle that would have to contain it,
+    // which is the entire reason the variant exists.
+    const circle = { x: 0, z: -8.6, radius: Math.hypot(6, 2) }
+    const spared = items.filter(
+      (p) => Math.hypot(p.x - circle.x, p.z - circle.z) < circle.radius,
+    )
+    expect(spared.length).toBeGreaterThan(0)
+  })
+
+  it('honours a rotated rectangular exclusion', () => {
+    const exclusion = { x: 3, z: 2, halfX: 4, halfZ: 1, rotation: Math.PI / 4 }
+    const items = clusteredPlacements({
+      ...base,
+      count: 2000,
+      clusters: 14,
+      clusterRadius: 3,
+      exclusions: [exclusion],
+    })
+    for (const p of items) {
+      const dx = p.x - exclusion.x
+      const dz = p.z - exclusion.z
+      const s = Math.sin(-exclusion.rotation)
+      const c = Math.cos(-exclusion.rotation)
+      const lx = dx * c - dz * s
+      const lz = dx * s + dz * c
+      expect(Math.abs(lx) >= exclusion.halfX || Math.abs(lz) >= exclusion.halfZ).toBe(true)
+    }
+  })
+})
+
+describe('cluster centres', () => {
+  it('samples centres inside the annulus it is given', () => {
+    const centres = clusterCentres({
+      clusters: 200,
+      radius: 14.5,
+      centreMinRadius: 10,
+      centreMaxRadius: 13.5,
+      seed: 5,
+    })
+    expect(centres).toHaveLength(200)
+    for (const [x, z] of centres) {
+      const r = Math.hypot(x, z)
+      expect(r).toBeGreaterThanOrEqual(10 - 1e-9)
+      expect(r).toBeLessThanOrEqual(13.5 + 1e-9)
+    }
+  })
+
+  it('spreads centres evenly per unit area across the annulus', () => {
+    /*
+      Uniform per unit area means the median radius splits the ring's AREA in
+      half, not its width. For 10 to 13.5 that is sqrt((100 + 182.25) / 2) =
+      11.88, which is above the midpoint of 11.75. Sampling the radius uniformly
+      instead would land the median on 11.75 and crowd the inner edge.
+    */
+    const centres = clusterCentres({
+      clusters: 4000,
+      radius: 14.5,
+      centreMinRadius: 10,
+      centreMaxRadius: 13.5,
+      seed: 11,
+    })
+    const radii = centres.map(([x, z]) => Math.hypot(x, z)).sort((a, b) => a - b)
+    const median = radii[Math.floor(radii.length / 2)]
+    expect(median).toBeCloseTo(Math.sqrt((100 + 13.5 * 13.5) / 2), 1)
+  })
+
+  it('lets two layers share one set of patches', () => {
+    /*
+      Pebbles pool around boulders. Sampling the two layers independently would
+      fill each other's gaps and average back out to uniform, which is the exact
+      look the clustering exists to avoid.
+    */
+    const centres = clusterCentres({
+      clusters: 6,
+      radius: 14.5,
+      centreMinRadius: 10,
+      centreMaxRadius: 13.5,
+      seed: 5,
+    })
+    const boulders = clusteredPlacements({
+      count: 30, radius: 14.5, minRadius: 9, centres, clusterRadius: 1.6, seed: 5,
+    })
+    const pebbles = clusteredPlacements({
+      count: 90, radius: 15, minRadius: 8.5, centres, clusterRadius: 2.6, seed: 17,
+    })
+
+    // Every pebble is within a debris halo of some boulder clump.
+    for (const p of pebbles) {
+      const nearest = Math.min(...centres.map(([cx, cz]) => Math.hypot(p.x - cx, p.z - cz)))
+      expect(nearest).toBeLessThanOrEqual(2.6 + 1e-9)
+    }
+    expect(boulders.length).toBeGreaterThan(0)
+  })
+})
+
+describe('the clear-middle thinning regression', () => {
+  /*
+    The bug: cluster centres were sampled over the whole disc while only
+    individual MEMBERS were tested against minRadius. Ask for clumps between
+    radius 9 and 14.5 on an island of radius 16 and most centres land in the
+    middle, every one of their members is rejected one at a time, and the caller
+    gets back a fraction of what it asked for with a count that changes with the
+    seed. Nothing throws and nothing logs; the boulders are simply missing.
+  */
+  const spec = {
+    count: 300,
+    radius: 14.5,
+    clusterRadius: 1.6,
+    minRadius: 9.0,
+    seed: 5,
+  }
+
+  it('fills the requested count when the middle is kept clear', () => {
+    const items = clusteredPlacements({
+      ...spec,
+      clusters: 60,
+      centreMinRadius: 10.0,
+      centreMaxRadius: 13.5,
+    })
+    expect(items.length).toBeGreaterThanOrEqual(spec.count * 0.95)
+  })
+
+  it('is stable across seeds rather than varying with them', () => {
+    const counts = [1, 2, 3, 4, 5, 6, 7, 8].map(
+      (seed) =>
+        clusteredPlacements({
+          ...spec,
+          seed,
+          clusters: 60,
+          centreMinRadius: 10.0,
+          centreMaxRadius: 13.5,
+        }).length,
+    )
+    for (const n of counts) expect(n).toBeGreaterThanOrEqual(spec.count * 0.95)
+  })
+
+  it('demonstrates the thinning that whole-disc centres produce', () => {
+    // The same request without the annulus bounds, which is what the old code
+    // could express. Kept as a test so the fix cannot be quietly reverted.
+    const naive = clusteredPlacements({ ...spec, clusters: 60 })
+    const fixed = clusteredPlacements({
+      ...spec,
+      clusters: 60,
+      centreMinRadius: 10.0,
+      centreMaxRadius: 13.5,
+    })
+    expect(naive.length).toBeLessThan(fixed.length * 0.8)
   })
 })

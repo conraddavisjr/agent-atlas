@@ -13,12 +13,39 @@
  * look this exists to avoid.
  */
 
-export type Exclusion = {
+/**
+ * An area nothing is planted in.
+ *
+ * Two shapes, because the level has both. A circle is the right description of
+ * a puck, a plinth or a pylon foot. A rectangle is the right description of a
+ * deck, and describing one with a circle is not merely imprecise: clearing the
+ * 12 x 4 approach deck with a circle needs radius 7.0 and therefore also strips
+ * three metres of lawn at each corner that nothing was ever going to grow
+ * through. Four bare corners on the biggest deck in the scene is visible.
+ *
+ * Discriminated by the presence of `radius` rather than by a tag field, so
+ * every existing circle literal in the codebase keeps type-checking unchanged.
+ */
+export type Exclusion = CircleExclusion | RectExclusion
+
+export type CircleExclusion = {
   /** Centre on the ground plane. */
   x: number
   z: number
   /** Nothing is placed within this distance of the centre. */
   radius: number
+}
+
+export type RectExclusion = {
+  /** Centre on the ground plane. */
+  x: number
+  z: number
+  /** Half-extent along the rectangle's own X axis. */
+  halfX: number
+  /** Half-extent along the rectangle's own Z axis. */
+  halfZ: number
+  /** Yaw of the rectangle about the vertical axis, in radians. */
+  rotation?: number
 }
 
 export type Placement = {
@@ -60,9 +87,78 @@ function isBlocked(x: number, z: number, exclusions: Exclusion[]) {
   for (const e of exclusions) {
     const dx = x - e.x
     const dz = z - e.z
-    if (dx * dx + dz * dz < e.radius * e.radius) return true
+    if ('radius' in e) {
+      if (dx * dx + dz * dz < e.radius * e.radius) return true
+      continue
+    }
+    // Rotate the point into the rectangle's own frame rather than rotating the
+    // rectangle. One sin and one cos against four corner transforms, and the
+    // inside test is then two comparisons.
+    let lx = dx
+    let lz = dz
+    if (e.rotation) {
+      const s = Math.sin(-e.rotation)
+      const c = Math.cos(-e.rotation)
+      lx = dx * c - dz * s
+      lz = dx * s + dz * c
+    }
+    if (Math.abs(lx) < e.halfX && Math.abs(lz) < e.halfZ) return true
   }
   return false
+}
+
+export type CentreOptions = {
+  /** How many patches to spread items across. */
+  clusters: number
+  /** Outer radius of the plantable area, and the default outer centre bound. */
+  radius: number
+  /** Innermost radius a patch centre may land on. */
+  centreMinRadius?: number
+  /** Outermost radius a patch centre may land on. Defaults to `radius`. */
+  centreMaxRadius?: number
+  seed: number
+}
+
+/**
+ * Where the patches are, on their own.
+ *
+ * Exported so two layers can share one set of centres, which is the difference
+ * between pebbles that pool around the boulders and pebbles sprinkled over the
+ * whole island. Two independently sampled layers average back out to uniform,
+ * which is the failure this whole module exists to avoid, and it is a failure
+ * that reads as clutter rather than as an obvious bug.
+ *
+ * Sampled in an annulus rather than over the whole disc. The naive form,
+ * `sqrt(rand()) * radius`, is uniform per unit area over a full disc and has no
+ * way to express "patches belong at the rim". Asking for boulder clumps between
+ * radius 10 and 13.5 with that form puts most centres in the middle of the
+ * island, every member of those clumps then fails the `minRadius` test one at a
+ * time, and the caller silently gets a third of what it asked for with a count
+ * that moves whenever the seed does.
+ *
+ * The annulus form below is the same uniform-per-unit-area property restricted
+ * to the ring: the CDF of radius on an annulus is (r^2 - a^2) / (b^2 - a^2), so
+ * inverting it is exactly the square root of a linear interpolation between the
+ * two squared radii.
+ */
+export function clusterCentres({
+  clusters,
+  radius,
+  centreMinRadius = 0,
+  centreMaxRadius,
+  seed,
+}: CentreOptions): [number, number][] {
+  const rand = mulberry32(seed)
+  const rMin = Math.max(0, centreMinRadius)
+  const rMax = Math.max(rMin, centreMaxRadius ?? radius)
+
+  const centres: [number, number][] = []
+  for (let i = 0; i < clusters; i++) {
+    const r = Math.sqrt(rMin * rMin + rand() * (rMax * rMax - rMin * rMin))
+    const a = rand() * Math.PI * 2
+    centres.push([Math.cos(a) * r, Math.sin(a) * r])
+  }
+  return centres
 }
 
 export type ClusterOptions = {
@@ -70,10 +166,27 @@ export type ClusterOptions = {
   count: number
   /** Outer radius of the plantable area. */
   radius: number
-  /** How many patches to spread them across. */
-  clusters: number
+  /**
+   * How many patches to spread them across.
+   *
+   * Ignored when `centres` is supplied, which is the only case where it may be
+   * left out.
+   */
+  clusters?: number
   /** Radius of a single patch. */
   clusterRadius: number
+  /**
+   * Reuse centres from another layer instead of sampling new ones.
+   *
+   * The point is not to save the sampling. It is that two layers sharing
+   * centres read as one event - a boulder that broke and left its debris - and
+   * two layers with their own centres read as two unrelated sprinklings.
+   */
+  centres?: [number, number][]
+  /** Innermost radius a patch centre may land on. See `clusterCentres`. */
+  centreMinRadius?: number
+  /** Outermost radius a patch centre may land on. Defaults to `radius`. */
+  centreMaxRadius?: number
   exclusions?: Exclusion[]
   seed: number
   /** Scale range, before per-instance variation. */
@@ -96,31 +209,50 @@ export type ClusterOptions = {
 export function clusteredPlacements({
   count,
   radius,
-  clusters,
+  clusters = 0,
   clusterRadius,
+  centres: sharedCentres,
+  centreMinRadius,
+  centreMaxRadius,
   exclusions = [],
   seed,
   minScale = 0.7,
   maxScale = 1.3,
   minRadius = 0,
 }: ClusterOptions): Placement[] {
-  const rand = mulberry32(seed)
   const out: Placement[] = []
 
-  // Patch centres. Sampled on sqrt so the patches themselves are spread evenly
-  // per unit area rather than crowding into the middle of the island.
-  const centres: [number, number][] = []
-  for (let i = 0; i < clusters; i++) {
-    const r = Math.sqrt(rand()) * radius
-    const a = rand() * Math.PI * 2
-    centres.push([Math.cos(a) * r, Math.sin(a) * r])
-  }
+  const centres =
+    sharedCentres ??
+    clusterCentres({ clusters, radius, centreMinRadius, centreMaxRadius, seed })
   if (centres.length === 0) return out
+
+  /*
+    Decorrelated from the centre stream on purpose. `clusterCentres` runs its
+    own generator from the same seed, so drawing members from `mulberry32(seed)`
+    would make the nth member's radius the same number as the nth centre's
+    radius, and a layer whose members mirror the shape of its own centres has a
+    structure nobody asked for. The constant is the golden-ratio hash three and
+    most of the noise literature use for exactly this.
+  */
+  const rand = mulberry32(seed ^ 0x9e3779b9)
 
   const perCluster = Math.ceil(count / centres.length)
 
   for (const [cx, cz] of centres) {
-    for (let i = 0; i < perCluster && out.length < count; i++) {
+    /*
+      Bounded retries rather than one attempt per member.
+
+      Without this a member rejected for straying past the island edge or into a
+      deck is simply lost, so a patch that overlaps anything comes back thinner
+      than its neighbours and the caller's count becomes a suggestion. Four
+      attempts is enough to fill a patch that is half blocked and is still a
+      hard bound, so a fully blocked area comes back empty rather than hanging.
+    */
+    let placed = 0
+    for (let attempt = 0; attempt < perCluster * 4 && placed < perCluster; attempt++) {
+      if (out.length >= count) return out
+
       // The smaller of two samples, which concentrates members toward the
       // centre and leaves the edge of a patch thinning out rather than stopping.
       const t = Math.min(rand(), rand())
@@ -133,6 +265,7 @@ export function clusteredPlacements({
       if (distance > radius || distance < minRadius) continue
       if (isBlocked(x, z, exclusions)) continue
 
+      placed++
       out.push({
         x,
         z,
