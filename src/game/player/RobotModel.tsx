@@ -1,8 +1,27 @@
 import { useRef, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
-import { RoundedBox } from '@react-three/drei'
 import { palette } from '@/art/palette'
-import { GLOW, emissive, mattePlastic, metal, plastic, rubber } from '@/art/materials'
+import { GLOW, emissive } from '@/art/materials'
+import { useQuality } from '@/art/useQuality'
+import type { QualitySettings } from '@/art/quality'
+import {
+  AntennaLower,
+  AntennaUpper,
+  Backpack,
+  CapeSegment,
+  ChestPanel,
+  Diaper,
+  EarPod,
+  FacePlate,
+  Foot,
+  Hand,
+  HandProp,
+  HeadShell,
+  Helmet,
+  Shin,
+  Torso,
+  UpperArm,
+} from './robotParts'
 import {
   createAnimRuntime,
   createGroundSample,
@@ -14,6 +33,7 @@ import {
   type Pose,
   type Vec3,
 } from './robotPose'
+import { CAPE } from './animTuning'
 import { applyPose, createRigRefs, type RigRefs } from './rig'
 import type { RobotAnimState } from './robotAnim'
 import type { SocketName } from '@/state/types'
@@ -22,20 +42,23 @@ import type { SocketName } from '@/state/types'
  * The robot, built entirely from primitives.
  *
  * Design intent, and the reason it does not resemble Astro: a rounded boxy head
- * with a single horizontal LED visor bar, a warm amber accent on an off-white
- * shell, and a stubby antenna. Specifically avoided are the chrome sphere head,
- * the two round blue eyes, and the blue-and-white livery, all of which are the
- * recognisable marks of that character.
+ * with a single horizontal cyan visor bar on a near-black plate, a warm amber
+ * accent on an off-white shell, and an off-centre antenna. Specifically avoided
+ * are the chrome sphere head, the two round blue eyes, and the blue-and-white
+ * livery, all of which are the recognisable marks of that character.
  *
- * What we do borrow is the principle rather than the design: a compact frame with
- * a low centre of gravity, and locomotion that reads as a toddler's waddle. With
- * no skeleton, that charm has to come from whole-body motion.
+ * What we borrow is the principle rather than the design. A compact frame with
+ * a low centre of gravity, and locomotion that reads as a toddler's waddle. The
+ * proportions are the whole of it: 1.36 m over a 0.54 m head is 2.52
+ * head-heights, and the head at 0.72 wide is 1.16 times the widest band below
+ * the neck. A head wider than the torso at every height is what makes a shape
+ * read as an infant rather than as a short adult, and it matters more than the
+ * head-height ratio does.
  *
- * This component is deliberately JSX, refs, and a `useFrame` of two calls. Every
- * piece of arithmetic that used to live here is now in `robotPose.ts`, where it
- * is a pure function of state and time and is unit tested, and `rig.ts` writes
- * the result onto these nodes. See the header of `robotPose.ts` for why that
- * split is worth two extra files.
+ * This component is the rig and nothing else: which node parents which, and
+ * which ref goes where. What the parts are made of is `robotParts.tsx`, the
+ * arithmetic is `robotPose.ts`, and writing the result onto these nodes is
+ * `rig.ts`.
  */
 export function RobotModel({
   anim,
@@ -44,6 +67,8 @@ export function RobotModel({
   anim: RefObject<RobotAnimState>
   cosmetics: Partial<Record<SocketName, string>>
 }) {
+  const quality = useQuality()
+
   /*
     One struct of node refs rather than a `useRef` each.
 
@@ -81,54 +106,44 @@ export function RobotModel({
 
   return (
     <group ref={(o) => void (rigRef.current!.root = o)}>
-      <group ref={(o) => void (rigRef.current!.hips = o)}>
-        <group ref={(o) => void (rigRef.current!.chest = o)}>
-          {/* Torso. Rounded box rather than a capsule so the silhouette reads as a
-              manufactured object rather than a blob. */}
-          <RoundedBox args={[0.62, 0.6, 0.44]} radius={0.16} smoothness={4} position={[0, 0.62, 0]} castShadow>
-            <meshPhysicalMaterial {...plastic(palette.shell)} />
-          </RoundedBox>
+      <group ref={(o) => void (rigRef.current!.hips = o)} position={at(REST.hips)}>
+        <Diaper quality={quality} />
 
-          {/* Amber chest panel. The single accent, kept to one place so it stays a
-              focal point instead of decoration. */}
-          <RoundedBox args={[0.3, 0.22, 0.06]} radius={0.05} smoothness={3} position={[0, 0.66, 0.22]} castShadow>
-            <meshPhysicalMaterial {...plastic(palette.accent)} />
-          </RoundedBox>
+        <group ref={(o) => void (rigRef.current!.chest = o)} position={at(REST.chest)}>
+          <Torso quality={quality} />
+          <ChestPanel />
+
+          <group ref={(o) => void (rigRef.current!.backpack = o)} position={at(REST.backpack)}>
+            <Backpack />
+          </group>
+
+          {/* Back socket, for the cape. Coincident with the backpack, which is
+              what the cape hangs off. */}
+          <group position={at(REST.capeRoot)}>{cosmetics.back === 'cape' && <Cape rigRef={rigRef} />}</group>
+
+          <Arm side="L" rigRef={rigRef}>
+            {cosmetics.hand_l ? <HandProp /> : <Hand quality={quality} />}
+          </Arm>
+          <Arm side="R" rigRef={rigRef}>
+            {cosmetics.hand_r ? <HandProp /> : <Hand quality={quality} />}
+          </Arm>
 
           {/* A zero-length pivot between chest and head, so the head can spring
               against the torso without inheriting the torso's own lag twice. */}
           <group ref={(o) => void (rigRef.current!.neck = o)} position={at(REST.neck)}>
             <group ref={(o) => void (rigRef.current!.head = o)} position={at(REST.head)}>
-              <RoundedBox args={[0.56, 0.44, 0.46]} radius={0.14} smoothness={4} castShadow>
-                <meshPhysicalMaterial {...plastic(palette.shell)} />
-              </RoundedBox>
+              <HeadShell quality={quality} />
+              <Face />
 
-              {/* The visor bar, and the one thing on the character that glows.
-                  GLOW.bloom is 1.25 times the bloom threshold, which for cyan is an
-                  emissiveIntensity of 3.46. The 2.4 this replaces reached 1.517
-                  against a threshold of 1.75, so the comment claiming it pushed past
-                  the threshold had never been true. */}
-              <RoundedBox args={[0.42, 0.1, 0.04]} radius={0.03} smoothness={3} position={[0, 0.02, 0.235]}>
-                <meshPhysicalMaterial {...emissive(palette.visor, GLOW.bloom)} />
-              </RoundedBox>
+              <EarPodNode side="L" rigRef={rigRef} quality={quality} />
+              <EarPodNode side="R" rigRef={rigRef} quality={quality} />
 
-              {/* Antenna, split into two nodes so the chain can whip on impact. */}
               <group ref={(o) => void (rigRef.current!.antennaBase = o)} position={at(REST.antennaBase)}>
-                <mesh castShadow>
-                  <cylinderGeometry args={[0.018, 0.018, 0.2, 8]} />
-                  <meshPhysicalMaterial {...metal(palette.rock)} />
-                </mesh>
+                <AntennaLower />
                 <group ref={(o) => void (rigRef.current!.antennaMid = o)} position={at(REST.antennaMid)}>
-                  <mesh>
-                    <sphereGeometry args={[0.045, 12, 12]} />
-                    <meshPhysicalMaterial {...emissive(palette.accent, GLOW.bloom)} />
-                  </mesh>
+                  <AntennaUpper />
                 </group>
               </group>
-
-              {/* Ear pods, which break up the boxy head silhouette. */}
-              <EarPod side="L" rigRef={rigRef} />
-              <EarPod side="R" rigRef={rigRef} />
 
               {/* Head socket, for the helmet earned after the first zone.
 
@@ -136,15 +151,9 @@ export function RobotModel({
                   that only exists once its cosmetic is earned changes the child
                   order of everything below it, so the pose would start landing in
                   the wrong nodes at the exact moment a player unlocked something. */}
-              <group position={[0, 0.24, 0]}>{cosmetics.head === 'helmet' && <Helmet />}</group>
+              <group position={[0, 0.3, 0]}>{cosmetics.head === 'helmet' && <Helmet />}</group>
             </group>
           </group>
-
-          {/* Back socket, for the cape. */}
-          <group position={at(REST.capeRoot)}>{cosmetics.back === 'cape' && <Cape />}</group>
-
-          <Arm side="L" rigRef={rigRef}>{cosmetics.hand_l && <HandProp />}</Arm>
-          <Arm side="R" rigRef={rigRef}>{cosmetics.hand_r && <HandProp />}</Arm>
         </group>
 
         {/* Legs. Short and wide-set, which is what gives the low centre of gravity
@@ -161,30 +170,70 @@ function at(v: Vec3): [number, number, number] {
   return [v.x, v.y, v.z]
 }
 
-function EarPod({ side, rigRef }: { side: 'L' | 'R'; rigRef: RefObject<RigRefs | null> }) {
+/**
+ * The face: the plate, and the glyph 0.020 m in front of it.
+ *
+ * Two layers rather than one because a glowing bar painted onto white plastic
+ * reads as a decal. The plate is what makes it read as a lit element behind
+ * glass, and it is the surface that carries more of this character's identity
+ * than anything else on it.
+ *
+ * The bar sits 0.027 m below the plate's centre, which is 57% of the way down
+ * it. Low on the face is the infantile placement and it is not a detail: eyes
+ * at the vertical centre read as an adult on any head shape.
+ */
+function Face() {
   return (
-    <group
-      ref={(o) => void (side === 'L' ? (rigRef.current!.earPodL = o) : (rigRef.current!.earPodR = o))}
-      position={at(side === 'L' ? REST.earPodL : REST.earPodR)}
-    >
-      <mesh rotation={[0, 0, Math.PI / 2]} castShadow>
-        <cylinderGeometry args={[0.08, 0.08, 0.06, 12]} />
-        <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+    <group position={[0, -0.045, 0.305]}>
+      <FacePlate />
+      {/*
+        One continuous horizontal slot, spanning 0.274 m of a 0.56 m plate.
+        Close the character's eyes and there is still a cyan line, which is the
+        identity: the reference's character loses its eyes on a blink and this
+        one must not.
+      */}
+      <mesh position={[0, -0.027, 0.02]}>
+        <planeGeometry args={[0.274, 0.034]} />
+        <meshPhysicalMaterial {...emissive(palette.visor, GLOW.bloom)} />
       </mesh>
     </group>
   )
 }
 
-function Arm({ side, rigRef, children }: { side: 'L' | 'R'; rigRef: RefObject<RigRefs | null>; children?: React.ReactNode }) {
+function EarPodNode({
+  side,
+  rigRef,
+  quality,
+}: {
+  side: 'L' | 'R'
+  rigRef: RefObject<RigRefs | null>
+  quality: QualitySettings
+}) {
+  return (
+    <group
+      ref={(o) => void (side === 'L' ? (rigRef.current!.earPodL = o) : (rigRef.current!.earPodR = o))}
+      position={at(side === 'L' ? REST.earPodL : REST.earPodR)}
+    >
+      <EarPod quality={quality} />
+    </group>
+  )
+}
+
+function Arm({
+  side,
+  rigRef,
+  children,
+}: {
+  side: 'L' | 'R'
+  rigRef: RefObject<RigRefs | null>
+  children?: React.ReactNode
+}) {
   return (
     <group
       ref={(o) => void (side === 'L' ? (rigRef.current!.shoulderL = o) : (rigRef.current!.shoulderR = o))}
       position={at(side === 'L' ? REST.shoulderL : REST.shoulderR)}
     >
-      <mesh position={[0, -0.16, 0]} castShadow>
-        <capsuleGeometry args={[0.09, 0.18, 4, 12]} />
-        <meshPhysicalMaterial {...plastic(palette.accent)} />
-      </mesh>
+      <UpperArm />
       <group
         ref={(o) => void (side === 'L' ? (rigRef.current!.handSocketL = o) : (rigRef.current!.handSocketR = o))}
         position={at(side === 'L' ? REST.handSocketL : REST.handSocketR)}
@@ -198,10 +247,9 @@ function Arm({ side, rigRef, children }: { side: 'L' | 'R'; rigRef: RefObject<Ri
 /**
  * One leg, as leg -> knee -> foot.
  *
- * Three nodes rather than one even though nothing bends the knee yet, because
- * foot IK needs a joint between the hip and the sole to absorb a height
- * difference, and adding it later would mean re-deriving the swing offsets
- * against a different parent.
+ * Three nodes rather than one because foot IK needs a joint between the hip and
+ * the sole to absorb a height difference, and the ground-normal tilt has to be
+ * applied below the leg's own toe-out splay or it reads through the wrong pivot.
  */
 function Leg({ side, rigRef }: { side: 'L' | 'R'; rigRef: RefObject<RigRefs | null> }) {
   return (
@@ -209,54 +257,45 @@ function Leg({ side, rigRef }: { side: 'L' | 'R'; rigRef: RefObject<RigRefs | nu
       ref={(o) => void (side === 'L' ? (rigRef.current!.legL = o) : (rigRef.current!.legR = o))}
       position={at(side === 'L' ? REST.legL : REST.legR)}
     >
-      <group ref={(o) => void (side === 'L' ? (rigRef.current!.kneeL = o) : (rigRef.current!.kneeR = o))}>
-        <mesh position={[0, -0.1, 0]} castShadow>
-          <capsuleGeometry args={[0.095, 0.1, 4, 12]} />
-          <meshPhysicalMaterial {...mattePlastic(palette.shellShadow)} />
-        </mesh>
+      <group
+        ref={(o) => void (side === 'L' ? (rigRef.current!.kneeL = o) : (rigRef.current!.kneeR = o))}
+        position={at(side === 'L' ? REST.kneeL : REST.kneeR)}
+      >
+        <Shin />
         <group
           ref={(o) => void (side === 'L' ? (rigRef.current!.footL = o) : (rigRef.current!.footR = o))}
           position={at(side === 'L' ? REST.footL : REST.footR)}
         >
-          <RoundedBox args={[0.22, 0.1, 0.3]} radius={0.04} smoothness={3} castShadow>
-            <meshPhysicalMaterial {...rubber(palette.lockedDeep)} />
-          </RoundedBox>
+          <Foot />
         </group>
       </group>
     </group>
   )
 }
 
-/** Earned after the first zone. Deliberately simple; it only has to read clearly. */
-function Helmet() {
+/**
+ * The cape, as a four-segment chain rather than one plane.
+ *
+ * A skinned cape would need weights, which would need authoring, which would
+ * need a binary asset this project does not have. A chain of rigid quads each
+ * driven by its own spring gives more controllable secondary motion for less
+ * work, and it is the correct read anyway: this world replaces cloth with
+ * vinyl, so visible joins between rigid panels are the point rather than a
+ * compromise.
+ */
+function Cape({ rigRef }: { rigRef: RefObject<RigRefs | null> }) {
   return (
-    <group>
-      <mesh castShadow>
-        <sphereGeometry args={[0.32, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2]} />
-        <meshPhysicalMaterial {...plastic(palette.unlocked)} side={2} />
-      </mesh>
-      <mesh position={[0, 0.12, 0]} rotation={[0, 0, 0]} castShadow>
-        <boxGeometry args={[0.06, 0.16, 0.34]} />
-        <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
-      </mesh>
+    <group ref={(o) => void (rigRef.current!.cape[0] = o)}>
+      <CapeSegment length={CAPE.segmentLength} />
+      <group ref={(o) => void (rigRef.current!.cape[1] = o)}>
+        <CapeSegment length={CAPE.segmentLength} />
+        <group ref={(o) => void (rigRef.current!.cape[2] = o)}>
+          <CapeSegment length={CAPE.segmentLength} />
+          <group ref={(o) => void (rigRef.current!.cape[3] = o)}>
+            <CapeSegment length={CAPE.segmentLength} />
+          </group>
+        </group>
+      </group>
     </group>
-  )
-}
-
-function Cape() {
-  return (
-    <mesh position={[0, -0.18, -0.04]} rotation={[0.18, 0, 0]} castShadow>
-      <planeGeometry args={[0.6, 0.7]} />
-      <meshPhysicalMaterial {...mattePlastic(palette.token)} side={2} />
-    </mesh>
-  )
-}
-
-function HandProp() {
-  return (
-    <mesh castShadow>
-      <sphereGeometry args={[0.1, 12, 12]} />
-      <meshPhysicalMaterial {...plastic(palette.shell)} />
-    </mesh>
   )
 }

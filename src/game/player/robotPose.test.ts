@@ -5,14 +5,17 @@ import {
   createPose,
   JOINT_KEYS,
   nextRandom,
+  PROPORTIONS,
   randomRange,
+  REST,
+  REST_ROTATION,
   resetPose,
   stepAnim,
   type GroundSample,
   type Pose,
 } from './robotPose'
 import { createRobotAnimState, type RobotAnimState } from './robotAnim'
-import { WADDLE } from './tuning'
+import { BODY, WADDLE } from './tuning'
 import { TURN_ANIM } from './animTuning'
 
 const DT = 1 / 60
@@ -44,6 +47,114 @@ function run(seed: number, frames: number, at: (i: number) => RobotAnimState, gr
   for (let i = 0; i < frames; i++) stepAnim(rt, at(i), g, DT, pose)
   return flattenPose(pose)
 }
+
+/*
+  The guard that stops a future edit un-toying the character.
+
+  The proportion change is the whole point of the character work, and it is
+  exactly the kind of thing undone six months later by someone fixing an
+  unrelated problem and thinking the head looks too big. It does look too big.
+  That is the design.
+*/
+describe('proportions', () => {
+  it('is between 2.45 and 2.85 head-heights', () => {
+    const ratio = PROPORTIONS.totalHeight / PROPORTIONS.headHeight
+    expect(ratio).toBeGreaterThanOrEqual(2.45)
+    expect(ratio).toBeLessThanOrEqual(2.85)
+  })
+
+  it('gives the head 37 to 48 per cent of the silhouette', () => {
+    const fraction = PROPORTIONS.headHeight / PROPORTIONS.totalHeight
+    expect(fraction).toBeGreaterThanOrEqual(0.37)
+    expect(fraction).toBeLessThanOrEqual(0.48)
+  })
+
+  /*
+    The single most important assertion in this file.
+
+    A head wider than the body is what makes a shape read as an infant rather
+    than as a short adult, and it matters more than the head-height ratio. The
+    model this replaced had a 0.56 head on a 0.62 torso, which is the same
+    relationship inverted, and that one number is most of why it read as a small
+    robot instead of as a toy.
+  */
+  it('keeps the head wider than the widest band below it', () => {
+    expect(PROPORTIONS.headWidth).toBeGreaterThan(PROPORTIONS.torsoWidthMax)
+    expect(PROPORTIONS.headWidth / PROPORTIONS.torsoWidthMax).toBeGreaterThanOrEqual(1.1)
+  })
+
+  it('fits the frozen capsule with headroom', () => {
+    // The capsule is 2 * (halfHeight + radius) tall and PlayerController offsets
+    // the visual group so model y = 0 sits at its bottom pole.
+    const capsuleHeight = 2 * (BODY.capsuleHalfHeight + BODY.capsuleRadius)
+    expect(PROPORTIONS.totalHeight).toBeGreaterThanOrEqual(1.3)
+    expect(PROPORTIONS.totalHeight).toBeLessThanOrEqual(1.42)
+    expect(PROPORTIONS.totalHeight).toBeLessThan(capsuleHeight)
+    // Slack, so the head never visually intersects a ceiling the capsule has
+    // already stopped against.
+    expect(capsuleHeight - PROPORTIONS.totalHeight).toBeGreaterThan(0.02)
+  })
+
+  it('puts the sole plane at the model origin', () => {
+    // The contact shadow, the foot IK and the VFX emitters all assume this, and
+    // it is the reason they can share one coordinate convention.
+    expect(PROPORTIONS.soleY).toBe(0)
+    // Foot centre plus half the foot's 0.17 height lands on it.
+    const footWorldY = REST.hips.y + REST.legL.y + REST.kneeL.y + REST.footL.y
+    expect(footWorldY - 0.085).toBeCloseTo(PROPORTIONS.soleY, 9)
+  })
+
+  it('stays symmetric left to right', () => {
+    expect(REST.legL.x).toBe(-REST.legR.x)
+    expect(REST.shoulderL.x).toBe(-REST.shoulderR.x)
+    expect(REST.earPodL.x).toBe(-REST.earPodR.x)
+    expect(REST_ROTATION.shoulderL!.z).toBe(-REST_ROTATION.shoulderR!.z)
+    expect(REST_ROTATION.legL!.y).toBe(-REST_ROTATION.legR!.y)
+  })
+
+  it('accumulates up the spine to the head band', () => {
+    const hips = REST.hips.y
+    const chest = hips + REST.chest.y
+    const neck = chest + REST.neck.y
+    const head = neck + REST.head.y
+    expect(hips).toBeCloseTo(0.52, 9)
+    expect(chest).toBeCloseTo(0.74, 9)
+    expect(neck).toBeCloseTo(0.89, 9)
+    expect(head).toBeCloseTo(1.09, 9)
+    // The head shell is centred on that, so the crown is the silhouette top.
+    expect(head + PROPORTIONS.headHeight / 2).toBeCloseTo(PROPORTIONS.totalHeight, 9)
+  })
+
+  /*
+    The arms must angle away from the body, or the fully enclosed white wedge
+    between arm and torso closes and the character becomes one blob at distance.
+    Asserted on the resulting hand position rather than on the sign of a
+    rotation, because the sign is exactly what the design spec gets wrong in one
+    of the two places it states it.
+  */
+  it('swings the hands outboard of the shoulders at rest', () => {
+    // Rotating (0, -0.34) about Z by t gives x' = -sin(t) * (-0.34).
+    const handX = (shoulderX: number, restZ: number) =>
+      shoulderX - Math.sin(restZ) * REST.handSocketL.y
+    const left = handX(REST.shoulderL.x, REST_ROTATION.shoulderL!.z)
+    const right = handX(REST.shoulderR.x, REST_ROTATION.shoulderR!.z)
+    expect(left).toBeLessThan(REST.shoulderL.x)
+    expect(right).toBeGreaterThan(REST.shoulderR.x)
+  })
+
+  it('keeps a gap between the feet at rest', () => {
+    // Feet are 0.32 wide, so a 0.19 half-separation leaves 0.06 of daylight.
+    // Feet that touch read as a pedestal rather than as legs.
+    const gap = (REST.legR.x - REST.legL.x) - 0.32
+    expect(gap).toBeGreaterThanOrEqual(0.06)
+  })
+
+  it('keeps the antenna off centre', () => {
+    // One asymmetric feature is what stops the silhouette reading as a product
+    // shot, so this is a design assertion rather than a sanity check.
+    expect(Math.abs(REST.antennaBase.x)).toBeGreaterThan(0.1)
+  })
+})
 
 describe('the pose buffer', () => {
   it('starts at identity with neutral scales', () => {

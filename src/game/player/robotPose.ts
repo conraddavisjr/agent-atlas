@@ -52,39 +52,98 @@ export type Vec3 = { x: number; y: number; z: number }
  * anything is. Moving a limb cannot break the animation that drives it, and an
  * animation cannot silently depend on a coordinate it was never told about.
  */
+/**
+ * The measurements the silhouette depends on.
+ *
+ * Its own exported block so `robotPose.test.ts` can assert on it, which is what
+ * stops a future "make the head smaller, it looks weird" commit quietly
+ * un-toying the character. The proportion change is the whole point of the
+ * character work and it is exactly the kind of thing that gets undone by
+ * someone fixing a different problem.
+ *
+ * Chosen against the reference brief's two measurements, which do not agree
+ * with each other: 2.5-2.8 head-heights, and a head that is 40-48% of the
+ * silhouette. Those two bands overlap at a single point, because 2.5
+ * head-heights IS a 40% head. Both are marked as observed to plus or minus 10%,
+ * so it is measurement scatter rather than a contradiction, and the head-height
+ * ratio is taken as primary because it is the number that governs the read.
+ */
+export const PROPORTIONS = {
+  /** Sole to crown, excluding the antenna. */
+  totalHeight: 1.36,
+  headHeight: 0.54,
+  headWidth: 0.72,
+  /** The widest band below the neck, which is the diaper rather than the torso. */
+  torsoWidthMax: 0.62,
+  /** The sole plane sits at the model's own origin. */
+  soleY: 0,
+} as const
+
+/*
+  The antenna reaches 1.53 m and does not count toward the silhouette height,
+  because a thin protrusion does not read as mass. That is not a rounding
+  convenience: including it would give 2.83 head-heights, and the character
+  would be correct on paper and wrong on screen.
+*/
+
 export const REST = {
   root: { x: 0, y: 0, z: 0 },
-  hips: { x: 0, y: 0, z: 0 },
-  chest: { x: 0, y: 0, z: 0 },
-  neck: { x: 0, y: 0, z: 0 },
-  head: { x: 0, y: 1.12, z: 0 },
-  shoulderL: { x: -0.36, y: 0.78, z: 0 },
-  shoulderR: { x: 0.36, y: 0.78, z: 0 },
-  handSocketL: { x: 0, y: -0.36, z: 0 },
-  handSocketR: { x: 0, y: -0.36, z: 0 },
-  legL: { x: -0.17, y: 0.32, z: 0 },
-  legR: { x: 0.17, y: 0.32, z: 0 },
-  kneeL: { x: 0, y: 0, z: 0 },
-  kneeR: { x: 0, y: 0, z: 0 },
-  footL: { x: 0, y: -0.22, z: 0.04 },
-  footR: { x: 0, y: -0.22, z: 0.04 },
-  earPodL: { x: -0.3, y: 0, z: 0 },
-  earPodR: { x: 0.3, y: 0, z: 0 },
-  antennaBase: { x: 0.16, y: 0.28, z: 0 },
-  antennaMid: { x: 0, y: 0.12, z: 0 },
-  backpack: { x: 0, y: 0.78, z: -0.22 },
-  capeRoot: { x: 0, y: 0.78, z: -0.22 },
+  hips: { x: 0, y: 0.52, z: 0 },
+  /** Local to hips, so world 0.740. */
+  chest: { x: 0, y: 0.22, z: 0 },
+  /** Local to chest, so world 0.890. */
+  neck: { x: 0, y: 0.15, z: 0 },
+  /** Local to neck, so world 1.090. The head band spans 0.820 to 1.360. */
+  head: { x: 0, y: 0.2, z: 0 },
+  shoulderL: { x: -0.31, y: 0.13, z: 0 },
+  shoulderR: { x: 0.31, y: 0.13, z: 0 },
+  handSocketL: { x: 0, y: -0.34, z: 0 },
+  handSocketR: { x: 0, y: -0.34, z: 0 },
+  /** Local to hips, so world 0.380, which is the top of the leg band. */
+  legL: { x: -0.19, y: -0.14, z: 0 },
+  legR: { x: 0.19, y: -0.14, z: 0 },
+  kneeL: { x: 0, y: -0.13, z: 0 },
+  kneeR: { x: 0, y: -0.13, z: 0 },
+  /** World 0.085, and the foot is 0.17 tall, so the sole lands exactly on y = 0. */
+  footL: { x: 0, y: -0.165, z: 0.06 },
+  footR: { x: 0, y: -0.165, z: 0.06 },
+  earPodL: { x: -0.38, y: 0, z: -0.02 },
+  earPodR: { x: 0.38, y: 0, z: -0.02 },
+  /**
+   * Off-centre on purpose, and it is the one asymmetric feature on the
+   * character. A perfectly mirror-symmetric toy reads as a product shot; one
+   * thing out of line reads as a character.
+   */
+  antennaBase: { x: 0.2, y: 0.31, z: -0.04 },
+  antennaMid: { x: 0, y: 0.085, z: 0 },
+  backpack: { x: 0, y: 0.06, z: -0.29 },
+  capeRoot: { x: 0, y: 0.06, z: -0.29 },
 } as const satisfies Record<string, Vec3>
 
 /**
  * Rest rotations, for the joints that are not level at rest.
  *
- * Empty today. The proportion pass adds the outward arm splay that keeps the
- * negative-space wedge between arm and torso open, which is the single most
- * fragile part of the silhouette read, and the slight toe-out that stops the
- * stance reading as a mannequin's.
+ * Both entries exist to defend a specific feature of the silhouette.
+ *
+ * The arms angle OUTWARD, which is what keeps a fully enclosed white wedge open
+ * between each arm and the torso. That negative space is the single most
+ * fragile part of the read: arms pinned to the sides merge into the body and
+ * the whole character becomes one blob at any distance.
+ *
+ * The sign is not the one the design spec's `REST_ROTATION` block gives, and
+ * the spec contradicts itself about it: that block puts +0.22 on the left while
+ * its own silhouette checklist writes the pair as -+0.22. The physical answer
+ * settles it. `shoulderL` sits at x = -0.310 and its arm hangs down -Y, so a
+ * rotation about +Z carries the arm toward +X, which is into the body. Outward
+ * for the left shoulder is -0.22.
  */
-export const REST_ROTATION: Partial<Record<keyof typeof REST, Vec3>> = {}
+export const REST_ROTATION: Partial<Record<keyof typeof REST, Vec3>> = {
+  shoulderL: { x: 0, y: 0, z: -0.22 },
+  shoulderR: { x: 0, y: 0, z: 0.22 },
+  /** The feet toe out slightly. A perfectly parallel stance reads as a mannequin. */
+  legL: { x: 0, y: -0.1, z: 0 },
+  legR: { x: 0, y: 0.1, z: 0 },
+}
 
 // ---------------------------------------------------------------------------
 // 2. The pose

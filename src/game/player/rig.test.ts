@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { Object3D, Vector2 } from 'three'
 import { applyPose, createRigRefs, writeVisorUniforms, type RigRefs } from './rig'
-import { createPose, JOINT_KEYS, REST, type JointKey } from './robotPose'
+import { createPose, JOINT_KEYS, REST, REST_ROTATION, type JointKey } from './robotPose'
 import { CAPE } from './animTuning'
 
 /** A rig with a real Object3D behind every node. */
@@ -22,7 +22,9 @@ describe('applyPose', () => {
       expect(o.position.x, key).toBeCloseTo(rest.x, 12)
       expect(o.position.y, key).toBeCloseTo(rest.y, 12)
       expect(o.position.z, key).toBeCloseTo(rest.z, 12)
-      expect(o.rotation.x, key).toBe(0)
+      expect(o.rotation.x, key).toBe(REST_ROTATION[key]?.x ?? 0)
+      expect(o.rotation.y, key).toBe(REST_ROTATION[key]?.y ?? 0)
+      expect(o.rotation.z, key).toBe(REST_ROTATION[key]?.z ?? 0)
       expect(o.scale.x, key).toBe(1)
     }
   })
@@ -45,9 +47,12 @@ describe('applyPose', () => {
       for (const other of JOINT_KEYS) {
         const o = rig[other]!
         const rest = REST[other]
+        // Against the rest transform rather than against zero, because several
+        // joints are deliberately not level at rest.
+        const restRy = REST_ROTATION[other]?.y ?? 0
         const moved =
           Math.abs(o.position.x - rest.x) > 1e-9 ||
-          Math.abs(o.rotation.y) > 1e-9 ||
+          Math.abs(o.rotation.y - restRy) > 1e-9 ||
           Math.abs(o.scale.y - 1) > 1e-9
         expect(moved, `${key} drove ${other}`).toBe(other === key)
       }
