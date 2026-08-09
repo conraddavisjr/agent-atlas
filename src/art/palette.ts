@@ -23,19 +23,40 @@ export const palette = {
   /**
    * Hub island. Bright yellow-green rather than the previous blue-leaning
    * green, which is most of what separates a lawn from a field.
+   *
+   * Darkened into the gameplay value band. The greyscale test is the one that
+   * outranks the others: desaturate a frame and you must still read instantly
+   * where you can stand. The lawn and the stone deck used to sit at almost
+   * exactly the same luminance, 0.83 against 0.85, so a desaturated frame was
+   * one flat shape and the deck simply vanished into the field.
    */
-  grass: '#8fd94a',
-  grassDeep: '#4f9b2e',
+  grass: '#7dc244',
+  grassDeep: '#3f7a26',
   /** Blade tips, lighter again, so a dense field has depth rather than a flat top. */
-  grassTip: '#c2ea6e',
-  soil: '#b98a5e',
-  soilDeep: '#7d5738',
+  grassTip: '#86c04e',
+  /**
+   * Soil, moved down into the midground band.
+   *
+   * At its old value the island's rim sat inside the gameplay band, which is
+   * why the island read as having no thickness: the cliff face was the same
+   * value as the lawn on top of it, so the eye had nothing to separate them.
+   */
+  soil: '#6b4d31',
+  soilDeep: '#452f1c',
 
   /**
    * Stonework. A cool light grey with lilac and gold, which is the chip-block
    * scheme: grey substrate, coloured components, gold contacts.
    */
-  rock: '#d5d9e0',
+  /*
+    Stone, darkened out of the lawn's value band.
+
+    This is the other half of the same fix as the grass above, and the half
+    that actually closes it: at #d5d9e0 the deck measured 0.850 against a
+    ground texture at 0.830, so the two were indistinguishable in greyscale no
+    matter what the ground did on its own.
+  */
+  rock: '#b6bcc7',
   rockDeep: '#a7aebb',
   rockAccent: '#c3a8dd',
   gold: '#e8b84b',

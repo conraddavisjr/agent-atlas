@@ -165,3 +165,19 @@ From the reference brief, and meant literally rather than as a metaphor:
 `03-environment.md` confirms we fail it today and gives the numbers: `palette.rock` at luma 0.850 against a ground texture base near 0.83, so deck and lawn are the same value, and the island rim at 0.568 sits inside the gameplay band, which is why the island reads as having no thickness.
 
 Three bands, with real gaps between them: **gameplay 0.56-0.74, midground 0.20-0.38, background 0.76-0.86.**
+
+**These are DISPLAY-space luminances, not linear ones, and the difference matters enough to state.**
+The band test asks what the eye reads off the screen, so it is measured on gamma-encoded sRGB values, the same numbers an eyedropper on a screenshot returns.
+The bloom budget in section 1 is the opposite: it is measured in linear light, because that is what the threshold actually compares.
+The same hex sits at two very different numbers in the two spaces, and checking one against the other produces confident nonsense in both directions.
+
+Measured against the bands, the original values were not merely close together, they were **inverted**:
+
+| Surface | Was | Band it was in | Now | Band |
+| --- | --- | --- | --- | --- |
+| `rock`, the walkable deck | 0.850 | background | 0.735 | gameplay |
+| `grass`, the lawn | 0.749 | between | 0.668 | gameplay |
+| `soil`, the unwalkable cliff | 0.568 | gameplay | 0.319 | midground |
+
+A deck you stand on was reading as sky, and a cliff you cannot climb was reading as floor.
+That is the whole "I cannot tell where I am allowed to go" failure, in two hex values.
