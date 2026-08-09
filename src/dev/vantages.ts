@@ -68,7 +68,24 @@ export const CAPTURE_TIMES = [0, 7.3] as const
  * `playerAt` is a teleport target, not a resting position, so its y is the
  * surface it stands on plus 1.2. The capsule falls the remainder during the
  * settle frames `capture` runs before it freezes, which is also what lets the
- * landing squash relax.
+ * landing squash relax. It comes to rest with its centre 0.72 m above the
+ * surface, so a settled shot reads `playerAt[1] - 0.48` and a shot that still
+ * reads `playerAt[1]` was frozen before physics ran.
+ *
+ * **Three of these were re-sited after `__dev.framing()` was built**, which
+ * projects the character's bounds into the frame and reports what fraction of
+ * the height it spans. The header above is not being rhetorical: two of the six
+ * had genuinely stopped framing what their `judges` line claims, and both had
+ * been producing screenshots that looked like evidence the whole time. Current
+ * coverage, which is worth re-running after anything that changes the
+ * character's size:
+ *
+ *   hub-establishing  0.14   the character is a figure for scale, not a subject
+ *   hub-portal        0.38
+ *   hub-grazing       0.45
+ *   hub-backlit       0.55
+ *   hub-totem         0.61
+ *   hub-character     0.61
  *
  * Two of these deliberately sit at the same key azimuth. `atan2(9, 5)` is
  * 1.0637 rad, or 60.9 degrees measured from +Z toward +X, which is where the
@@ -125,13 +142,25 @@ export const VANTAGES: Record<string, Vantage> = {
    * looking back south-west, so the background is open lawn, the south rim and
    * sky rather than the rest of the Core: a silhouette judged against more
    * stone of the same value is not being judged at all.
+   *
+   * **Re-sited, because it had stopped being able to answer its own question.**
+   * At the original 3.67 m the character filled 1.125 of the frame height with
+   * his head cropped off the top, and `playerFacing` of 2.35 turned him away
+   * from the lens, so the visor - one of the four things this shot exists to
+   * judge - was not in the picture at all. Neither number was ever wrong: the
+   * character was re-proportioned to 2.52 head-heights partway through the art
+   * pass and grew past a frame that had been sized for the old one. That is the
+   * silent drift the header warns about, and `__dev.framing()` now measures it.
+   * 4.81 m and a facing 34 degrees off the camera axis put the whole figure in
+   * shot at 0.61 of frame height, three-quarter front, with both feet and the
+   * contact blob clear of the bottom edge.
    */
   'hub-character': {
-    position: [2.55, 1.75, 7.6],
-    lookAt: [0, 1.05, 5.05],
+    position: [4.13, 1.72, 9.21],
+    lookAt: [0, 1.15, 5.0],
     fov: 32,
     playerAt: [0, 1.6, 5.0],
-    playerFacing: 2.35,
+    playerFacing: 1.375,
     time: 0,
     judges: 'Character proportions and silhouette, shell material and its two specular lobes, visor, and above all whether the contact shadow makes it sit on the ground rather than hover.',
   },
@@ -161,13 +190,23 @@ export const VANTAGES: Record<string, Vantage> = {
    * walking in from the spawn meets. The player stands on the same lobe so a
    * white shell is in frame as the control: the acceptance is not "the totem
    * glows", it is "the totem glows and the shell beside it does not".
+   *
+   * **The control has to be visible for the comparison to mean anything, and it
+   * was not.** The old `playerAt` sat directly behind the totem on the
+   * camera's sightline, so the totem occluded the character from the chest
+   * down and the white shell - the entire point of standing him here - was
+   * hidden behind the object it was meant to be compared against. He now
+   * stands 1.35 m to the side, square-on to the lens, with the ring and the
+   * shell side by side at the same distance and the same light. The camera is
+   * also 0.65 m higher, because at the old height the totem's ring sat exactly
+   * across his waist.
    */
   'hub-totem': {
-    position: [-2.6, 1.7, 7.9],
-    lookAt: [-5.2, 1.05, 5.0],
+    position: [-1.9, 2.35, 8.9],
+    lookAt: [-5.3, 1.15, 5.2],
     fov: 38,
-    playerAt: [-6.3, 1.6, 4.3],
-    playerFacing: 1.08,
+    playerAt: [-6.0, 1.6, 5.9],
+    playerFacing: 1.54,
     time: 0,
     judges: 'Totem emissive intensity against the bloom threshold. Nothing except the emissive itself may glow.',
   },
@@ -187,13 +226,25 @@ export const VANTAGES: Record<string, Vantage> = {
    *
    * The camera bearing is `atan2(9, 5)` to three decimal places, which is the
    * key's own azimuth, so the subject sits exactly between the lens and the
-   * sun.
+   * sun. Moving the pair further out along that same bearing preserves it
+   * exactly, which is why the re-siting below is a slide rather than a
+   * re-aiming.
+   *
+   * **Moved 2.4 m further out, for room.** At the old 4.2 m the character
+   * filled 0.85 of the frame height, and a rim is judged on the silhouette
+   * EDGE against what is behind it - so a subject that nearly fills the frame
+   * leaves almost nothing to be separated from, which is the same objection
+   * the kerb note above makes about decks. Pulling the camera straight back
+   * along the bearing put it inside Puck A and filled a third of the frame
+   * with Core stone, so the whole vantage slid outward instead: the subject
+   * now stands at radius 13.3, still inside the 30-to-150 degree pylon window,
+   * with the horizon across his knees and open sky above the head.
    */
   'hub-backlit': {
-    position: [3.83, 1.35, 5.46],
-    lookAt: [7.5, 1.05, 7.5],
+    position: [3.78, 1.49, 6.59],
+    lookAt: [9.2, 1.15, 9.6],
     fov: 34,
-    playerAt: [7.5, 1.2, 7.5],
+    playerAt: [9.2, 1.2, 9.6],
     playerFacing: -1.33,
     time: 0,
     judges: 'Whether the rim reads at all, and whether anything other than an emissive has crossed the bloom threshold at a grazing angle.',
