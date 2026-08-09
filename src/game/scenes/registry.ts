@@ -44,16 +44,34 @@ export const SCENES: Record<string, SceneDefinition> = {
     Component: lazy(() => import('../world/HubIsland').then((m) => ({ default: m.HubIsland }))),
     lighting: 'hub',
     spawns: {
-      start: [0, 2, 8],
       /*
-        Arriving back from the cave puts you on the platform in front of the
-        portal, deliberately clear of its trigger radius. Spawning inside the
-        radius would re-fire the portal the moment the player materialised.
-        The useProximity first-frame guard also covers this, but keeping the
-        spawn geometrically clear means the two mechanisms are not relied on
-        to cancel each other out.
+        On the lawn at the south, facing the Core. Radius 11 from the origin,
+        comfortably inside the plateau's 16 and clear of Puck A's 6, so the
+        opening shot looks up the whole ziggurat: lawn, then the Core, then the
+        deck stack, then the portal.
       */
-      'from-cave': [9, 2, -3.2],
+      start: [0, 2, 11],
+      /*
+        Arriving back from the cave puts you on T3, the portal deck, and
+        deliberately clear of the portal's trigger radius. Spawning inside it
+        would re-fire the portal the moment the player materialised. The
+        useProximity first-frame guard also covers this, but keeping the spawn
+        geometrically clear means the two mechanisms are not relied on to
+        cancel each other out.
+
+        The old value of (9, 2, -3.2) was written against the portal's previous
+        home on a platform at x=9. Under the Foundry layout it drops the player
+        onto the east jump route, four metres in the air and nowhere near the
+        gate they just came through.
+
+        Two clearances, both checked rather than assumed. Against
+        INTERACTION.exitRadius of 3.1: the portal anchor is (0, 2.80, -14.5)
+        and after the 1.6 revival drop the feet rest at y 2.80, so the
+        separation is hypot(3.0, 0, 1.5) = 3.35, clear by 0.25. And against
+        T3's kerb: the player centre at x 3.0 plus the 0.35 capsule radius
+        reaches 3.35, where the kerb's inner face is at 4.00 - 0.36 = 3.64.
+      */
+      'from-cave': [3.0, 4.4, -13.0],
     },
     /*
       Taken from the palette rather than written out again here.
