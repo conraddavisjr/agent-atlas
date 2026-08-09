@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  clampTilt,
   createAnimRuntime,
   createGroundSample,
   createPose,
@@ -16,7 +17,7 @@ import {
 } from './robotPose'
 import { createRobotAnimState, type RobotAnimState } from './robotAnim'
 import { BODY, WADDLE } from './tuning'
-import { TURN_ANIM } from './animTuning'
+import { SHADOW, TURN_ANIM } from './animTuning'
 
 const DT = 1 / 60
 
@@ -574,6 +575,164 @@ describe('the squash spring', () => {
     for (let i = 0; i < 200; i++) stepAnim(rt, s, g, DT, pose)
     // Recovered and stayed there, rather than re-snapping every frame.
     expect(pose.root.sy).toBeCloseTo(1, 3)
+  })
+})
+
+describe('clampTilt', () => {
+  const out = { x: 0, y: 0, z: 0 }
+  const angleFromUp = () => Math.acos(Math.min(1, Math.max(-1, out.y)))
+
+  it('leaves a normal inside the clamp untouched', () => {
+    const n = { x: Math.sin(0.2), y: Math.cos(0.2), z: 0 }
+    clampTilt(n.x, n.y, n.z, 0.61, out)
+    expect(out.x).toBeCloseTo(n.x, 12)
+    expect(out.y).toBeCloseTo(n.y, 12)
+  })
+
+  /*
+    The property the whole function exists for: a steep face is tilted back
+    toward vertical without changing which way it leans. A shadow lying flush on
+    a hillside reads as a decal painted on it.
+  */
+  it('clamps a steep normal to exactly the limit, preserving azimuth', () => {
+    const steep = (60 * Math.PI) / 180
+    const limit = (35 * Math.PI) / 180
+    const az = 1.234
+    clampTilt(Math.sin(steep) * Math.cos(az), Math.cos(steep), Math.sin(steep) * Math.sin(az), limit, out)
+    expect(angleFromUp()).toBeCloseTo(limit, 9)
+    expect(Math.atan2(out.z, out.x)).toBeCloseTo(az, 9)
+    expect(Math.hypot(out.x, out.y, out.z)).toBeCloseTo(1, 12)
+  })
+
+  it('normalises an input that is not unit length', () => {
+    clampTilt(0, 7, 0, 0.61, out)
+    expect(out.y).toBeCloseTo(1, 12)
+  })
+
+  it('returns straight up for a degenerate or downward normal', () => {
+    clampTilt(0, 0, 0, 0.61, out)
+    expect([out.x, out.y, out.z]).toEqual([0, 1, 0])
+    // Straight down has no azimuth to preserve, so any choice would be arbitrary.
+    clampTilt(0, -1, 0, 0.61, out)
+    expect([out.x, out.y, out.z]).toEqual([0, 1, 0])
+  })
+})
+
+describe('the contact shadow', () => {
+  function shadowAfter(frames: number, mutate: (g: GroundSample, s: RobotAnimState) => void) {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true })
+    g.hit = true
+    mutate(g, s)
+    for (let i = 0; i < frames; i++) stepAnim(rt, s, g, DT, pose)
+    return pose.shadow
+  }
+
+  it('sits directly under the body at the contact point', () => {
+    const sh = shadowAfter(30, (g, s) => {
+      s.worldX = 3
+      s.worldZ = -4
+      g.y = 1.25
+    })
+    expect(sh.x).toBe(3)
+    expect(sh.z).toBe(-4)
+    expect(sh.y).toBe(1.25)
+  })
+
+  it('is full strength and base size on the ground', () => {
+    const sh = shadowAfter(60, (g) => void (g.distance = 0))
+    expect(sh.opacity).toBeCloseTo(SHADOW.maxOpacity, 9)
+    expect(sh.radius).toBeCloseTo(SHADOW.baseRadius, 3)
+  })
+
+  /*
+    Growing and fading together is the behaviour of a penumbra from a
+    finite-size source, and it is what makes jump height readable: a player
+    judging a landing reads the shadow rather than the character.
+  */
+  it('grows and fades together with height', () => {
+    const low = shadowAfter(120, (g) => void (g.distance = 0.3))
+    const high = shadowAfter(120, (g) => void (g.distance = 2))
+    expect(high.radius).toBeGreaterThan(low.radius)
+    expect(high.opacity).toBeLessThan(low.opacity)
+  })
+
+  it('vanishes entirely at the maximum height', () => {
+    const sh = shadowAfter(120, (g) => void (g.distance = SHADOW.maxHeight))
+    expect(sh.opacity).toBeCloseTo(0, 9)
+  })
+
+  it('goes to zero opacity when the ray finds nothing at all', () => {
+    const sh = shadowAfter(30, (g) => {
+      g.hit = false
+      g.distance = 0
+    })
+    expect(sh.opacity).toBe(0)
+    // The radius is still written, so nothing has to special-case a hidden quad.
+    expect(sh.radius).toBeGreaterThan(0)
+  })
+
+  it('elongates along the direction of travel at speed', () => {
+    const still = shadowAfter(30, (_g, s) => void (s.speedNorm = 0))
+    const fast = shadowAfter(30, (_g, s) => {
+      s.speedNorm = 1
+      s.facing = 1.1
+    })
+    expect(still.stretch).toBeCloseTo(1, 9)
+    expect(fast.stretch).toBeCloseTo(SHADOW.maxStretch, 9)
+    expect(fast.yaw).toBeCloseTo(1.1, 9)
+  })
+
+  it('clamps its tilt on a slope steeper than the limit', () => {
+    const steep = (70 * Math.PI) / 180
+    const sh = shadowAfter(5, (g) => {
+      g.nx = Math.sin(steep)
+      g.ny = Math.cos(steep)
+      g.nz = 0
+    })
+    expect(Math.acos(sh.ny)).toBeCloseTo(SHADOW.maxTilt, 9)
+  })
+
+  /*
+    The impact cue that runs on every tier, including the one with no particles
+    at all. A dark ring snapping outward and settling in 200 ms is a genuinely
+    good landing beat and it costs one uniform write.
+  */
+  it('spikes outward on a landing and settles back', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    g.hit = true
+    const s = state({ grounded: true })
+    for (let i = 0; i < 60; i++) stepAnim(rt, s, g, DT, pose)
+    const resting = pose.shadow.radius
+
+    s.squash = 0.62
+    s.squashMode = 'land'
+    s.squashSeq = 1
+    stepAnim(rt, s, g, DT, pose)
+    expect(pose.shadow.radius).toBeGreaterThan(resting * 1.4)
+
+    for (let i = 0; i < 30; i++) stepAnim(rt, s, g, DT, pose)
+    expect(pose.shadow.radius).toBeCloseTo(resting, 2)
+  })
+
+  it('does not spike on a takeoff', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    g.hit = true
+    const s = state({ grounded: true })
+    for (let i = 0; i < 60; i++) stepAnim(rt, s, g, DT, pose)
+    const resting = pose.shadow.radius
+
+    s.squash = 1.18
+    s.squashMode = 'takeoff'
+    s.squashSeq = 1
+    stepAnim(rt, s, g, DT, pose)
+    expect(pose.shadow.radius).toBeCloseTo(resting, 3)
   })
 })
 

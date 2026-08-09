@@ -23,9 +23,6 @@ import {
   UpperArm,
 } from './robotParts'
 import {
-  createAnimRuntime,
-  createGroundSample,
-  createPose,
   REST,
   stepAnim,
   type AnimRuntime,
@@ -63,9 +60,21 @@ import type { SocketName } from '@/state/types'
 export function RobotModel({
   anim,
   cosmetics,
+  rt,
+  pose,
+  ground,
 }: {
   anim: RefObject<RobotAnimState>
   cosmetics: Partial<Record<SocketName, string>>
+  /*
+    The animation buffers are owned by PlayerController and handed down, rather
+    than created here. The contact shadow is not a child of the character and
+    still needs the pose this component's `useFrame` produces, so there is one
+    owner above both of them.
+  */
+  rt: RefObject<AnimRuntime | null>
+  pose: RefObject<Pose | null>
+  ground: RefObject<GroundSample | null>
 }) {
   const quality = useQuality()
 
@@ -79,29 +88,14 @@ export function RobotModel({
   const rigRef = useRef<RigRefs | null>(null)
   if (rigRef.current === null) rigRef.current = createRigRefs()
 
-  /*
-    The runtime, the pose buffer and the ground sample, created once and mutated
-    forever after.
-
-    Refs rather than `useMemo` for the reason `PlayerController` gives for its
-    scratch vectors: these are explicitly mutable per-frame buffers, and a
-    `useMemo` value may not be mutated after render.
-  */
-  const rtRef = useRef<AnimRuntime | null>(null)
-  if (rtRef.current === null) rtRef.current = createAnimRuntime(0xa71a5)
-  const poseRef = useRef<Pose | null>(null)
-  if (poseRef.current === null) poseRef.current = createPose()
-  const groundRef = useRef<GroundSample | null>(null)
-  if (groundRef.current === null) groundRef.current = createGroundSample()
-
   useFrame((_, delta) => {
     // Clamp delta so a background tab that resumes after a long pause does not
     // advance the walk cycle by a huge step and snap the limbs. Clamped here
     // rather than inside the solver, so a test can still hand the solver a ten
     // second step and prove it survives one.
     const dt = Math.min(delta, 0.05)
-    stepAnim(rtRef.current!, anim.current, groundRef.current!, dt, poseRef.current!)
-    applyPose(poseRef.current!, rigRef.current!)
+    stepAnim(rt.current!, anim.current, ground.current!, dt, pose.current!)
+    applyPose(pose.current!, rigRef.current!)
   })
 
   return (

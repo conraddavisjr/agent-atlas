@@ -10,9 +10,19 @@ import {
 } from '@react-three/rapier'
 import { Vector3, type Group } from 'three'
 import { BODY, JUMP, MOVEMENT, REVIVAL, SQUASH } from './tuning'
+import { SHADOW } from './animTuning'
 import { headingVector, stepDrive, stepHorizontal, stepVertical } from './movement'
 import { RobotModel } from './RobotModel'
+import { ContactBlob } from './ContactBlob'
 import { createRobotAnimState, pushSquash } from './robotAnim'
+import {
+  createAnimRuntime,
+  createGroundSample,
+  createPose,
+  type AnimRuntime,
+  type GroundSample,
+  type Pose,
+} from './robotPose'
 import { cameraFrame } from '../camera/cameraFrame'
 import type { InputIntent } from '../input/useInput'
 import type { SocketName } from '@/state/types'
@@ -61,9 +71,21 @@ export function PlayerController({
 }) {
   const bodyRef = useRef<RapierRigidBody>(null)
   const visualRef = useRef<Group>(null)
-  const { world } = useRapier()
+  const { world, rapier } = useRapier()
 
   const anim = useRef(createRobotAnimState())
+
+  /*
+    The animation buffers live here rather than inside RobotModel, because the
+    contact shadow is not a child of the character and still needs the pose the
+    solver produces. One owner, two consumers, no duplicated state.
+  */
+  const rtRef = useRef<AnimRuntime | null>(null)
+  if (rtRef.current === null) rtRef.current = createAnimRuntime(0xa71a5)
+  const poseRef = useRef<Pose | null>(null)
+  if (poseRef.current === null) poseRef.current = createPose()
+  const groundRef = useRef<GroundSample | null>(null)
+  if (groundRef.current === null) groundRef.current = createGroundSample()
 
   /** Velocity we integrate ourselves, since the body is kinematic. */
   const velocity = useRef(new Vector3(0, 0, 0))
@@ -95,11 +117,14 @@ export function PlayerController({
   const scratchRef = useRef<{
     desired: Vector3
     move: Vector3
+    /** The downward ground ray, mutated in place every frame. */
+    ray: InstanceType<RapierContext['rapier']['Ray']>
   } | null>(null)
   if (scratchRef.current === null) {
     scratchRef.current = {
       desired: new Vector3(),
       move: new Vector3(),
+      ray: new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 }),
     }
   }
   const scratch = scratchRef.current
@@ -208,6 +233,7 @@ export function PlayerController({
       makes turning on the spot possible at all: a heading recovered from
       velocity can only ever report where the character has already been.
     */
+    const previousFacing = facing.current
     const drive = stepDrive({ moveX, moveY, facing: facing.current, dt })
     facing.current = drive.facing
 
@@ -329,6 +355,33 @@ export function PlayerController({
     anim.current.throttle = drive.throttle
 
     /*
+      Everything the solver and the effects need about where the body is,
+      copied once per step.
+
+      Copied rather than read on demand so that no consumer has to call into
+      Rapier. The contact shadow, the foot IK and eventually the emitters all
+      want the same six numbers, and three separate `translation()` calls per
+      frame is three WASM boundary crossings for data that cannot have changed
+      between them.
+    */
+    anim.current.facing = facing.current
+    anim.current.turnRate = (facing.current - previousFacing) / dt
+    anim.current.worldX = t.x + corrected.x
+    anim.current.worldY = t.y + corrected.y
+    anim.current.worldZ = t.z + corrected.z
+    anim.current.velX = velocity.current.x
+    anim.current.velY = velocity.current.y
+    anim.current.velZ = velocity.current.z
+    anim.current.reviving = reviving.current
+    if (grounded) {
+      anim.current.airTime = 0
+      anim.current.groundTime += dt
+    } else {
+      anim.current.airTime += dt
+      anim.current.groundTime = 0
+    }
+
+    /*
       Facing is not recomputed here any more. It was previously read back from
       velocity, which is what made it lag the input and made turning on the spot
       impossible; it is now set directly by stepDrive at the top of this step.
@@ -359,6 +412,62 @@ export function PlayerController({
       eleven things happening near each other; one spring in the solver can
       drive all of them, and a spring in here can only drive the scale.
     */
+
+    /*
+      The ground ray. One per frame, on every tier.
+
+      Three consumers pay for it: the contact shadow's position and orientation,
+      the foot IK's reference plane, and eventually the emitters' ground point
+      and normal for dust and impact rings. That is why `GroundSample` is a
+      named type handed to the solver rather than the shadow quietly doing its
+      own cast, and it is why the ray lives here rather than in whichever
+      component happened to need it first.
+
+      Run in the frame loop rather than the physics step, because the shadow has
+      to sit under the INTERPOLATED position the player can see. Sampling it at
+      the fixed rate would make the shadow stutter against a character that does
+      not, which is more visible than either error alone.
+    */
+    const ground = groundRef.current!
+    const body = bodyRef.current
+    const collider = body?.collider(0)
+    if (body && collider) {
+      const t = body.translation()
+      /*
+        Origin 0.10 above the sole plane, which is `capsuleHalfHeight +
+        capsuleRadius` below the body centre.
+
+        `filterExcludeCollider` is mandatory, not defensive. Without it the ray
+        starts inside the character's own capsule, and with `solid = true`
+        Rapier reports an immediate hit on the player at distance zero. The
+        shadow then pins to the character's feet and never moves, which looks
+        almost right and is completely wrong.
+      */
+      scratch.ray.origin.x = t.x
+      scratch.ray.origin.y = t.y - 0.6
+      scratch.ray.origin.z = t.z
+      const hit = world.castRayAndGetNormal(
+        scratch.ray,
+        SHADOW.maxCastDistance,
+        true,
+        undefined,
+        undefined,
+        collider,
+      )
+      if (hit) {
+        ground.hit = true
+        ground.y = scratch.ray.origin.y - hit.timeOfImpact
+        // The ray starts 0.10 above the sole, so that much of the impact is the
+        // gap the character is standing in rather than height off the ground.
+        ground.distance = Math.max(0, hit.timeOfImpact - 0.1)
+        ground.nx = hit.normal.x
+        ground.ny = hit.normal.y
+        ground.nz = hit.normal.z
+      } else {
+        ground.hit = false
+        ground.distance = SHADOW.maxCastDistance
+      }
+    }
 
     // Keep the follow target in sync with the interpolated physics transform.
     if (playerRef.current && bodyRef.current) {
@@ -453,24 +562,35 @@ export function PlayerController({
   }, [])
 
   return (
-    <RigidBody
-      ref={bodyRef}
-      type="kinematicPosition"
-      colliders={false}
-      // The drop height is applied here as well as in the effect above. The
-      // effect runs after the first commit, so seeding the body at ground level
-      // would render one frame of the robot standing at the spawn before it
-      // teleports up to fall, which is visible as a flicker.
-      position={dropSpawn}
-      // Rotation is driven visually rather than physically; a rotating capsule
-      // buys nothing and complicates the collision response.
-      enabledRotations={[false, false, false]}
-    >
-      <CapsuleCollider args={[BODY.capsuleHalfHeight, BODY.capsuleRadius]} />
-      <group ref={visualRef} position={[0, -(BODY.capsuleHalfHeight + BODY.capsuleRadius), 0]}>
-        <RobotModel anim={anim} cosmetics={cosmetics} />
-      </group>
-    </RigidBody>
+    <>
+      <RigidBody
+        ref={bodyRef}
+        type="kinematicPosition"
+        colliders={false}
+        // The drop height is applied here as well as in the effect above. The
+        // effect runs after the first commit, so seeding the body at ground level
+        // would render one frame of the robot standing at the spawn before it
+        // teleports up to fall, which is visible as a flicker.
+        position={dropSpawn}
+        // Rotation is driven visually rather than physically; a rotating capsule
+        // buys nothing and complicates the collision response.
+        enabledRotations={[false, false, false]}
+      >
+        <CapsuleCollider args={[BODY.capsuleHalfHeight, BODY.capsuleRadius]} />
+        <group ref={visualRef} position={[0, -(BODY.capsuleHalfHeight + BODY.capsuleRadius), 0]}>
+          <RobotModel anim={anim} cosmetics={cosmetics} rt={rtRef} pose={poseRef} ground={groundRef} />
+        </group>
+        </RigidBody>
+
+      {/*
+        Outside the RigidBody, and that is the whole point.
+
+        Under the character's root the quad would inherit the squash scale, and
+        a shadow that squashes with the body is the classic tell of a fake
+        contact shadow. It is positioned in world space from the ray above.
+      */}
+      <ContactBlob pose={poseRef} />
+    </>
   )
 }
 

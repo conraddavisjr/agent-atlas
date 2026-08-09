@@ -55,6 +55,34 @@ export type RobotAnimState = {
    * what lets the solver be a pure function of the state it is handed.
    */
   squashSeq: number
+
+  /**
+   * The authoritative heading, in radians.
+   *
+   * Already tracked in a ref inside PlayerController. Publishing it is what
+   * lets the contact shadow orient its elongation and the VFX emitters aim,
+   * without either of them reading it back off the follow target.
+   */
+  facing: number
+  /** Actual d(facing)/dt, so a turn snap is detectable without differentiating in the solver. */
+  turnRate: number
+
+  /** Seconds since leaving the ground, 0 while grounded. */
+  airTime: number
+  /** Seconds since landing, 0 while airborne. */
+  groundTime: number
+
+  /** The body translation, copied once per step so no consumer calls into Rapier. */
+  worldX: number
+  worldY: number
+  worldZ: number
+  /** World velocity, copied. Drives the cape's drag and the antenna's inertia. */
+  velX: number
+  velY: number
+  velZ: number
+
+  /** True through the arrival fall, so the face can play surprised on landing. */
+  reviving: boolean
 }
 
 /**
@@ -77,6 +105,17 @@ export function createRobotAnimState(): RobotAnimState {
     squash: 1,
     squashMode: 'land',
     squashSeq: 0,
+    facing: 0,
+    turnRate: 0,
+    airTime: 0,
+    groundTime: 0,
+    worldX: 0,
+    worldY: 0,
+    worldZ: 0,
+    velX: 0,
+    velY: 0,
+    velZ: 0,
+    reviving: true,
   }
 }
 

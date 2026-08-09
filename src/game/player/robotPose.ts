@@ -34,7 +34,7 @@ import {
   type Spring2,
 } from './springs'
 import { WADDLE } from './tuning'
-import { SPRINGS, SQUASH_ANIM, TURN_ANIM } from './animTuning'
+import { SHADOW, SPRINGS, SQUASH_ANIM, TURN_ANIM } from './animTuning'
 import type { RobotAnimState, SquashMode } from './robotAnim'
 
 // ---------------------------------------------------------------------------
@@ -532,7 +532,7 @@ export function createAnimRuntime(seed: number): AnimRuntime {
       cape: [createSpring2(), createSpring2(), createSpring2(), createSpring2()],
       footIkL: createSpring1(0),
       footIkR: createSpring1(0),
-      shadowRadius: createSpring1(0),
+      shadowRadius: createSpring1(SHADOW.baseRadius),
     },
 
     prev: {
@@ -609,6 +609,62 @@ function finite(v: number, fallback = 0): number {
 }
 
 /**
+ * Tilts a normal back toward vertical without changing which way it leans.
+ *
+ * A contact shadow lying flush on a steep face reads as a decal painted on the
+ * hillside. Clamping the tilt keeps it reading as a shadow cast from above,
+ * which is what the light in this scene actually does, while still letting a
+ * gentle slope tip it enough to be believable.
+ *
+ * Pure and separate because it is exactly testable: given a normal 60 degrees
+ * off vertical and a clamp of 35, the result must be 35 degrees off vertical in
+ * the same azimuth.
+ */
+export function clampTilt(
+  nx: number,
+  ny: number,
+  nz: number,
+  maxTilt: number,
+  out: { x: number; y: number; z: number },
+): void {
+  const len = Math.hypot(nx, ny, nz)
+  if (!(len > 1e-9)) {
+    out.x = 0
+    out.y = 1
+    out.z = 0
+    return
+  }
+  const ux = nx / len
+  const uy = ny / len
+  const uz = nz / len
+
+  const tilt = Math.acos(Math.min(1, Math.max(-1, uy)))
+  if (tilt <= maxTilt) {
+    out.x = ux
+    out.y = uy
+    out.z = uz
+    return
+  }
+
+  const horiz = Math.hypot(ux, uz)
+  if (horiz < 1e-9) {
+    // Pointing straight down, which only happens on a ceiling. Straight up is
+    // the only answer that does not pick an arbitrary azimuth.
+    out.x = 0
+    out.y = 1
+    out.z = 0
+    return
+  }
+  const s = Math.sin(maxTilt)
+  out.x = (ux / horiz) * s
+  out.y = Math.cos(maxTilt)
+  out.z = (uz / horiz) * s
+}
+
+/** Scratch for the clamped ground normal. Module level, so the solver allocates nothing. */
+const tiltScratch = { x: 0, y: 1, z: 0 }
+
+/**
  * The single entry point. Writes into `out` and returns nothing.
  *
  * Allocates nothing, and reads nothing global except the frozen constant
@@ -673,7 +729,8 @@ export function stepAnim(
     bounces. `squashSeq` rather than a value comparison, so two landings of the
     same depth in a row are two events.
   */
-  if (s.squashSeq !== rt.springs.squashSeq) {
+  const justImpulsed = s.squashSeq !== rt.springs.squashSeq
+  if (justImpulsed) {
     rt.springs.squashSeq = s.squashSeq
     rt.springs.squashMode = s.squashMode ?? 'land'
     rt.springs.squash.x = finite(s.squash, 1)
@@ -744,8 +801,62 @@ export function stepAnim(
   out.legL.ry = splay
   out.legR.ry = -splay
 
-  // The face and the shadow are continuous state written in full every frame
-  // once their solvers exist. Until then they hold their constructed defaults.
+  /*
+    The contact shadow.
+
+    The single highest value-per-cost item on the character. At the shadow map's
+    density the 0.70 m foot span gets about forty texels and its contact edge
+    gets one, which is why the robot reads as hovering, and no resolution the
+    tier system can afford would fix it. Two triangles and one raycast do.
+
+    It grows AND fades with height, which is the behaviour of a penumbra from a
+    finite-size source and is what makes jump height readable: a player judging
+    a landing reads the shadow, not the character.
+  */
+  const h = Math.min(1, Math.max(0, finite(ground.distance) / SHADOW.maxHeight))
+  const hit = ground.hit === true
+
+  /*
+    The landing spike, and the one piece of impact feedback that runs on every
+    tier including the one with no particles at all. A dark ring snapping
+    outward and settling in 200 ms is a genuinely good impact cue and it costs
+    one uniform write. On the richer tiers it sits underneath the dust and makes
+    it land better.
+
+    Driven off the squash impulse rather than a separate channel, so a landing
+    can never spike the shadow without also squashing the body.
+  */
+  if (justImpulsed && rt.springs.squashMode !== 'takeoff') {
+    const strength = Math.min(1, Math.max(0, (1 - finite(s.squash, 1)) / 0.45))
+    rt.springs.shadowRadius.x =
+      SHADOW.baseRadius * (1 + SHADOW.landRadiusSpike * strength)
+  }
+
+  rt.springs.shadowRadius.target = SHADOW.baseRadius * (1 + SHADOW.spread * h)
+  stepSpring1(
+    rt.springs.shadowRadius,
+    SPRINGS.shadowRadius.omega,
+    SPRINGS.shadowRadius.zeta,
+    step,
+  )
+
+  clampTilt(finite(ground.nx), finite(ground.ny, 1), finite(ground.nz), SHADOW.maxTilt, tiltScratch)
+
+  out.shadow.x = finite(s.worldX)
+  out.shadow.y = finite(ground.y)
+  out.shadow.z = finite(s.worldZ)
+  out.shadow.nx = tiltScratch.x
+  out.shadow.ny = tiltScratch.y
+  out.shadow.nz = tiltScratch.z
+  out.shadow.radius = Math.max(0, rt.springs.shadowRadius.x)
+  /*
+    Opacity is written directly with no smoothing, deliberately. Smoothing it
+    makes the shadow lag the character stepping off a ledge, which is one of the
+    most visible wrong things a blob shadow can do.
+  */
+  out.shadow.opacity = hit ? SHADOW.maxOpacity * Math.pow(1 - h, SHADOW.fadePower) : 0
+  out.shadow.stretch = 1 + (SHADOW.maxStretch - 1) * speedNorm
+  out.shadow.yaw = finite(s.facing)
+
   out.face.scanPhase = rt.t
-  void ground
 }
