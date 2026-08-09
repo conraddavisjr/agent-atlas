@@ -2,6 +2,7 @@ import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { AdditiveBlending, Color, DoubleSide, type ShaderMaterial } from 'three'
 import { palette } from './palette'
+import { BLOOM_THRESHOLD } from './materials'
 
 /**
  * The surface inside an unlocked portal: a slow spiral turning inward.
@@ -103,16 +104,27 @@ export function PortalShimmer({
          flat wash of one colour. */
       uCoreColor: { value: new Color('#dffaff') },
       /*
-        Sets where this lands against the bloom threshold in PostFX.
+        Where this lands against the bloom threshold, expressed as a multiple of
+        it rather than as a bare number.
 
         Bloom runs before tone mapping and therefore sees raw values, so this
-        number decides whether the portal glows or whether it turns into a white
+        decides whether the portal glows or whether it turns into a white
         rectangle. It is set so the crests of the arms cross the threshold and
         nothing else does: the body of the effect stays under it, which is what
         keeps the bloom reading as glowing ribbons rather than as a lit fog.
-        Raising it is the fastest way to ruin this scene.
+
+        Deriving it from `BLOOM_THRESHOLD` rather than typing 1.9 is the same
+        correction `emissive()` applies everywhere else in the codebase, and it
+        matters more here than anywhere: this is the one surface in the game that
+        already crossed the line, so a threshold change that everything else
+        tracked automatically would have silently retuned the portal alone. The
+        prediction on record is that the threshold falls to between 1.2 and 1.6
+        once it is measured, and at a fixed 1.9 that would have turned the
+        doorway into a white rectangle without anybody touching this file.
+
+        The multiple is what the old literal worked out to: 1.9 over 1.75.
       */
-      uIntensity: { value: 1.9 },
+      uIntensity: { value: 1.086 * BLOOM_THRESHOLD },
       /** Number of arms. Odd numbers avoid the symmetry reading as a pinwheel. */
       uArms: { value: 3 },
       /** How tightly the arms wind. Higher is a denser vortex. */

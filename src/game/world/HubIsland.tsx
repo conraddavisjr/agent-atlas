@@ -80,19 +80,22 @@ import { Terrain, PLATEAU_RADIUS } from './Terrain'
  * The three bands from the art bible, as albedo.
  *
  * The requirement is a rendered luma of 0.56 to 0.74 for anything the player
- * can stand on and 0.20 to 0.38 for midground dressing, with a real gap
- * between them. That gap is what makes a desaturated frame legible, and it is
- * why the deck is no longer near-white: at 0.850 it sat 0.10 from the robot's
- * shell at 0.946, so the character had to survive on hue alone against the
- * surface it stands on.
+ * can stand on and 0.20 to 0.38 for midground dressing, with a real gap between
+ * them. That gap is what makes a desaturated frame legible, and it is why the
+ * deck is no longer near-white: at 0.850 it sat 0.10 from the robot's shell at
+ * 0.946, so the character had to survive on hue alone against the surface it
+ * stands on.
  *
- * Literals rather than palette entries because `palette.ts` belongs to another
- * stream this pass. They should move there behind the spec's `band(hex, tier)`
- * helper, so a later palette change propagates instead of being re-typed.
+ * The top value comes from `palette.rock`, which the palette stream has already
+ * moved into band 1. The other three have no palette entry yet and are literals
+ * here. They belong there behind the spec's `band(hex, tier)` helper, so that a
+ * later palette change propagates instead of being re-typed - and so that the
+ * side value in particular cannot drift away from the top value it is defined
+ * relative to.
  */
 const BAND = {
   /** Band 1. Deck and puck tops. Luma 0.735. */
-  deckTop: '#b6bcc7',
+  deckTop: palette.rock,
   /** Band 1. Deck and puck side faces. Luma 0.589. */
   deckSide: '#8f97a5',
   /** Band 2. Kerbs and trim. Luma 0.330. */

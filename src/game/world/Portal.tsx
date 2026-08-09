@@ -1,10 +1,12 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { RigidBody, CuboidCollider } from '@react-three/rapier'
 import { Billboard, RoundedBox, Text } from '@react-three/drei'
 import type { Group } from 'three'
 import { palette } from '@/art/palette'
-import { GLOW, emissive, mattePlastic, plastic, stone } from '@/art/materials'
+import { GLOW, emissive, mattePlastic, metal, plastic, rubber, stone } from '@/art/materials'
 import { usePbrTextures } from '@/art/textures'
+import { createDecalMaps, ventGrille, DECAL_KINDS } from '@/art/decalTextures'
+import { useQuality } from '@/art/useQuality'
 import { PortalShimmer } from '@/art/PortalShimmer'
 import { useProximity } from '../interaction/useProximity'
 
@@ -42,6 +44,32 @@ export function Portal({
     pasted on rather than as masonry.
   */
   const archStone = usePbrTextures('stone', [1.4, 3])
+
+  /*
+    Panel lines and a vent group on the sealed slab.
+
+    The vent is one of only three placements the fiction earns anywhere in this
+    world - the robot's back, the totem plinth's collar, and this arch, because
+    the arch is the machine that does the travelling. It is drawn INTO the
+    slab's height mask rather than placed as a decal mesh, which costs nothing
+    extra: the mask is being rasterised anyway and the vent is simply another
+    set of marks on it.
+
+    Null at every tier today, because `surfaceMapSize` is 0 everywhere until the
+    stream that owns the tier table turns it on. A caller that gets null spreads
+    no maps, so the material compiles exactly the program it would have compiled
+    anyway, which is what "low must be genuinely zero cost" means.
+  */
+  const quality = useQuality()
+  const slabMaps = useMemo(() => {
+    if (!quality.surfaceMapSize) return null
+    const metresPerTile = DECAL_KINDS.hull.metresPerTile
+    return createDecalMaps(
+      'hull',
+      quality.surfaceMapSize,
+      ventGrille({ x: 0.5, y: 0.28, slots: 7, slotLength: 0.09, metresPerTile }),
+    )
+  }, [quality.surfaceMapSize])
 
   useProximity(
     anchor,
@@ -114,7 +142,17 @@ export function Portal({
               is the masonry, and texturing the door too collapses the contrast
               that makes the sealed panel read as a separate thing filling a gap. */}
           <RoundedBox args={[2.6, 3.4, 0.24]} radius={0.08} smoothness={3} position={[0, 1.7, 0]} castShadow>
-            <meshPhysicalMaterial {...mattePlastic(palette.lockedDeep)} />
+            <meshPhysicalMaterial
+              {...mattePlastic(palette.lockedDeep)}
+              {...(slabMaps
+                ? {
+                    normalMap: slabMaps.normalMap,
+                    roughnessMap: slabMaps.roughnessMap,
+                    aoMap: slabMaps.aoMap,
+                    roughness: slabMaps.roughness,
+                  }
+                : {})}
+            />
           </RoundedBox>
 
           {/* Horizontal banding. Breaks up the flat slab so it reads as a
@@ -128,7 +166,10 @@ export function Portal({
               smoothness={3}
               position={[0, y, 0]}
             >
-              <meshPhysicalMaterial {...mattePlastic(palette.locked)} />
+              {/* Glossy where the slab behind it is chalky, so the band steps up
+                  in material as well as in value and reads as a separate part
+                  rather than as a lighter stripe painted on one. */}
+              <meshPhysicalMaterial {...plastic(palette.locked)} />
             </RoundedBox>
           ))}
 
@@ -172,20 +213,28 @@ function LockPlate({ position }: { position: [number, number, number] }) {
       {/* Shackle */}
       <mesh position={[0, 0.46, 0]} rotation={[Math.PI / 2, 0, 0]}>
         <torusGeometry args={[0.26, 0.07, 10, 24, Math.PI]} />
-        <meshPhysicalMaterial {...plastic('#aab3c2')} />
+        <meshPhysicalMaterial {...metal('#aab3c2')} />
       </mesh>
       {/* Body */}
       <RoundedBox args={[0.78, 0.64, 0.22]} radius={0.09} smoothness={4} castShadow>
         <meshPhysicalMaterial {...plastic('#c3cad6')} />
       </RoundedBox>
-      {/* Keyhole */}
+      {/*
+        Keyhole. Lit, not basic.
+
+        These two were the only unlit surfaces on an otherwise lit object, which
+        means they did not darken in shadow and read as holes cut through to a
+        flat colour rather than as recesses in a plate. `rubber()` gives the same
+        near-black at a fraction of the environment response, so the shape stays
+        attached to the lighting it sits in.
+      */}
       <mesh position={[0, 0.04, 0.12]}>
         <circleGeometry args={[0.11, 16]} />
-        <meshBasicMaterial color={palette.lockedDeep} />
+        <meshPhysicalMaterial {...rubber(palette.lockedDeep)} />
       </mesh>
       <mesh position={[0, -0.12, 0.12]}>
         <boxGeometry args={[0.09, 0.18, 0.01]} />
-        <meshBasicMaterial color={palette.lockedDeep} />
+        <meshPhysicalMaterial {...rubber(palette.lockedDeep)} />
       </mesh>
     </group>
   )
