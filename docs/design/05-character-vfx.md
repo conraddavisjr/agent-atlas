@@ -1568,3 +1568,1926 @@ The matrix updates dominate and they already happen today.
 This is not a measurable change from the current implementation and it is far below anything worth optimising.
 
 ---
+
+## 7. The visor
+
+### The identity problem, and the shape language that solves it
+
+The reference brief describes two rounded-rect LED panels, one eye-width apart, at 55-60% down the face plate.
+That is exactly the mark this project has committed in writing to avoiding, at `palette.ts:9` and `RobotModel.tsx:14-18`.
+
+The resolution is not to make the eyes worse.
+It is to carry the same expressive range on a different form.
+
+**The visor is one continuous horizontal cyan slot, always present, spanning 77% of the face plate width.**
+Expression lives in the intensity profile along that slot, not in two separate glyphs.
+Two hotter cores sit inside the bar at `+-0.20` of plate width, and those cores change shape, but the bar between and around them never goes dark.
+Close the character's eyes and you still see a cyan line, which is the identity.
+Astro's eyes disappear on a blink; this character's do not, and that difference is the whole point.
+
+This gives more range than two panels, not less, because the bar itself is a channel: its thickness, its arc and the brightness gradient along it are all expressive, and none of that is available to a design made of two isolated shapes.
+
+### Why a raw `ShaderMaterial` and not `onBeforeCompile`
+
+The project has three documented cases of `onBeforeCompile` failing silently, most recently `vColor *= iColor` in `Grass.tsx` taking down the whole grass field while reporting full instance counts and `visible: true`.
+
+Every shader in this document is a standalone `ShaderMaterial` with hand-written vertex and fragment stages.
+None of them patches a three built-in.
+`PortalShimmer.tsx` is the precedent and it has never broken.
+
+The cost is that these materials do not receive three's lights, fog or shadows.
+For the visor glyph, particles and the contact shadow that is not a cost at all: none of them wants to be lit.
+The face plate underneath, which does want to be lit and does want the environment reflection, stays a `meshPhysicalMaterial` with no patching.
+
+### The two-layer construction
+
+**Layer A, the plate.** The extruded squircle from section 2, `visorPlate()` material, near-black `#0d1218` at roughness 0.09 and clearcoat 1.
+This is the surface that takes the clean environment highlight from the Lightformers and it is what makes the face read as glass over a display rather than as a painted decal.
+It is fully opaque and never blooms: at albedo 0.0056 linear, no lighting in the project can push it past 0.02.
+
+**Layer B, the glyph.** A `PlaneGeometry(0.56, 0.38)` at `z = 0.325`, which is 0.020 m in front of the plate's front face.
+`ShaderMaterial`, `transparent: true`, `depthWrite: false`, `depthTest: true`, `blending: NormalBlending`, `side: FrontSide`, `toneMapped: false`.
+
+**`NormalBlending`, not additive, and this is load-bearing.**
+Additive on a single quad would be fine on its own, but the character's face is the one emissive surface that the player looks at for hours, and the moment anyone adds a second overlay (a damage flash, a status icon) additive starts stacking.
+Normal blending with `src.rgb` at HDR values and `src.a` as the coverage mask gives `out = rgb * a + dst * (1 - a)`, which is bounded by `rgb` no matter how many layers are composited.
+The bar cannot blow out by accident.
+
+The 0.020 m separation is enough that the depth test never fights at any camera angle inside `CAMERA.minDistance = 1.6` m, and small enough that the parallax between plate and glyph is under a pixel.
+Do not use `polygonOffset` here; a real offset in Z is more predictable and costs nothing.
+
+### Bloom arithmetic
+
+Bloom threshold is 1.75 on raw HDR luminance, pre-tone-map.
+Luminance is `0.2126 R + 0.7152 G + 0.0722 B` on linear values.
+
+`palette.visor` `#4de2ff` in linear is `(0.0743, 0.7605, 1.0000)`, luminance `0.6299`.
+
+| Multiplier | Linear RGB | Luminance | Blooms? |
+| --- | --- | --- | --- |
+| 2.4 (current) | (0.178, 1.825, 2.400) | 1.516 | No. This is finding 3 in section 0. |
+| 2.8 | (0.208, 2.129, 2.800) | 1.764 | Marginal, right on the line |
+| **3.4 (core)** | (0.253, 2.586, 3.400) | **2.142** | **Yes, cleanly** |
+| 1.6 (bar body) | (0.119, 1.217, 1.600) | 1.008 | No, by design |
+| 4.2 (excited peak) | (0.312, 3.194, 4.200) | 2.646 | Yes, strongly |
+
+So: the bar body sits at 1.6, deliberately under the threshold, and only the two eye cores at 3.4 cross it.
+That produces a cyan line with two glowing nodes rather than a uniformly hazing bar, which is a much better read and is exactly what the high threshold exists to enable.
+
+`palette.accent` `#ff9a3c` in linear is `(1.0000, 0.3232, 0.0452)`, luminance `0.4477`.
+The antenna bulb at the current intensity 2.0 has luminance 0.895 and does not bloom.
+Set it to **4.0**, giving luminance 1.791, which just clears.
+Section 1's part table already lists 4.0.
+
+The `backVent` at `emissive(palette.visor, 2.6)` gives luminance 1.638, deliberately just under.
+The vent should glow softly without haloing, since it is behind the character and a bloom there would rim-light the back of the head.
+
+**Verify before building**: `@react-three/postprocessing`'s `EffectComposer` must be using a half-float frame buffer for any of this to work, because an 8-bit buffer clamps at 1.0 and nothing could ever cross 1.75.
+Emissives visibly bloom in the game today, so it almost certainly is, but confirm `frameBufferType` rather than assuming.
+If it is not half-float, every number in this table is wrong and the whole bloom strategy needs rethinking.
+
+### The SDF
+
+Fragment stage, in plate space.
+`p = (vUv - 0.5) * vec2(uAspect, 1.0)` with `uAspect = 0.56 / 0.38 = 1.4737`, so `p.x` runs `-0.737..0.737` and `p.y` runs `-0.5..0.5`.
+
+The visor's vertical centre is at 57% down the plate, which is `p.y = 0.5 - 0.57 = -0.07`.
+
+```glsl
+// Signed distance to a rounded box. The standard iq form.
+float sdRoundBox(vec2 p, vec2 b, float r) {
+  vec2 d = abs(p) - b + r;
+  return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - r;
+}
+
+// One eye core, with arch and gaze applied.
+// `arch` bends the core into a smile or a frown by displacing y as a function
+// of the horizontal distance from the core's own centre. The (1 - t*t) profile
+// is a parabola, which is what an arc of an eye actually looks like; a linear
+// shear reads as a tilt instead.
+float eyeCore(vec2 p, float cx, float open, float arch, float width, vec2 gaze) {
+  vec2 q = p - vec2(cx + gaze.x * 0.055, VISOR_Y + gaze.y * 0.018);
+  float halfW = 0.075 * width;
+  float halfH = 0.055 * open;
+  float t = clamp(q.x / halfW, -1.0, 1.0);
+  q.y -= arch * (1.0 - t * t) * 0.048;
+  float r = min(halfH, halfW) * 0.92;
+  return sdRoundBox(q, vec2(halfW, halfH), r);
+}
+```
+
+The body of the bar is a stadium spanning the full width:
+
+```glsl
+float bar = sdRoundBox(p - vec2(0.0, VISOR_Y), vec2(0.215, 0.0), 0.030);
+```
+
+Half-extent `(0.215, 0.0)` with corner radius 0.030 gives a stadium 0.490 wide and 0.060 tall in plate space, which at 0.56 m plate width is 0.274 m wide and 0.034 m tall in world units.
+That is 77% of the plate width, matching the current bar's 0.42 against 0.56.
+
+Composition:
+
+```glsl
+float barMask  = 1.0 - smoothstep(-0.004, 0.004, bar);
+float coreL    = eyeCore(p, -0.20, uOpenL, uArchL, uWidthL, gaze);
+float coreR    = eyeCore(p,  0.20, uOpenR, uArchR, uWidthR, gaze);
+float coreMask = (1.0 - smoothstep(-0.004, 0.004, coreL))
+               + (1.0 - smoothstep(-0.004, 0.004, coreR));
+coreMask = clamp(coreMask, 0.0, 1.0);
+
+// The cores are clipped to the bar, so a wide `surprised` core can never spill
+// outside the slot. A glyph escaping its housing destroys the read of a
+// recessed display instantly.
+coreMask *= barMask;
+
+float energy = barMask * 1.6 + coreMask * (uBright - 1.6);
+vec3 col = mix(uCoolColor, uColor, clamp(barMask * 0.35 + coreMask, 0.0, 1.0)) * energy;
+float alpha = clamp(barMask * 0.94 + coreMask * 0.06, 0.0, 1.0);
+gl_FragColor = vec4(col * scanline * sweep, alpha);
+```
+
+`smoothstep(-0.004, 0.004, d)` is a fixed-width antialias in plate space, which at 0.56 m across and a typical on-screen face height of 90 px works out to roughly 1.3 px.
+Using `fwidth(d)` would be more correct at extreme distances and it is not worth the derivative instructions here; the character is never far from the camera.
+
+### Uniforms
+
+| Uniform | Type | Range | Written by | Meaning |
+| --- | --- | --- | --- | --- |
+| `uTime` | float | - | `RobotModel` from `gameClock.elapsed` | Scaled clock, so hit-stop freezes the scanlines too. |
+| `uOpenL`, `uOpenR` | float | 0.06 - 1.6 | `faceSolver` | Vertical extent of each core. Never 0. |
+| `uArchL`, `uArchR` | float | -1 - +1 | `faceSolver` | Negative frowns, positive smiles. |
+| `uWidthL`, `uWidthR` | float | 0.5 - 1.4 | `faceSolver` | Horizontal extent of each core. |
+| `uGaze` | vec2 | -1 - +1 | `faceSolver` | Core offset within the bar. |
+| `uBright` | float | 1.6 - 4.2 | `faceSolver` | HDR multiplier on the cores. Section's bloom table. |
+| `uColor` | vec3 | - | constant | `palette.visor` as linear. |
+| `uCoolColor` | vec3 | - | constant | `palette.visorDim` as linear, the bar body away from the cores. |
+| `uScan` | float | 0 - 1 | `faceSolver` | Scanline strength. 0.55 default, 0.9 when focused. |
+| `uPixel` | float | - | constant, 48.0 | LED cells across the bar. |
+| `uGlitch` | float | 0 - 1 | `faceSolver` | Horizontal tear amount. |
+| `uAspect` | float | - | constant, 1.4737 | Plate aspect. |
+
+All twelve are set in one `writeVisorUniforms(face, uniforms)` call, which is the only place `RobotModel` touches the material.
+
+### The LED scanline treatment
+
+Three components, multiplied, capped so they can never raise brightness above the budgeted value.
+
+```glsl
+// 1. Horizontal scanlines. The bar is 0.060 tall in plate space and uPixel is
+//    48, so this puts roughly 3 lines across the bar's height. More than that
+//    and it turns into a moire pattern at playing distance.
+float rows = 0.86 + 0.14 * step(0.5, fract(p.y * uPixel * 1.5 + uTime * 0.35));
+
+// 2. Vertical cell grid, at the same pitch, so it reads as a matrix rather
+//    than as CRT lines. Much weaker than the rows.
+float cols = 0.94 + 0.06 * step(0.28, fract(p.x * uPixel * 0.5));
+
+// 3. A slow bright sweep travelling left to right, which is the "this thing is
+//    powered and thinking" cue. Period 8.3 s, so it is barely noticed and
+//    definitely felt.
+float sx    = fract(uTime * 0.12) * 2.2 - 1.1;
+float sweep = 1.0 + smoothstep(0.09, 0.0, abs(p.x - sx)) * 0.18 * uScan;
+
+float scanline = mix(1.0, rows * cols, uScan) * sweep;
+```
+
+Worst case `scanline` is `1.0 * 1.0 * 1.18 = 1.18`, so the core peak at `uBright = 3.4` can reach `4.012`, luminance 2.527.
+That is intentional and stays well inside the deliberate-bloom budget in section 10.
+
+Glitch, used on damage and portal entry:
+
+```glsl
+// A few horizontal bands displaced sideways. Cheap, and reads as a display
+// losing sync rather than as the character being sad, which matters: this is a
+// hardware cue, not an emotional one.
+float band = floor((p.y - VISOR_Y) * 42.0);
+float jitter = (fract(sin(band * 91.7 + floor(uTime * 30.0) * 3.3) * 4371.0) - 0.5);
+p.x += jitter * uGlitch * 0.09;
+```
+
+Applied to `p` before the SDF evaluation, and only when `uGlitch > 0`, which the shader cannot branch on cheaply so it just always runs; the multiply by zero is free.
+
+### The shape library
+
+Six named expressions, each a tuple of continuous parameters.
+`faceSolver` blends between the current expression and the target over 0.14 s with a smoothstep, so nothing pops.
+
+| Expression | openL/R | archL/R | widthL/R | uBright | uScan | Trigger |
+| --- | --- | --- | --- | --- | --- | --- |
+| `neutral` | 1.00 | 0.00 | 1.00 | 3.4 | 0.55 | Default. |
+| `happy` | 0.72 | +1.00 | 1.15 | 3.8 | 0.45 | Lesson complete, cosmetic earned, landing after a long fall survived. Holds 1.6 s. |
+| `surprised` | 1.50 | 0.00 | 0.60 | 4.0 | 0.35 | Revival, first frame of a fall exceeding 1.2 s of air time, `Bonk`. Holds 0.5 s. |
+| `squint` | 0.35 | +0.35 | 1.25 | 3.0 | 0.70 | `stretchUp` fidget, bright light, mid-sprint. Holds while the condition lasts. |
+| `blink` | 0.06 | inherited | inherited | 3.4 | inherited | The cadence below. Overrides only `open`. |
+| `focused` | 0.80 | -0.25 | 0.80 | 3.6 | 0.90 | `interactFocus === 1`. Holds while focused. The high `uScan` is the tell: the display is working harder. |
+
+`blink` deliberately inherits arch and width from whatever expression is underneath, so a happy blink keeps its arc.
+Overriding all three would make every blink identical and the face would lose its mood for 110 ms at a time.
+
+Asymmetry is available and should be used sparingly.
+The `lookAround` fidget sets `uOpenL` and `uOpenR` 0.12 apart in the direction of the look, which is a tiny cue that costs nothing and reads as attention.
+
+### Blink cadence
+
+Per the reference: random 2-5 s interval, 90-120 ms duration, fast close and slower open.
+
+```
+nextBlinkAt = t + uniform(2.0, 5.0)
+
+Blink envelope, total 110 ms:
+   0 -  35 ms   open 1.00 -> 0.06,  ease-in    (fast close)
+  35 -  50 ms   held at 0.06                    (the hold is what makes it read as a blink)
+  50 - 110 ms   open 0.06 -> 1.00,  ease-out   (slower open)
+```
+
+Close uses `t^2`, open uses `1 - (1-t)^2`.
+Linear in both directions reads as a shutter.
+
+15% of blinks are doubles: a second blink 180 ms after the first ends, scheduled by setting `doubleRemaining = 1`.
+
+Suppression rules, all of them necessary:
+
+- No blink while `!grounded && verticalVelocity > 0`, because blinking mid-launch reads as the character being bored by its own jump.
+- No blink during `surprised`, for 0.5 s after it starts.
+- No blink within 0.25 s of a `Land` with `a > 0.5`, because a landing already has a face beat.
+- Blinks are never suppressed during `focused`, because a totally unblinking stare while reading a prompt is unsettling.
+
+The 2-5 s interval is measured on the scaled clock, so hit-stop does not advance it.
+
+### What the eyes track
+
+`faceSolver` picks a gaze target from a priority list, converts it to the head's local frame, and projects it onto the face plate.
+
+1. **A focused interactable.**
+   When `interactFocus === 1`, look at `(focusX, focusY, focusZ)`.
+   This is the totem or portal the player is standing at, published by the existing `useProximity` callbacks in `LessonTotem.tsx` and `Portal.tsx`.
+2. **The direction of travel**, when `speedNorm > 0.25`.
+   Look 2.0 m ahead along `facing`, which combined with the existing `headLead` means the head turns into a corner and the eyes lead the head.
+3. **A camera glance**, when idle for more than 2.5 s.
+   Once every `uniform(6, 14)` s of idle, look directly at the camera for 0.6 s.
+   This is the single most valuable 20 lines in the face system.
+   A character that occasionally notices you is the difference between a puppet and a personality, and the reference brief's "cuteness with mischievous undertones" is exactly this.
+4. **Neutral.**
+   `gaze` decays to `(0, 0)`.
+
+Conversion:
+
+```
+// Direction to the target in head-local space.
+local = headWorldInverse * targetWorld
+gazeXRaw = clamp(atan2(local.x, local.z) / 0.9, -1, 1)
+gazeYRaw = clamp(atan2(local.y, local.z) / 0.6, -1, 1)
+```
+
+Then smoothed with exponential damping at `lambda = 10`, which is a 100 ms time constant.
+Instant gaze reads as a machine; anything slower than about 200 ms reads as sedated.
+
+The gaze offset applied in the shader is `+-0.055` in plate space on X and `+-0.018` on Y, which is 0.031 m and 0.007 m in world units.
+Deliberately small.
+The cores must stay inside the bar at full gaze, and `0.20 + 0.055 + 0.075 * 1.4 = 0.360` against the bar's half-extent plus radius of `0.215 + 0.030 = 0.245`.
+That overflows, which is exactly why `coreMask *= barMask` clips it: a core at full gaze and full width flattens against the end of the slot rather than escaping it, which reads correctly as an eye pressed against the corner of its socket.
+
+### Tier gating
+
+| Tier | `visorSdf` | What runs |
+| --- | --- | --- |
+| `low` | `'simple'` | Bar and cores, no scanlines, no sweep, no glitch. `uScan` forced to 0. Roughly 18 fewer ALU ops per fragment on a quad that covers about 900 px. Genuinely negligible either way; this exists so `low` has no shader branches at all. |
+| `medium` | `'full'` | Everything. |
+| `high` | `'full'` | Everything. |
+
+Implement as two compiled variants selected by a `#define`, not by a uniform branch, so `low` does not pay for code it never runs.
+Since it is a `ShaderMaterial` this is a string concatenation at material construction and there is no program-cache hazard.
+
+---
+
+## 8. The contact shadow
+
+### Why this is item one
+
+There is no contact shadow today, and the single directional light in `Lighting.tsx` covers a 36 m square with a 2048 map on `medium`, which is 57 texels per metre.
+The character's foot span is 0.70 m, so its entire shadow is about 40 texels wide and its contact edge is a single texel.
+That is why it reads as hovering, and no shadow map resolution the tier system can afford will fix it.
+
+The reference brief lists a contact shadow with a coloured, not black, shadow colour as Tier 1, item 5.
+This is a 2-triangle mesh and one raycast, and it is the highest value-per-cost item in this entire document.
+
+### The raycast
+
+One ray per frame, on every tier including `low`.
+
+```ts
+// In PlayerController's useFrame, after the physics transform is read.
+const t = bodyRef.current.translation()
+
+// Origin: 0.10 m above the sole plane. The sole is capsuleHalfHeight +
+// capsuleRadius below the body centre, which is 0.70 m.
+ray.origin.x = t.x
+ray.origin.y = t.y - 0.60
+ray.origin.z = t.z
+ray.dir.x = 0; ray.dir.y = -1; ray.dir.z = 0
+
+const hit = world.castRayAndGetNormal(
+  ray,
+  SHADOW.maxCastDistance,   // 4.0 m
+  true,                     // solid
+  undefined,                // QueryFilterFlags
+  undefined,                // filterGroups
+  playerColliderRef.current, // filterExcludeCollider -- REQUIRED
+)
+```
+
+`filterExcludeCollider` is mandatory.
+Without it the ray starts 0.60 m below the capsule's centre, which is inside the capsule, and with `solid = true` it reports an immediate hit on the player itself at distance 0.
+The shadow then pins to the character's own feet and never moves, which looks almost right and is completely wrong.
+
+`castRayAndGetNormal` rather than `castRay`, because the normal is needed for orientation and a second ray to get it would be wasteful.
+
+Store the result into a `GroundSample` ref, which is the same object handed to `stepAnim` in section 4.
+**One ray, three consumers**: the contact shadow's position, the foot IK's reference plane, and the VFX emitter's ground point and normal for dust and impact rings.
+That is the reason `GroundSample` exists as a named type rather than the shadow just doing its own cast.
+
+Distance from sole to ground is `hit.timeOfImpact - 0.10`, clamped at 0.
+
+### Geometry
+
+```ts
+// Module-level, created once, shared. A plane, not a circle: the falloff lives
+// in the shader, so 2 triangles do the job a 24-segment disc would do with 24.
+const SHADOW_GEOMETRY = new PlaneGeometry(1, 1)
+SHADOW_GEOMETRY.rotateX(-Math.PI / 2)
+```
+
+Rotating the geometry rather than the mesh means the mesh's own rotation is free for the ground-normal alignment, which is one fewer quaternion composition per frame.
+
+The mesh is a direct child of the scene, never of the character.
+Section 3 explains why: parented under `root` it would inherit the squash scale, and a shadow that squashes with the body is the classic tell of a fake contact shadow.
+
+### Material
+
+```ts
+const SHADOW_MATERIAL = new ShaderMaterial({
+  uniforms: {
+    uColor:   { value: new Color('#3d4a6b') },   // per-scene, see below
+    uOpacity: { value: 0.0 },
+    uCore:    { value: 0.35 },
+    uStretch: { value: 1.0 },
+  },
+  vertexShader: /* trivial, passes uv */,
+  fragmentShader: SHADOW_FRAG,
+  transparent: true,
+  depthWrite: false,
+  depthTest: true,
+  blending: MultiplyBlending,
+  side: FrontSide,
+  toneMapped: false,
+  polygonOffset: true,
+  polygonOffsetFactor: -4,
+  polygonOffsetUnits: -4,
+})
+```
+
+**`MultiplyBlending` with a white no-op, which is the trick that makes this work.**
+
+```glsl
+uniform vec3  uColor;
+uniform float uOpacity;
+uniform float uCore;
+uniform float uStretch;
+varying vec2  vUv;
+
+void main() {
+  vec2 q = (vUv - 0.5) * vec2(1.0 / uStretch, 1.0);
+  float d = clamp(length(q) * 2.0, 0.0, 1.0);
+
+  // A soft falloff for the body of the shadow, plus a tighter darker core.
+  // The core is what actually glues the toy to the floor; the soft part alone
+  // reads as a smudge under the character rather than as contact.
+  float soft = pow(1.0 - d, 1.6);
+  float core = smoothstep(0.55, 0.0, d) * uCore;
+  float a = clamp((soft + core) * uOpacity, 0.0, 1.0);
+
+  // Multiply blending needs white where there is no shadow, because white is
+  // the identity for multiplication. Mixing toward the shadow colour by `a`
+  // gives a correct darkening with a working fade and no premultiplied-alpha
+  // bookkeeping. Writing alpha here would be wrong; multiply ignores it.
+  gl_FragColor = vec4(mix(vec3(1.0), uColor, a), 1.0);
+}
+```
+
+Multiply is the correct operator for a shadow: it darkens what is under it proportionally, so the grass texture and the stone grain survive underneath.
+Normal-blending a coloured quad would flatten them into a solid patch, which is the single most common way a blob shadow looks wrong.
+
+`toneMapped: false` matters.
+The multiply happens in the HDR buffer before tone mapping, and letting three tone-map the shadow quad's own output would apply the ACES curve to a value that is a multiplier, not a colour.
+
+`renderOrder = 1`.
+The shadow must draw after the opaque ground and before the particles, which sit at `renderOrder = 2`.
+Without an explicit order, three sorts transparents back to front by distance and the shadow can end up after a dust puff that should be lying on top of it.
+
+Lift the quad 0.012 m along the ground normal on top of the polygon offset.
+Belt and braces: polygon offset handles coplanar z-fighting against the ground mesh, and the physical lift handles the case where the visual ground and the collision ground are not exactly the same surface, which is true on the hub island where the terrain mesh is displaced and the collider is not.
+
+### Shadow colour
+
+Per the reference: coloured, never black, typically the ambient hue at 35-55%.
+
+| Scene | `uColor` | Derivation |
+| --- | --- | --- |
+| `hub` | `#3d4a6b` | `palette.skyTop` `#5aa8e8` driven to 42% value. The shadow takes the sky's hue because the sky is the fill. |
+| `cave` | `#2e2a4d` | `palette.caveCrystal` `#8b7bff` at 35% value. |
+
+Passed as a prop from the scene, defaulting to the hub value.
+Add it to `Lighting.tsx`'s variant switch so the shadow colour and the hemisphere light can never disagree, which they will if they live in two places.
+
+### Sizing and fading
+
+```ts
+export const SHADOW = {
+  /** Radius directly under a standing character, in metres. */
+  baseRadius: 0.42,
+  /** Above this height the shadow is gone entirely. */
+  maxHeight: 3.0,
+  /** How far the ray looks before giving up. */
+  maxCastDistance: 4.0,
+  /** Opacity at zero height. */
+  maxOpacity: 0.55,
+  /** How much the radius grows at maxHeight, as a fraction. */
+  spread: 0.55,
+  /** Falloff exponent on opacity. Above 1 makes the shadow vanish faster than it grows. */
+  fadePower: 1.5,
+  /** Elongation at full speed. */
+  maxStretch: 1.30,
+  /** Ground-normal tilt clamp, radians. */
+  maxTilt: 0.61,
+} as const
+```
+
+```
+h        = clamp(ground.distance / SHADOW.maxHeight, 0, 1)
+radius   = SHADOW.baseRadius * (1 + SHADOW.spread * h)
+opacity  = SHADOW.maxOpacity * pow(1 - h, SHADOW.fadePower)
+stretch  = 1 + (SHADOW.maxStretch - 1) * speedNorm
+yaw      = facing
+```
+
+At `h = 0`: radius 0.42, opacity 0.55.
+At `h = 1` (3 m up): radius 0.65, opacity 0.
+At `h = 0.33` (1 m up): radius 0.50, opacity 0.30.
+
+The shadow grows and fades together, which is the physical behaviour of a penumbra from a finite-size source, and it is what makes jump height readable.
+A player judging a landing reads the shadow, not the character.
+
+`radius` goes through `springs.shadowRadius` (`omega 20, zeta 0.75`) so the landing spike in section 6 has something to overshoot.
+`opacity` is written directly with no smoothing; smoothing it makes the shadow lag the character when it steps off a ledge, which is very visible.
+
+If `ground.hit` is false, set `opacity = 0` and leave the mesh in place.
+Do not toggle `visible`, which causes a material state change; a zero-opacity multiply quad writes `vec3(1.0)` and is a genuine no-op.
+
+### Orientation
+
+```ts
+// Align +Y to the ground normal, then clamp the tilt.
+const n = clampTilt(ground.nx, ground.ny, ground.nz, SHADOW.maxTilt)
+shadowQuat.setFromUnitVectors(UP, n)
+// Then apply the travel-direction yaw for the stretch, in the tilted frame.
+shadowMesh.quaternion.copy(shadowQuat).multiply(yawQuat.setFromAxisAngle(UP, yaw))
+```
+
+`clampTilt` is a pure function in `shadow.ts` and is testable: given a normal 60 degrees off vertical and a clamp of 35 degrees, it must return a normal exactly 35 degrees off vertical in the same azimuth.
+
+Both `UP`, `shadowQuat` and `yawQuat` are module-level scratch objects, allocated once.
+
+### Per-foot shadows, `high` only
+
+On `high`, add two smaller quads at the IK foot positions, `baseRadius 0.17`, `maxOpacity 0.42`, and drop the body shadow's `maxOpacity` to 0.34 so the three do not stack into a black patch.
+Multiply blending composites correctly here: `0.34 * 0.42 = 0.143` at the overlap, which is a natural deepening under the foot.
+
+Two more draw calls and two more raycasts, both of which `high` already pays for via foot IK.
+On `medium` and `low` the single body shadow does all the work.
+
+### `low` tier feedback
+
+`low` runs zero particles (section 13), so the contact shadow carries the landing feedback on its own.
+
+On `Land`, the shadow's radius target spikes to `baseRadius * (1 + 0.9 * a)` and its opacity to `maxOpacity * (1 + 0.5 * a)` for one frame, then returns on the `shadowRadius` spring.
+A dark ring snapping outward and settling in 200 ms is a genuinely good impact cue, and it costs one uniform write.
+
+This runs on every tier, not just `low`.
+On `medium` and `high` it sits underneath the dust and the impact ring and makes them land better.
+
+---
+
+## 9. VFX architecture
+
+There are zero particles in this project today.
+This section specifies the whole system; section 10 specifies what it emits.
+
+### The core idea
+
+**The CPU writes a particle's initial state exactly once, on emit.
+The vertex shader evaluates the full ballistic arc from a single `uTime` uniform.
+There is no per-frame buffer upload.**
+
+The alternative, which is what most three.js particle systems do, is to integrate positions on the CPU and re-upload a position buffer every frame.
+At 2048 particles that is a 24 KB upload per frame plus 2048 iterations of JavaScript, every frame, whether anything is happening or not.
+The analytic approach costs one uniform write per frame and nothing else, and on an idle frame with no emissions the system does literally zero CPU work beyond `uTime`.
+
+That property is what makes it affordable on `medium`, and it is the reason the design is worth the extra care in the shader.
+
+### Module layout
+
+```
+src/art/vfx/
+  particlePool.ts     Pool, createPool(), allocate(), the ring allocator      pure, tested
+  vfxTuning.ts        The effect catalogue as data                            data, tested
+  emitters.ts         emit(pool, effectId, params) -> writes particles        pure, tested
+  vfxBus.ts           Module singleton handle, like cameraFrame               pure
+  bloomBudget.ts      assertBloomBudget(), used by a test                     pure, tested
+  ParticleField.tsx   The InstancedMesh, the materials, the uTime write       not tested
+  VfxSystem.tsx       Drains the event ring, calls emit                       not tested
+  billboardShader.ts  The billboard vertex and fragment source                data
+  chunkShader.ts      The mesh-family vertex and fragment source              data
+```
+
+`emitters.ts` being pure and testable is the point of the split.
+"Does `landingChunks` at strength 0.3 emit 6 particles with velocities inside the specified cone" is a question with an exact answer.
+
+### Instanced attributes
+
+Per particle, per family.
+Both families share the same attribute layout so the pool code does not branch.
+
+| Attribute | Type | Bytes | Meaning |
+| --- | --- | --- | --- |
+| `aSeedTime` | float | 4 | Emission time on `gameClock.elapsed`. Set from the event's timestamp, not from the current frame. |
+| `aLifetime` | float | 4 | Seconds. |
+| `aOrigin` | vec3 | 12 | World-space emission point. |
+| `aVelocity` | vec3 | 12 | Initial velocity, m/s. |
+| `aAccel` | vec3 | 12 | Constant acceleration, m/s^2. Usually `(0, -g, 0)` but wind and rising motes use the other components. |
+| `aDrag` | float | 4 | Exponential drag coefficient, 1/s. |
+| `aSize` | vec2 | 8 | Size in metres at `life = 0` and at `life = 1`. |
+| `aColor` | vec3 | 12 | Linear HDR base colour, pre-multiplied by the effect's peak. |
+| `aSpin` | vec2 | 8 | Spin rate rad/s, initial phase rad. |
+| `aShape` | vec4 | 16 | `x` fade power, `y` orbit radius, `z` orbit rate, `w` packed flag bits as a float. |
+| `aGround` | vec2 | 8 | `x` ground Y for the bounce, `y` restitution. |
+| **Total** | | **100 B** | |
+
+At the `high` budget of 2048 particles that is 205 KB of GPU buffer, allocated once at mount and never resized.
+
+Flag bits in `aShape.w`, read with `mod(floor(w / 2^k), 2.0)`:
+
+| Bit | Flag | Effect |
+| --- | --- | --- |
+| 0 | `GROUND_ALIGNED` | The quad lies in the ground plane instead of facing the camera. Rings and decals. |
+| 1 | `VELOCITY_STRETCHED` | The quad stretches along its screen-space velocity. Speed lines and sparks. |
+| 2 | `BOUNCE` | One analytic ground bounce. Requires `aDrag == 0`. |
+| 3 | `ORBIT` | A helical offset around the origin, using `aShape.yz`. Totem and portal motes. |
+| 4 | `FLICKER` | Brightness modulated by a hash of the instance id and time. |
+
+### The analytic arc
+
+With constant acceleration `a` and exponential drag coefficient `k`, the closed form is exact:
+
+```glsl
+// t is seconds since emission.
+// Degenerate at k = 0, so k is floored at 1e-3. At that value the error against
+// true drag-free motion over a 2.5 s lifetime is under 0.13%, which is far
+// below a pixel at any size these particles are drawn at.
+float k  = max(aDrag, 1e-3);
+float ek = exp(-k * t);
+vec3 pos = aOrigin
+         + aVelocity * (1.0 - ek) / k
+         + aAccel * (t - (1.0 - ek) / k) / k;
+```
+
+This is 3 multiply-adds and one `exp` per vertex.
+It is cheaper than the naive per-frame CPU integration by roughly four orders of magnitude in total work, and it is exact rather than an Euler approximation, so a particle's arc does not change if the frame rate does.
+
+**That last property is worth stating on its own: particles are frame-rate independent by construction, not by careful integration.**
+A dust puff on a 144 Hz monitor traces exactly the same curve as on a 30 Hz one.
+
+The single analytic bounce, when `BOUNCE` is set and `aDrag == 0`:
+
+```glsl
+// Solve for the time the parabola first crosses aGround.x.
+// Only valid without drag, which the flag's contract requires.
+float g  = aAccel.y;            // negative
+float y0 = aOrigin.y - aGround.x;
+float vy = aVelocity.y;
+float disc = vy * vy - 2.0 * g * y0;
+float tHit = disc > 0.0 ? (-vy - sqrt(disc)) / g : 1e9;
+if (t > tHit) {
+  float td = t - tHit;
+  float vyb = -(vy + g * tHit) * aGround.y;             // restitution
+  pos.y  = aGround.x + vyb * td + 0.5 * g * td * td;
+  pos.xz = aOrigin.xz + aVelocity.xz * (tHit + td * aGround.y);   // friction on the horizontal
+  pos.y  = max(pos.y, aGround.x);                        // clamp after the second arc
+}
+```
+
+Two branches, no loop, roughly 15 extra ALU ops on the particles that ask for it.
+
+**If this turns out fiddly in practice, the fallback is `pos.y = max(pos.y, aGround.x)` alone**, which slides a chunk to a stop on the floor.
+That reads acceptably and is 2 ops.
+Take the fallback rather than shipping a bounce that is subtly wrong; a chunk that tunnels through the floor is worse than one that does not bounce.
+I am guessing at the cost-benefit here and have not measured it.
+
+### Life and culling
+
+```glsl
+float t = uTime - aSeedTime;
+float life = t / aLifetime;
+if (life < 0.0 || life > 1.0) {
+  // Behind the far plane, so the primitive is clipped and rasterises nothing.
+  // Cheaper than a zero scale, which still generates and clips a degenerate
+  // triangle, and far cheaper than a discard, which defeats early-Z.
+  gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+  return;
+}
+```
+
+A dead particle costs four vertex-shader invocations that exit on the second instruction, and zero fragments.
+At 2048 particles all dead that is 8192 trivial vertex invocations, which is nothing.
+
+**This is what removes the need for per-frame uploads.**
+Dead particles cull themselves from data that was written when they were born.
+
+### Size and fade
+
+```glsl
+float size  = mix(aSize.x, aSize.y, life);
+float fade  = pow(1.0 - life, aShape.x);
+// Fade in over the first 12% of life, so nothing pops into existence at full
+// brightness. Cheap and it is the difference between a spawn and an appearance.
+fade *= smoothstep(0.0, 0.12, life);
+```
+
+`aShape.x` (fade power) per effect: 1.0 for a linear fade, 3.0 for a flash that is gone almost immediately, 0.6 for something that holds and then drops.
+
+### The two material families
+
+The families exist because they have opposite requirements and merging them would compromise both.
+
+**Family A: billboard.**
+
+- Geometry: one `PlaneGeometry(1, 1)`, 4 vertices, 2 triangles, instanced.
+- Facing: extracted from `modelViewMatrix` in the vertex shader, so no CPU work and no `Object3D` per particle.
+  ```glsl
+  vec3 camRight = vec3(modelViewMatrix[0][0], modelViewMatrix[1][0], modelViewMatrix[2][0]);
+  vec3 camUp    = vec3(modelViewMatrix[0][1], modelViewMatrix[1][1], modelViewMatrix[2][1]);
+  vec3 offset   = (camRight * position.x + camUp * position.y) * size;
+  ```
+  With `GROUND_ALIGNED` the basis is replaced by world X and Z, and with `VELOCITY_STRETCHED` `camRight` is replaced by the normalised screen-space velocity and `size.x` scaled by the effect's stretch factor.
+- Fragment: a radial falloff, no texture.
+  ```glsl
+  float d = length(vUv - 0.5) * 2.0;
+  // Power 2.5 rather than a linear or gaussian falloff. This is the single
+  // most important number for the stacking problem in the next subsection:
+  // it concentrates the energy in the middle 40% of the quad and makes the
+  // outer 60% contribute almost nothing, so overlapping quads overlap mostly
+  // in their near-zero regions.
+  float a = pow(clamp(1.0 - d, 0.0, 1.0), 2.5);
+  gl_FragColor = vec4(vColor * a * vFade, a * vFade);
+  ```
+  For `GROUND_ALIGNED` rings, replace the radial falloff with an annulus: `a = smoothstep(0.34, 0.5, d) * smoothstep(0.5, 0.46, d)`.
+- Blending: `AdditiveBlending` or `NormalBlending`, per the policy below.
+- `depthWrite: false`, `depthTest: true`, `toneMapped: false`.
+- No sorting needed: additive is commutative, and normal-blended billboards in this catalogue never overlap each other.
+
+**Family B: mesh chunks.**
+
+- Geometry: a bevelled tetrahedron, 12 triangles.
+  Generated once by `chunkGeometry()`: a `TetrahedronGeometry(0.5, 0)` with each face inset 12% and the resulting gaps filled, which gives four visible facets and four chamfer strips.
+  The reference brief is explicit that impact particles are discrete solid objects, never smoke puffs, so these need to catch light and read as objects.
+- Lighting: hand-written, two terms, no three lighting integration.
+  ```glsl
+  // A fixed key matching Lighting.tsx's directional at (8, 14, 6), plus a
+  // hemisphere term. Not physically joined to the scene's lights, and it does
+  // not need to be: these live for under a second and nobody compares them to
+  // the shading on a wall.
+  float ndl = max(dot(vNormal, uKeyDir), 0.0);
+  float hemi = vNormal.y * 0.5 + 0.5;
+  vec3 col = vColor * (uAmbient * mix(uGroundCol, uSkyCol, hemi) + ndl * uKeyCol);
+  ```
+  `uKeyDir` normalised `(8, 14, 6)`, `uKeyCol` `#fff2dd` at 1.3 to match the scene key, `uAmbient` 0.5.
+- Spin: a rotation matrix built from `aSpin` about an axis hashed from the instance id, applied to both position and normal.
+- Blending: `NormalBlending`, `depthWrite: true`, `depthTest: true`.
+  These are solid objects and they occlude each other correctly.
+- **Peak output capped at 1.35 linear luminance.** Mesh chunks must never bloom; a glowing gravel chunk reads as a bug.
+- `toneMapped: false` is wrong here and must not be set: chunks are lit surfaces and should be tone-mapped with everything else.
+  This is the one material in this document that keeps three's default tone mapping.
+
+### The blending policy
+
+This is the constraint that shapes the whole catalogue.
+
+**Additive quads stack.
+A cluster of individually-dim additive dust can cross the 1.75 threshold and produce a white blob.**
+
+The policy is three classes, and every effect in section 10 declares which one it is.
+
+**Class 1: solid.**
+`NormalBlending`, `depthWrite: true`, peak linear luminance `<= 1.35`.
+Cannot bloom, cannot stack, occludes correctly.
+This carries the majority of the particle count in every effect that has one.
+
+**Class 2: sub-threshold additive.**
+`AdditiveBlending`, `depthWrite: false`, per-particle peak linear luminance `<= 0.24`.
+The budget is `peak * maxOverlap <= 1.60`, with `maxOverlap` estimated per effect from the emission geometry.
+At peak 0.24 that allows 6 fully-coincident particles before the threshold is at risk, and every Class 2 effect in section 10 emits on a ring or a spread with a minimum separation that makes 6-way coincidence geometrically impossible.
+
+Three mechanisms enforce it:
+
+1. **Peak cap.** 0.24 linear luminance, which is 38% of `palette.visor`'s unit luminance. Dim.
+2. **Falloff power 2.5.** Two quads whose centres are 0.5 radii apart overlap in a region where both are already at `(1 - 0.5)^2.5 = 0.177` of peak. The effective stacked value is 0.085, not 0.48. The falloff does more work here than the cap does.
+3. **Minimum emission separation.** Every Class 2 emitter places particles on a ring or an arc with an explicit angular step, never by uniform random sampling of a disc. Uniform random sampling is what produces coincident particles, and it is banned for Class 2.
+
+**Class 3: deliberate bloom.**
+`AdditiveBlending`, `depthWrite: false`, peak linear luminance up to 4.2, and a **hard cap on the number alive**.
+Section 10 gives each Class 3 effect a `maxAlive` and the pool enforces it by refusing to emit beyond it.
+Class 3 effects are additionally required to be spatially separated by construction: the landing ring is a single quad, collectible sparks are emitted on a sphere with a 22 degree minimum angular step, and portal sparkles are spread across an 8.6 m^2 face with at most 24 alive.
+
+`bloomBudget.ts` exports the check and section 12's test runs it over the whole catalogue, so the policy is enforced by CI and not by discipline.
+
+```ts
+export type BloomClass = 1 | 2 | 3
+
+/** Returns null if the effect is within budget, or a description of the violation. */
+export function checkBloomBudget(e: EffectDef): string | null {
+  const lum = luminance(e.color) * e.peak
+  if (e.blendClass === 1 && lum > 1.35) return `class 1 peak ${lum} exceeds 1.35`
+  if (e.blendClass === 2 && lum > 0.24) return `class 2 peak ${lum} exceeds 0.24`
+  if (e.blendClass === 2 && lum * e.maxOverlap > 1.60) return `class 2 stack ${lum * e.maxOverlap} exceeds 1.60`
+  if (e.blendClass === 3 && e.maxAlive > 32) return `class 3 maxAlive ${e.maxAlive} exceeds 32`
+  if (e.blendClass === 3 && lum > 4.2) return `class 3 peak ${lum} exceeds 4.2`
+  return null
+}
+```
+
+### Draw calls
+
+Three `InstancedMesh` instances total, regardless of how many effects are running.
+
+| Mesh | Family | Blending | Pool |
+| --- | --- | --- | --- |
+| `billboardAdd` | A | Additive | short + long, classes 2 and 3 |
+| `billboardNorm` | A | Normal | short, ground-aligned decals |
+| `chunks` | B | Normal, depth write | short, class 1 |
+
+Effects that need more than one class emit into more than one mesh, which is why `emit()` takes the pool set rather than a single pool.
+`renderOrder`: `chunks` 0 (they are effectively opaque), `billboardNorm` 2, `billboardAdd` 3.
+All after the contact shadow's 1.
+
+### The pool and the ring allocator
+
+```ts
+export type Pool = {
+  capacity: number
+  /** All the instanced attribute arrays, one Float32Array each. */
+  seedTime: Float32Array
+  lifetime: Float32Array
+  origin: Float32Array      // capacity * 3
+  // ... one per attribute in the table above ...
+
+  /** Absolute expiry time per slot, so liveness is a comparison not a countdown. */
+  expireAt: Float32Array
+
+  /** Monotonic write cursor. Slot is `cursor % capacity`. */
+  cursor: number
+  /** Emits refused because the pool was saturated. Exposed in dev. */
+  dropped: number
+  /** Per-effect alive counters, for Class 3 maxAlive enforcement. */
+  aliveByEffect: Uint16Array
+  /** Which effect owns each slot, so a recycle can decrement the right counter. */
+  effectOf: Uint8Array
+
+  /** Dirty ranges for this frame. Fixed length 4, so a wrapped emit fits. */
+  ranges: Int32Array        // [start0, count0, start1, count1, ...]
+  rangeCount: number
+}
+```
+
+**Allocation is a ring with an expiry check, not a free list.**
+
+```ts
+/**
+ * Claims `n` contiguous-ish slots, returning the first index or -1.
+ *
+ * A ring rather than a free list because a free list needs a sweep to refill,
+ * and a sweep is O(capacity) work on a frame that may not be emitting anything.
+ * The ring is O(n) on emit and O(0) otherwise, which matches how the system is
+ * actually used: long stretches of nothing punctuated by bursts.
+ *
+ * The one hazard a ring has is a long-lived particle parking in front of the
+ * cursor and blocking short-lived ones behind it. That is solved by
+ * partitioning: two pools, one for lifetimes up to 0.6 s and one for up to
+ * 2.5 s, each with its own cursor. Nothing long ever blocks anything short.
+ */
+export function allocate(p: Pool, n: number, now: number, effect: number, maxAlive: number): number
+```
+
+The rules:
+
+1. If `maxAlive > 0 && p.aliveByEffect[effect] + n > maxAlive`, refuse and increment `dropped`.
+   This is the Class 3 cap.
+2. Walk `n` slots from `cursor`. If any has `expireAt[slot] > now`, the pool is saturated at that point.
+   Refuse the whole emit rather than a partial one, and increment `dropped` by `n`.
+   Partial bursts look worse than absent ones.
+3. Otherwise, for each slot, decrement `aliveByEffect[effectOf[slot]]` if it was live, write the new data, set `effectOf[slot] = effect`, and increment `aliveByEffect[effect]`.
+4. Record the dirty range or ranges. A run that crosses `capacity` produces two, which is why `ranges` is length 4.
+
+`expireAt[slot] = seedTime + lifetime`.
+Liveness is `expireAt[slot] > now`, a single comparison, with no per-frame countdown loop.
+That is the second thing that makes idle frames free.
+
+### Upload
+
+```ts
+// In ParticleField's useFrame, after the drain.
+if (pool.rangeCount > 0) {
+  for (let i = 0; i < pool.rangeCount; i++) {
+    const start = pool.ranges[i * 2]
+    const count = pool.ranges[i * 2 + 1]
+    for (const attr of attributes) {
+      attr.addUpdateRange(start * attr.itemSize, count * attr.itemSize)
+      attr.needsUpdate = true
+    }
+  }
+  pool.rangeCount = 0
+}
+uniforms.uTime.value = gameClock.elapsed
+```
+
+`addUpdateRange` and `clearUpdateRanges` are the three r159+ API; `updateRange` as a single mutable object was deprecated and behaves differently.
+Three 0.185 has the newer form.
+
+**On a frame with no emissions, `needsUpdate` is never set and nothing is uploaded.**
+The only per-frame GPU communication is one float.
+That is the whole design, in one sentence.
+
+`clearUpdateRanges()` must be called on each attribute after the frame, or the ranges accumulate and three eventually uploads the whole buffer anyway.
+Three does this itself in `WebGLAttributes.update`, so it is handled, but a build agent adding a manual upload path needs to know.
+
+### The emitter API
+
+```ts
+// src/art/vfx/vfxBus.ts
+//
+// A module singleton, following the same pattern and for the same reason as
+// cameraFrame.ts and irisHandle.ts: this is called from inside physics steps
+// and frame loops, and routing it through React would re-render the scene tree
+// at 60 Hz for data that only ever fills buffers.
+
+export const vfx = {
+  /** Set by ParticleField on mount, cleared on unmount. Null means no VFX tier. */
+  pools: null as PoolSet | null,
+
+  /**
+   * Fire an effect.
+   *
+   * Safe to call when `pools` is null, which is what makes the `low` tier work:
+   * gameplay code calls vfx.emit() unconditionally and on `low` it is a
+   * two-instruction no-op. No caller anywhere checks the quality tier.
+   */
+  emit(effect: EffectId, t: number, x: number, y: number, z: number,
+       nx: number, ny: number, nz: number, strength: number, hue: number): void,
+
+  /** Continuous emitters register once and are ticked by VfxSystem. */
+  addAmbient(id: number, def: AmbientDef): void,
+  removeAmbient(id: number): void,
+}
+```
+
+`emit` taking eleven scalars rather than an options object is deliberate: an options object is an allocation, and this is called from inside the physics step.
+
+The `pools === null` no-op is the mechanism that makes `low` genuinely zero cost.
+`ParticleField` does not mount at all on `low`, `vfx.pools` stays null, and every `emit` call in the game returns immediately.
+There is no branch on the quality tier anywhere in gameplay code, which is what stops the tier system leaking into places that should not know about it.
+
+### Ambient emitters
+
+Portal sparkles and totem motes are continuous, not event-driven.
+They register an `AmbientDef` and `VfxSystem` ticks them:
+
+```ts
+export type AmbientDef = {
+  effect: EffectId
+  /** Particles per second. */
+  rate: number
+  /** World position. */
+  x: number; y: number; z: number
+  /** Emitter extent, interpretation is per-effect. */
+  radius: number
+  /** Below this distance from the player, the emitter runs. Above it, it does not. */
+  activeRadius: number
+  /** Fractional accumulator, so a rate below the frame rate still works. */
+  accum: number
+}
+```
+
+`accum += rate * dt`, emit `floor(accum)` particles, `accum -= floor(accum)`.
+The `activeRadius` cull is what keeps a hub with four portals and six totems from running ten ambient emitters at once.
+`activeRadius` is 8 m for portals and `INTERACTION.radius * 2.2 = 5.72` m for totems.
+
+Ambient emitters must never emit more than `ceil(rate * 0.05)` in one frame, so a tab that regains focus after a long pause does not dump 400 sparkles in one frame.
+Clamp it, do not accumulate.
+
+### Recycling rules, stated plainly
+
+1. A slot is live if and only if `expireAt[slot] > now`. There is no death list, no callback, no removal.
+2. Slots are reused in cursor order, so the oldest expired slot is always reused first.
+3. An emit that cannot be satisfied is refused whole and counted, never truncated.
+4. Class 3 effects additionally cap by `maxAlive`, checked before the ring check.
+5. Nothing is ever allocated after `createPool`.
+6. The pool never shrinks or grows. Changing the quality tier remounts `ParticleField`, which creates a new pool at the new capacity and discards the old one.
+
+Rule 6 means a tier change mid-play drops every live particle.
+That is correct: a tier change already remounts most of the scene.
+
+---
+
+## 10. The effect catalogue
+
+Nine effects.
+Seven were asked for; `reviveMotes` and `portalEntryBurst` are added because the revival and the portal are the two beats the game already has and neither has any feedback at all.
+
+Colour rule, from the reference brief: **reward feedback comes from the reward palette (gold, white, cyan) and never from the world palette**, so juice reads as feedback independently of where the player is standing.
+Physical feedback (dust, chunks) comes from the world palette, because a dust puff that is not the colour of the ground is a bug.
+
+### Summary table
+
+| # | Effect | Trigger | Count | Lifetime | Class | Pool | Tier |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `jumpDust` | `Jump` | 10 / 14 | 0.42 s | 2 | short | med+ |
+| 2 | `landingRing` | `Land`, a > 0.25 | 1 | 0.18 s | 3 | short | med+ |
+| 3 | `landingChunks` | `Land`, a > 0.50 | 6 / 14 | 0.75 s | 1 | short | med+ |
+| 4 | `footstepMotes` | `Footstep`, speedNorm > 0.55 | 3 | 0.30 s | 2 | short | high |
+| 5 | `portalSparkles` | ambient, unlocked portal within 8 m | 14 / 26 per s | 1.6-2.4 s | 3 | long | med+ |
+| 6 | `collectiblePop` | `Collect` | 18 + 10 + 1 | 0.9 / 0.35 / 0.20 s | 1 + 3 + 3 | short | med+ |
+| 7 | `totemMotes` | ambient, within 5.72 m | 6 per s | 1.8 s | 3 | long | med+ |
+| 8 | `speedLines` | speedNorm > 0.85 for 0.4 s | 12 per s, 6 alive | 0.22 s | 2 | short | high |
+| 9 | `reviveMotes` | `Revive` | 16 | 0.9 s | 3 | short | med+ |
+| 10 | `portalEntryBurst` | `PortalEnter` | 24 | 0.55 s | 3 | short | med+ |
+
+Counts written `a / b` are `medium / high`.
+
+---
+
+### 1. `jumpDust`
+
+The ground kicking away from the feet on takeoff.
+
+| Property | Value |
+| --- | --- |
+| Trigger | `EV.Jump`, unconditional |
+| Count | 10 (medium), 14 (high) |
+| Origin | `event.xyz + normal * 0.02`, on a ring of radius `0.16 + uniform(-0.04, 0.04)` |
+| Angular placement | `i * 2PI / count + uniform(-0.18, 0.18)` rad. **Stepped, not random**, per the Class 2 rule. |
+| Velocity | Radial in the ground plane at `1.4 + uniform(0, 0.8)` m/s, plus `0.5 + uniform(0, 0.5)` m/s along the normal |
+| Accel | `(0, -5.5, 0)` |
+| Drag | 3.2 |
+| Lifetime | `0.42 + uniform(-0.08, 0.08)` s |
+| Size | 0.09 -> 0.20 m |
+| Fade power | 1.4 |
+| Colour | `mix(palette.soil, palette.grass, 0.4)` at 0.55 value, linear luminance 0.21 |
+| Peak | 1.0, so effective peak luminance 0.21, inside the Class 2 cap of 0.24 |
+| `maxOverlap` | 3, from the stepped ring at radius 0.16 with a 0.20 m final size |
+| Blending | Class 2, additive |
+| Flags | none |
+| Tier | `low` none, `medium` 10, `high` 14 |
+
+At 3-way overlap the worst-case stacked luminance is `0.21 * 3 = 0.63`, comfortably under 1.60.
+The dust never blooms and it is not supposed to: dust is not a light source.
+
+Scaled by `event.a`, which is the launch speed fraction.
+A jump cut short by releasing the button still emits, at 45% of the count, because `JUMP.cutMultiplier` applies after the launch and the dust is already gone by then.
+
+---
+
+### 2. `landingRing`
+
+The single-frame readability layer that says "an impact happened here".
+
+| Property | Value |
+| --- | --- |
+| Trigger | `EV.Land` with `a > 0.25` |
+| Count | 1 |
+| Origin | `event.xyz + normal * 0.015` |
+| Velocity | zero |
+| Accel | zero |
+| Drag | 0 |
+| Lifetime | 0.18 s |
+| Size | `0.18` -> `0.30 + 0.80 * a` m |
+| Fade power | 3.0, so it is effectively gone by 90 ms |
+| Colour | `#ffffff`, linear `(1, 1, 1)`, luminance 1.0 |
+| Peak | `2.4 + 0.6 * a`, so 2.4 to 3.0 |
+| `maxAlive` | 2 |
+| Blending | Class 3, additive |
+| Flags | `GROUND_ALIGNED` |
+| Tier | `low` none, `medium` and `high` yes |
+
+Ground-aligned so it lies flat on the surface and expands outward, which is the standard shockwave read.
+The annulus fragment path rather than the radial one: a filled disc reads as a flash on the floor, a ring reads as a wave.
+
+Peak luminance 3.0 against a threshold of 1.75 means it blooms hard for two frames and then is gone.
+That is the "impact flash 1-2 frames" the reference brief specifies, delivered in world space rather than as a screen effect, which is better: it is located at the impact rather than washing the whole frame.
+
+Lifetime 0.18 s is inside the 250 ms ceiling.
+
+---
+
+### 3. `landingChunks`
+
+The tactility layer. Solid objects, real gravity, they pile up.
+
+| Property | Value |
+| --- | --- |
+| Trigger | `EV.Land` with `a > 0.50` |
+| Count | `round(lerp(4, 6, a))` medium, `round(lerp(6, 14, a))` high |
+| Origin | `event.xyz` on a ring of radius `0.20 + uniform(0, 0.06)`, stepped |
+| Velocity | Cone 55 degrees from the ground normal, speed `1.8 + uniform(0, 1.6) * a` m/s |
+| Accel | `(0, -18, 0)` |
+| Drag | 0, required by the `BOUNCE` flag |
+| Spin | rate `uniform(6, 14)` rad/s, phase `uniform(0, 2PI)` |
+| Lifetime | 0.75 s |
+| Size | `0.05` -> `0.03` m, so they shrink slightly as they settle |
+| Fade power | 0.6, holding then dropping |
+| Colour | Ground tint, `mix(palette.soil, palette.grassDeep, 0.5)`, at value 0.62 |
+| Peak | 1.0, effective luminance 0.29 before lighting, under 1.35 after the key term |
+| `aGround` | `(event.y, 0.35)` |
+| Blending | Class 1, normal, depth write |
+| Flags | `BOUNCE` |
+| Tier | `low` none, `medium` 4-6, `high` 6-14 |
+
+The reference brief's impact recipe is "a single-frame bright ring plus 8-20 solid chunks with gravity and bounce plus 2-4 frames of screen shake".
+Effects 2 and 3 plus section 11's shake are exactly that recipe.
+
+14 chunks on `high` rather than 20 because our impacts are more frequent than Astro's and 20 per landing on a jump-heavy traversal saturates the pool.
+
+At `a = 1` and 3.4 m/s launch at 55 degrees, a chunk peaks 0.18 m up at 0.22 s, lands at 0.44 s, bounces to 0.02 m, and settles.
+Lifetime 0.75 s gives it 0.3 s lying on the ground before fading, which is what makes it read as debris rather than as a sparkle.
+
+---
+
+### 4. `footstepMotes`
+
+Ambient disturbance from running. Very small.
+
+| Property | Value |
+| --- | --- |
+| Trigger | `EV.Footstep` with `a > 0.55` (which is `speedNorm` at plant) |
+| Count | 3 |
+| Origin | The planted foot's IK position, jittered `+-0.03` m laterally |
+| Angular placement | Stepped at 120 degrees, jittered `+-25` degrees |
+| Velocity | `0.5 + uniform(0, 0.4)` m/s, directed backward relative to `facing` and 30 degrees up |
+| Accel | `(0, -2.0, 0)` |
+| Drag | 4.0 |
+| Lifetime | 0.30 s |
+| Size | 0.05 -> 0.11 m |
+| Fade power | 1.8 |
+| Colour | Ground tint at value 0.50 |
+| Peak | 0.75, effective luminance 0.16 |
+| `maxOverlap` | 2 |
+| Blending | Class 2, additive |
+| Tier | `high` only |
+
+`high` only because at 9 steps per second of running this is the highest-frequency emitter in the game, and it contributes the least.
+It is the first thing to cut and the last thing to add.
+
+The `a > 0.55` gate means walking produces nothing and running produces a trail, which is a speed cue that costs nothing to read.
+
+---
+
+### 5. `portalSparkles`
+
+Ambient, the portal breathing.
+
+| Property | Value |
+| --- | --- |
+| Trigger | Ambient, registered by `Portal.tsx` when `!locked`. Active within 8 m of the player. |
+| Rate | 14 per s (medium), 26 per s (high) |
+| Origin | A point on the 2.6 x 3.3 opening, sampled with radius biased toward the rim: `r = sqrt(uniform(0.45, 1.0))`, angle stepped by the golden angle 2.3999 rad per emission |
+| Velocity | `(0.15 + uniform(0, 0.35))` m/s, directed inward-and-up: 60% toward the opening's centre, 40% along world up |
+| Accel | `(0, +0.4, 0)`, so they rise |
+| Drag | 1.2 |
+| Lifetime | `1.6 + uniform(0, 0.8)` s |
+| Size | 0.035 -> 0.0 m |
+| Fade power | 1.0 |
+| Colour | `palette.visor` `#4de2ff`, linear luminance 0.63 |
+| Peak | 3.2, effective luminance 2.02 |
+| `maxAlive` | 24 |
+| Blending | Class 3, additive |
+| Flags | `ORBIT` with radius 0.06 m and rate 2.2 rad/s, `FLICKER` |
+| Tier | `low` none, `medium` 14/s, `high` 26/s plus 8 mesh chips |
+
+The golden-angle stepping is what guarantees separation: consecutive emissions land 137.5 degrees apart, so no two sparkles born near each other in time are near each other in space.
+This is the Class 2 minimum-separation rule applied to a Class 3 effect, and it is why 24 alive at peak 2.02 is safe across an 8.6 m^2 face.
+
+Blooms deliberately.
+The portal is supposed to be the brightest thing in the hub and `PortalShimmer` already runs at `uIntensity 1.9` with its arm crests crossing the threshold.
+These sparkles are the same material family conceptually and should read as the same phenomenon.
+
+On `high`, add 8 mesh-family "chips": 0.03 m tetrahedra in `palette.rock` drifting on the same paths at 0.3x the speed with 4 s lifetimes.
+Solid objects among the light is the reference's manufactured-world rule applied to a magic effect, and it is what stops the portal reading as generic fantasy sparkle.
+
+---
+
+### 6. `collectiblePop`
+
+Lesson completion, cosmetic earned. The biggest single reward beat in the game.
+
+Three sub-emissions fired together from one event.
+
+**6a, chunks.**
+
+| Property | Value |
+| --- | --- |
+| Count | 18 |
+| Origin | The collected object, on a sphere of radius 0.10 m, stepped by the golden spiral |
+| Velocity | Cone 70 degrees from world up, speed `2.6 + uniform(0, 1.6)` m/s |
+| Accel | `(0, -20, 0)` |
+| Drag | 0 |
+| Spin | `uniform(10, 20)` rad/s |
+| Lifetime | 0.90 s |
+| Size | 0.05 -> 0.04 m |
+| Colour | `palette.unlocked` `#ffd45e` for hue 0, `palette.visor` for 1, `palette.token` for 2 |
+| Peak | 1.0 |
+| `aGround` | `(groundY, 0.45)` |
+| Blending | Class 1, normal, depth write |
+| Flags | `BOUNCE` |
+
+Cube shards rather than tetrahedra would be marginally better here (coin discs, per the reference), and the shared `chunkGeometry` is not worth a second geometry for one effect.
+Use the tetrahedron.
+
+**6b, sparks.**
+
+| Property | Value |
+| --- | --- |
+| Count | 10 |
+| Origin | Same point, no offset |
+| Velocity | Radial on a sphere, stepped at a minimum 22 degrees apart, speed `3.4 + uniform(0, 1.2)` m/s |
+| Accel | `(0, -6, 0)` |
+| Drag | 5.5, so they decelerate hard and read as sparks rather than as projectiles |
+| Lifetime | 0.35 s |
+| Size | 0.06 -> 0.0 m |
+| Fade power | 2.2 |
+| Colour | `#fff4d6`, linear luminance 0.90 |
+| Peak | 3.6, effective luminance 3.24 |
+| `maxAlive` | 12 |
+| Blending | Class 3, additive |
+| Flags | `VELOCITY_STRETCHED`, stretch factor 2.4 |
+
+The 22 degree minimum separation is what makes 12 alive at peak 3.24 safe.
+At 0.35 s and drag 5.5 they travel about 0.55 m before stopping, so by the time they are at their brightest they are already 0.2 m apart.
+
+**6c, ring.**
+
+Same as `landingRing` but gold, expanding to 1.4 m over 0.20 s, peak 3.0, `GROUND_ALIGNED` at the collected object's height rather than the ground.
+
+Total for one collect: 29 particles, one shake, one hit-stop, one `happy` expression hold, one impact flash.
+That is the loudest thing in the game and it should be.
+
+Tier: `low` none, `medium` 18 + 10 + 1, `high` the same.
+This is not scaled by tier because it fires at most a handful of times per session and it is the payoff for finishing a lesson.
+
+---
+
+### 7. `totemMotes`
+
+Ambient, the lesson node thinking.
+
+| Property | Value |
+| --- | --- |
+| Trigger | Ambient, registered by `LessonTotem.tsx`. Active within `INTERACTION.radius * 2.2 = 5.72` m. |
+| Rate | 6 per s, both tiers |
+| Origin | The accent ring at `y = 0.98`, radius 0.44, stepped by the golden angle |
+| Velocity | `(0, 0.25 + uniform(0, 0.20), 0)` |
+| Accel | `(0, 0.15, 0)`, a gentle rise |
+| Drag | 0.8 |
+| Lifetime | 1.8 s |
+| Size | 0.030 -> 0.0 m |
+| Fade power | 1.2 |
+| Colour | `palette.node` `#7c6bff` when incomplete, `palette.unlocked` `#ffd45e` when complete |
+| Peak | 2.6. `palette.node` linear luminance is 0.24, so effective 0.62; `palette.unlocked` is 0.66, so effective 1.72 |
+| `maxAlive` | 16 |
+| Blending | Class 3, additive |
+| Flags | `ORBIT` radius 0.05 m, rate 1.4 rad/s |
+| Tier | `low` none, `medium` and `high` 6/s |
+
+Note the asymmetry: the incomplete purple motes sit under the bloom threshold and the completed gold ones sit just over it.
+That is deliberate and it is free progression feedback.
+A completed totem visibly glows harder from across the island, with no extra code.
+
+They rise 0.45 m over their lifetime, from the ring at 0.98 to about 1.43, which is short of the node at 2.1.
+Do not extend them to reach it; motes that terminate at the node read as being consumed by it, which is a different and less interesting idea than "the plinth is emitting thought".
+
+---
+
+### 8. `speedLines`
+
+The reference brief's substitute for motion blur.
+
+| Property | Value |
+| --- | --- |
+| Trigger | `speedNorm > 0.85` sustained for 0.4 s. Stops immediately when it drops below 0.75. |
+| Rate | 12 per s, 6 alive at steady state |
+| Origin | On a cylinder around the player: radius `0.9 + uniform(0, 0.7)` m, angle stepped by the golden angle, height `uniform(0.2, 1.4)` m, offset `+0.6` m forward along `facing` so they stream past |
+| Velocity | `-velocity * 0.35`, so they move backward relative to the player at 35% of travel speed |
+| Accel | zero |
+| Drag | 0 |
+| Lifetime | 0.22 s |
+| Size | 0.020 wide, `0.35` -> `0.60` m long via the stretch flag |
+| Fade power | 1.0, with a fade-in over the first 25% |
+| Colour | `#ffffff`, luminance 1.0 |
+| Peak | 0.22, effective luminance 0.22 |
+| `maxOverlap` | 2 |
+| Blending | Class 2, additive |
+| Flags | `VELOCITY_STRETCHED`, stretch factor 18 |
+| Tier | `high` only |
+
+**Peak 0.22 is deliberately under the Class 2 cap and nowhere near the bloom threshold.**
+Speed lines that bloom look like a rendering bug, not like speed.
+They work by being numerous and moving, not by being bright.
+
+`MOVEMENT.maxSpeed` is 6.0 m/s, so `speedNorm > 0.85` is 5.1 m/s, which is reachable only at a sustained full-forward press.
+The 0.4 s delay before they start means they never fire during ordinary movement, only during a genuine run.
+
+The 0.6 m forward offset is what makes them read: lines spawning behind the character are invisible because the camera is behind the character.
+
+---
+
+### 9. `reviveMotes`
+
+The arrival beat. The game already has a revival drop and an iris, and neither has any particle feedback.
+
+| Property | Value |
+| --- | --- |
+| Trigger | `EV.Revive`, at the moment the body is placed, not at the landing |
+| Count | 16 |
+| Origin | A vertical cylinder around the spawn: radius 0.5 m, angle stepped by 22.5 degrees, height `uniform(0, 2.0)` m |
+| Velocity | Inward toward the spawn axis at `0.9 + uniform(0, 0.5)` m/s, plus `-0.6` m/s vertically |
+| Accel | zero |
+| Drag | 2.4 |
+| Lifetime | 0.90 s |
+| Size | 0.045 -> 0.0 m |
+| Fade power | 0.8 |
+| Colour | `palette.visor` |
+| Peak | 3.0, effective luminance 1.89 |
+| `maxAlive` | 16 |
+| Blending | Class 3, additive |
+| Flags | `FLICKER` |
+| Tier | `low` none, `medium` and `high` 16 |
+
+They converge on the spawn point as the character falls into it, arriving roughly when the character does.
+`REVIVAL.dropHeight` is 1.6 m at `JUMP.gravity * fallGravityMultiplier = -36`, so the fall takes `sqrt(2 * 1.6 / 36) = 0.298` s.
+At 0.9 s lifetime the motes are still arriving when the landing squash fires, and `TRANSITION.irisOpenMs` is 420 ms, so the whole beat overlaps: iris opening, motes converging, character landing, squash rebounding.
+That is one motion rather than four, which is exactly the reasoning already written into `TRANSITION.irisOpenMs`'s comment.
+
+---
+
+### 10. `portalEntryBurst`
+
+| Property | Value |
+| --- | --- |
+| Trigger | `EV.PortalEnter`, on the frame `onEnter()` fires |
+| Count | 24 |
+| Origin | The portal opening's plane, on a stepped ellipse |
+| Velocity | Inward toward the opening's centre at `2.2 + uniform(0, 1.0)` m/s, plus `+1.0` m/s along the portal's forward |
+| Accel | zero |
+| Drag | 3.0 |
+| Lifetime | 0.55 s |
+| Size | 0.05 -> 0.0 m |
+| Fade power | 1.6 |
+| Colour | `palette.visor` |
+| Peak | 3.4, effective luminance 2.14 |
+| `maxAlive` | 24 |
+| Blending | Class 3, additive |
+| Tier | `low` none, `medium` and `high` 24 |
+
+Fires under the closing iris, so most of it is seen for about 200 ms.
+That is correct; the burst is what makes the iris close feel caused rather than scheduled.
+
+---
+
+### Colour derivation
+
+`jumpDust`, `landingChunks` and `footstepMotes` take the ground colour, and the ground colour differs per scene.
+Rather than each emitter knowing about scenes, add one field to the VFX bus:
+
+```ts
+/**
+ * The colour physical debris takes in the current scene.
+ *
+ * Set once per scene by the scene component. Dust the colour of the hub's soil
+ * kicked up inside a cave is the specific bug this exists to prevent, and it is
+ * the kind that survives review because nobody plays both scenes back to back.
+ */
+vfx.groundTint: [number, number, number]   // linear RGB
+```
+
+Hub: `mix(palette.soil, palette.grass, 0.4)` at 0.55 value.
+Cave: `mix(palette.caveRock, palette.caveRockDeep, 0.5)` at 0.55 value.
+
+Reward colours never read this and are always literal palette entries.
+
+---
+
+## 11. Juice timing
+
+The reference brief's rule is a hard ceiling: **every feedback effect is 250 ms or less**.
+Astro's feedback never lingers, and a 400 ms shake is the difference between "impact" and "the camera is broken".
+
+Everything in this section obeys it, and section 12 has a test that proves it.
+
+### The scaled clock
+
+Hit-stop needs a clock that can pause, and several systems need to agree on it.
+
+```ts
+// src/game/gameClock.ts
+//
+// One clock, two readings. Everything visual and animated reads `elapsed`, so
+// hit-stop freezes the character, the particles and the visor scanlines
+// together. UI, transitions and the loader read `real`, so a hit-stop cannot
+// stall a scene transition or freeze the HUD.
+
+export const gameClock = {
+  /** Advances at `scale` times real time. What animation and VFX read. */
+  elapsed: 0,
+  /** Advances at real time, always. What UI and the transition machine read. */
+  real: 0,
+  /** 0 during hit-stop, 1 otherwise. No values in between are currently used. */
+  scale: 1,
+  /** `real` time at which the current hit-stop ends. */
+  stopUntil: 0,
+}
+
+/** Called once per frame, first, by a component mounted above everything else. */
+export function stepGameClock(delta: number): void {
+  const dt = Math.min(delta, 0.05)
+  gameClock.real += dt
+  gameClock.scale = gameClock.real < gameClock.stopUntil ? 0 : 1
+  gameClock.elapsed += dt * gameClock.scale
+}
+```
+
+`Math.min(delta, 0.05)` for the same reason it is clamped everywhere else in this project.
+
+### Hit-stop
+
+30-60 ms per the reference.
+Two triggers only.
+
+| Trigger | Duration |
+| --- | --- |
+| `Collect` | 55 ms |
+| `Land` with `a > 0.80` | 40 ms |
+
+Nothing else.
+Hit-stop on every landing would make ordinary traversal feel like the game is stuttering, which is the exact failure this effect is famous for.
+`a > 0.80` is a fall of at least 22.4 m/s, which given `JUMP.velocity = 8.2` is only reachable from a genuine drop, not from a normal jump.
+
+Implementation:
+
+```ts
+// In PlayerController.useBeforePhysicsStep, at the very top.
+if (gameClock.scale === 0) {
+  endInputFrame()   // still drain input so a press is not lost across the stop
+  return
+}
+```
+
+The body is kinematic, so a skipped step means it simply does not move, and Rapier's own step still runs harmlessly.
+`RobotModel` gets `dt * gameClock.scale`, so `stepAnim` receives 0 and every spring holds.
+`ParticleField` writes `gameClock.elapsed`, so every particle freezes mid-arc.
+
+**`endInputFrame()` must still be called**, or a jump pressed during the 55 ms stop is consumed by the next frame's `jumpPressed` edge detection and silently dropped.
+That is a real bug and it is easy to write.
+
+Two limitations, stated because a build agent will hit them.
+
+Dynamic rigid bodies elsewhere in the world keep stepping during a hit-stop, because we are not pausing `<Physics>`.
+There are none of consequence today.
+If that changes, the fix is `<Physics paused={...}>`, which costs a React re-render on each transition and is acceptable at two per session.
+
+The camera keeps updating during a hit-stop, because `FollowCamera` uses its own `delta`.
+That is correct and deliberate: the shake needs to keep running through the stop, and the shake is most of what makes the stop read as an impact rather than as a dropped frame.
+
+### Screen shake
+
+**How it reaches `FollowCamera`**, which is the part that needs specifying precisely.
+
+A module singleton, following the pattern `cameraFrame.ts` already establishes, plus a pure integrator.
+
+```ts
+// src/game/camera/shake.ts
+
+export type ShakeState = {
+  /** Accumulated trauma, 0..1. Amplitude is proportional to trauma squared. */
+  trauma: number
+  /** Seconds since the last trauma was added. Drives the noise phase. */
+  t: number
+  /** Output, world-space metres. Read by FollowCamera, written here. */
+  ox: number; oy: number; oz: number
+  /** Output, radians of camera roll. */
+  roll: number
+}
+
+export const shake: ShakeState = { trauma: 0, t: 0, ox: 0, oy: 0, oz: 0, roll: 0 }
+
+/**
+ * Adds trauma. Additive and clamped, so two impacts in the same frame combine
+ * rather than the second replacing the first.
+ */
+export function addTrauma(s: ShakeState, amount: number): void {
+  s.trauma = Math.min(1, s.trauma + amount)
+}
+
+/**
+ * Advances the shake and writes its offsets.
+ *
+ * Trauma squared rather than linear, which is the standard trick: it makes
+ * small impacts almost imperceptible and large ones dramatic, so the same
+ * curve serves a footstep and a death without a separate scale for each.
+ *
+ * The noise is three summed sines per axis with irrational frequency ratios,
+ * rather than a real Perlin field. Deterministic, allocation-free, testable as
+ * a pure function of (trauma, t), and at these amplitudes and durations
+ * genuinely indistinguishable from noise.
+ */
+export function stepShake(s: ShakeState, dt: number): void {
+  s.trauma = Math.max(0, s.trauma - SHAKE.decay * dt)
+  s.t += dt
+  const a = s.trauma * s.trauma
+  if (a <= 0) { s.ox = 0; s.oy = 0; s.oz = 0; s.roll = 0; return }
+  const t = s.t
+  s.ox = a * SHAKE.amplitude * (Math.sin(t * 31.4) * 0.6 + Math.sin(t * 57.1 + 1.7) * 0.4)
+  s.oy = a * SHAKE.amplitude * (Math.sin(t * 27.3 + 2.9) * 0.6 + Math.sin(t * 63.7 + 0.4) * 0.4)
+  s.oz = a * SHAKE.amplitude * 0.4 * Math.sin(t * 41.9 + 5.1)
+  s.roll = a * SHAKE.rollAmplitude * Math.sin(t * 23.7 + 3.3)
+}
+```
+
+The early return when `trauma` is zero is not an optimisation.
+It guarantees that when nothing is happening the camera position is bit-identical to what it would be without the shake system, which is what makes the feature safe to have on at every tier.
+
+```ts
+export const SHAKE = {
+  /** Trauma per second of decay. 6.7 means full trauma is gone in 150 ms. */
+  decay: 6.7,
+  /** Peak positional offset at trauma 1, in metres. */
+  amplitude: 0.075,
+  /** Peak roll at trauma 1, in radians. 0.6 degrees. */
+  rollAmplitude: 0.011,
+} as const
+```
+
+With `decay = 6.7` and amplitude proportional to `trauma^2`, the amplitude envelope falls as `(1 - 6.7t)^2`.
+At `t = 0.075` s the amplitude is 25% of peak; at `t = 0.149` s it is zero.
+**Total duration 149 ms, inside the 250 ms ceiling and inside the reference's 80-150 ms band.**
+
+A trauma of 0.5 decays in 75 ms, which handles the small impacts.
+
+Trauma per trigger:
+
+| Trigger | Trauma | Duration | Peak offset |
+| --- | --- | --- | --- |
+| `Land`, `a < 0.3` | 0 | - | none |
+| `Land`, `a >= 0.3` | `0.25 + 0.55 * a` | 60-119 ms | 0.005 - 0.048 m |
+| `Collect` | 0.55 | 82 ms | 0.023 m |
+| `Bonk` | `0.30 * a` | up to 45 ms | up to 0.007 m |
+| `Death` | 0.85 | 127 ms | 0.054 m |
+| `PortalEnter` | 0.35 | 52 ms | 0.009 m |
+
+At `CAMERA.distance = 7.5` m and a 55 degree FOV on a 1080-tall viewport, one world metre at the player subtends about 139 px.
+So the maximum shake of 0.054 m is roughly 7.5 px.
+That is a lot for a single frame and almost nothing sustained, which is what a good shake is.
+
+**Application in `FollowCamera`.**
+
+The classic bug here is feeding the shaken position back into the spring, so the camera drifts away and never returns.
+Avoid it by keeping the unshaken position as the spring's state and adding the shake only at the end.
+
+```ts
+// A persistent Vector3 in a ref, alongside smoothLook. This is what the spring
+// actually operates on. camera.position is a derived value that the shake is
+// added into and that nothing ever reads back.
+const unshaken = useRef(new Vector3())
+
+// ... inside useFrame, replacing the existing lerp block ...
+if (!initialised.current) {
+  unshaken.current.copy(scratch.desired)
+  smoothLook.current.copy(scratch.lookAt)
+  initialised.current = true
+} else {
+  unshaken.current.lerp(scratch.desired, posT)
+  smoothLook.current.lerp(scratch.lookAt, lookT)
+}
+
+camera.position.copy(unshaken.current)
+camera.lookAt(smoothLook.current)
+
+// Shake last, after lookAt, so the rotation is not recomputed from a shaken
+// position and the shake reads as a camera wobble rather than as the world
+// sliding around.
+stepShake(shakeState, dt)
+camera.position.x += shakeState.ox
+camera.position.y += shakeState.oy
+camera.position.z += shakeState.oz
+if (shakeState.roll !== 0) camera.rotateZ(shakeState.roll)
+```
+
+`camera.rotateZ` after `lookAt` is a local-space roll, which is what a handheld camera does.
+Rolling before `lookAt` would be silently discarded, since `lookAt` overwrites the whole quaternion.
+
+`FollowCamera` calls `addTrauma` by draining the event ring with its own cursor, which is the third consumer of the section 5 channel.
+It does not need `RobotModel` or `VfxSystem` to have run first, for the reasons in section 5.
+
+Shake uses `delta`, not `gameClock.elapsed`, so it keeps running through hit-stop.
+This is the one deliberate exception to the scaled clock and it is why the two clocks exist.
+
+### Impact flash
+
+A full-screen white flash, 1-2 frames.
+
+Implemented as a `<div>` in `HUD.tsx`, not as a post-processing pass.
+
+```tsx
+// Fixed, full-screen, pointer-events none, mix-blend-mode screen.
+// Opacity driven by a rAF-free CSS transition triggered from the juice bus.
+<div className="impact-flash" style={{ opacity: flashOpacity }} />
+```
+
+Reasons for the DOM over a shader:
+
+- It costs nothing in the 3D pipeline and cannot interact with the bloom threshold.
+- It composites after tone mapping, which is where a screen flash belongs.
+- There is no shader to fail silently.
+- It works on `low` at zero cost, so the cheapest tier gets the loudest single piece of feedback for free.
+
+| Trigger | Opacity | Duration | Colour |
+| --- | --- | --- | --- |
+| `Collect` | 0.14 | 33 ms up, 100 ms down | `#fff4d6` |
+| `Death` | 0.30 | 16 ms up, 180 ms down | `#ffffff` |
+| `Land` | none | - | - |
+| `PortalEnter` | none, the iris already does this | - | - |
+
+Total 133 ms and 196 ms, both inside the ceiling.
+
+No flash on landing.
+A flash on every landing is the single most obnoxious thing a platformer can do, and the landing already has a ring, chunks, a shake, a squash and a shadow spike.
+
+The flash is driven by a small `useState` in `HUD` fed by a `useEffect` subscription to the juice bus, which is fine because it fires at most a handful of times per session.
+This is the one place in this document where React state is acceptable in a feedback path.
+
+### The complete timing table
+
+Every feedback effect, with its duration, against the 250 ms ceiling.
+
+| Effect | Onset | Duration | Under 250 ms |
+| --- | --- | --- | --- |
+| Landing ring | frame 0 | 180 ms | yes |
+| Landing chunks | frame 0 | 750 ms | no, and correctly so |
+| Landing squash to rebound | frame 0 | 245 ms to peak, 313 ms to settle | the beat is 245 ms |
+| Shadow radius spike | frame 0 | 200 ms | yes |
+| Screen shake, hard landing | frame 0 | 119 ms | yes |
+| Hit-stop, hard landing | frame 0 | 40 ms | yes |
+| Head nod on landing | frame 0 | 251 ms to peak | yes, marginally |
+| Antenna whip on landing | frame 0 | 1412 ms | no, and correctly so |
+| Jump dust | frame 0 | 420 ms | no, and correctly so |
+| Takeoff stretch | frame 0-1 | 364 ms to settle | the beat is 33 ms |
+| Impact flash, collect | frame 0 | 133 ms | yes |
+| Screen shake, collect | frame 0 | 82 ms | yes |
+| Hit-stop, collect | frame 0 | 55 ms | yes |
+| Collect ring | frame 0 | 200 ms | yes |
+| Collect sparks | frame 0 | 350 ms | no, and correctly so |
+| Blink | - | 110 ms | yes |
+| Expression transition | - | 140 ms | yes |
+
+The ceiling applies to **feedback**, meaning things that tell the player an event happened.
+It does not apply to **consequence**, meaning debris settling, dust dispersing and a spring antenna ringing out.
+Chunks falling for 750 ms are not feedback that is lingering, they are objects obeying gravity, and cutting them at 250 ms would look wrong.
+
+The distinction matters and a build agent should apply it: if it is telling you something, it is under 250 ms; if it is a thing behaving like a thing, it lasts as long as physics says.
+
+### Squash timing, summarised
+
+Repeated here because it is the item the reference brief is most specific about.
+
+| Beat | Reference target | This spec |
+| --- | --- | --- |
+| Takeoff stretch | Y x1.15-1.25, XZ x0.85, over 2-3 frames | Y x1.18, XZ x0.921 x 1.10 lateral, over 2 frames |
+| Landing squash | Y x0.7-0.8, XZ x1.15-1.25, for 3 frames | Y x0.62 at full impact, XZ x1.270 x 1.10, held 2 frames by the spring |
+| Overshoot | to x1.05 | to x1.095 at 245 ms |
+| Volume | preserved | preserved exactly, `sx * sy * sz = 1` |
+| Anticipation | 3-5 frames | 3 frames, on buffered jumps and scripted beats only |
+
+`Y x0.62` is deeper than the reference's 0.7-0.8 band, and only at maximum impact speed.
+At the reference's implied typical landing, which here is `a` around 0.35, the squash is `1 - 0.38 * 0.35 = 0.867`, slightly shallower than the band.
+The full range from 0.867 to 0.62 across impact speeds is more expressive than a fixed value in the band, and the existing code already scales by strength so this is not a new idea.
+
+---
+
+## 12. Unit tests for the pure modules
+
+Every test file is `.ts`, never `.tsx`, because `vitest.config.ts` globs `src/**/*.test.ts` and a `.test.tsx` is silently skipped.
+That silence is worth repeating: a `.tsx` test does not fail, it does not warn, it simply never runs.
+
+Precedents to follow: `src/game/player/movement.test.ts`, `src/art/quality.test.ts`, `src/art/placement.test.ts`, `src/art/flowerGeometry.test.ts`.
+
+### `src/game/player/proportions.test.ts`
+
+The guard that stops a future edit un-toying the character.
+
+- `PROPORTIONS.totalHeight / PROPORTIONS.headHeight` is within `[2.45, 2.85]`.
+- `PROPORTIONS.headHeight / PROPORTIONS.totalHeight` is within `[0.37, 0.48]`.
+- `PROPORTIONS.headWidth > PROPORTIONS.torsoWidthMax`, with the ratio at least 1.10.
+- `PROPORTIONS.totalHeight` is within `[1.30, 1.42]`, so the model cannot drift out of the frozen capsule.
+- `REST.legL.x === -REST.legR.x` and the same for the shoulders, so the rig cannot go asymmetric by a typo.
+- Every `REST` y value increases monotonically up the chain when accumulated: sole 0, hips 0.520, chest 0.740, neck 0.890, head 1.090.
+
+This file is short and it is the highest-leverage test in the list, because the proportion change is the whole point of the character work and it is exactly the kind of thing a later "make the head smaller, it looks weird" commit undoes.
+
+### `src/game/player/springs.test.ts`
+
+- **Convergence**: from `x = 1, v = 0, target = 0` at `omega 12, zeta 0.6`, stepping at `dt = 1/60` for 2 s, `abs(x) < 0.01`.
+- **Overshoot magnitude**: at `zeta = 0.58`, the first extremum past the target is within `[0.095, 0.120]` of the step size, matching the analytic `exp(-pi * zeta / sqrt(1 - zeta^2)) = 0.107` to within integration error.
+- **Overshoot count**: at `zeta = 0.58`, count sign changes of `x - target` over 2 s and assert exactly 3 (so one overshoot, one undershoot, one final approach) with the later ones under 2% of the step.
+- **Zero overshoot at critical damping**: at `zeta = 1.0`, `x` never exceeds `target` by more than 1e-9 at any step.
+  **This is the regression test for the bug in section 0**, and it must be written before the `SQUASH` constants change, so it documents what the old behaviour actually was.
+- **Frame-rate independence**: 1 s of simulation at `dt = 1/60` versus `dt = 1/240` gives final `x` within 2%, and at `dt = 1/30` within 6%.
+- **Stability under a large step**: `omega = 400, zeta = 0.5, dt = 0.05` for 100 steps, `abs(x)` stays below 10 and is finite.
+  This is what proves the integrator is semi-implicit; explicit Euler diverges to infinity here and the test catches a regression to the wrong form.
+- **Every spring in the `SPRINGS` table**: for each entry, assert its analytic overshoot and 5% settle time match the values in the section 6 table to within 5%.
+  This turns the table into an executable specification rather than documentation that rots.
+
+### `src/game/player/poseSolver.test.ts`
+
+- **Determinism**: two `AnimRuntime`s created with the same seed, fed the same 600-frame script of `(RobotAnimState, GroundSample, dt)`, produce `Pose` structs that compare equal on every one of the roughly 250 numeric fields.
+  Write a `flattenPose(pose): number[]` helper and compare arrays.
+- **Reset correctness**: after a fidget completes, every joint the fidget touched has returned to a value within 1e-6 of the value the same script produces with fidgets disabled.
+  This catches the "solver stops writing a field and it sticks" failure that `resetPose` exists to prevent.
+- **Idempotence at `dt = 0`**: `stepAnim` with `dt = 0` twice in a row leaves every pose field unchanged.
+  This is what makes hit-stop provably a freeze rather than a slow drift.
+- **Finiteness under abuse**: `dt = 10`, `speedNorm = 1e9`, `turnNorm = NaN` guarded to 0 at the boundary, `ground.hit = false`.
+  Every pose field is finite and every scale field is within `[0.3, 2.0]`.
+- **No allocation**: wrap the `Pose` in a `Proxy` whose `set` trap records the key, run 10,000 frames, and assert the recorded key set is exactly the known field set and that `Object.keys(pose)` has not grown.
+  A true GC assertion is not reliable in vitest and this is the honest substitute; it catches the realistic failure (a solver assigning a fresh object to `pose.head`) rather than the theoretical one.
+- **Volume preservation**: for `squash` swept over `[0.40, 1.45]` in 0.01 steps, `abs(root.sx * root.sy * root.sz - 1) < 1e-6`.
+- **Waddle symmetry**: over exactly one step cycle at constant `speedNorm = 1`, the integral of `hips.rz` is within 1e-3 of zero and the integral of `hips.px` is within 1e-3 of zero.
+  A waddle with a net bias is a limp.
+- **Turn-in-place preserved**: with `speedNorm = 0` and `turnNorm = 1`, `rt.phase` advances at exactly `WADDLE.bobFrequency * TURN_ANIM.stepScale` rad/s.
+  This is the behaviour that was just added and it must not be lost in the refactor.
+- **Head leads, torso lags**: with `turnNorm` stepped from 0 to 1, `sign(pose.head.ry)` is opposite to `sign(pose.chest.ry)` at every frame after the first 3.
+- **Airborne tuck**: with `grounded = false`, both `legL.rx` and `legR.rx` are negative and both `shoulderL.rx` and `shoulderR.rx` are more negative still, matching the current `tuck` behaviour.
+- **Landing envelope**: fire a `Land` event with `a = 1` and assert `root.sy` reaches its minimum within 1 frame, exceeds 1.0 by between 8% and 13% at some point, and is within 1% of 1.0 by 350 ms.
+
+### `src/game/player/faceSolver.test.ts`
+
+- **Blink interval bounds**: over 10,000 s of simulated idle, every measured interval between blink onsets is within `[2.0, 5.0]` s, except for the second blink of a double which is at `0.18 +- 0.01` s.
+- **Blink duration**: every blink's `open` returns to its pre-blink value within `[100, 120]` ms of onset.
+- **The bar never disappears**: `openL` and `openR` are never below 0.06 at any frame of any expression or blink.
+  This is the identity constraint from section 7 and it is the one thing about the face that must not regress.
+- **Gaze clamping**: with a focus target 40 m off to the side, `gazeX` is exactly `+-1.0` and never beyond.
+- **Gaze smoothing**: a step change in the focus target produces a `gazeX` that reaches 90% of its target in `[200, 260]` ms, matching `lambda = 10`.
+- **Blink suppression**: over 60 s of a scripted jump loop, no blink onset occurs while `verticalVelocity > 0 && !grounded`.
+- **Expression blend never overshoots**: during a `neutral` to `surprised` transition, `openL` is monotonically non-decreasing and never exceeds 1.50.
+- **Determinism**: same seed, same script, same blink schedule.
+
+### `src/game/player/animEvents.test.ts`
+
+- **Wrap without corruption**: push 1000 events into a 64-slot ring, draining after each, and assert every event is delivered exactly once in order.
+- **Two independent consumers**: two cursors both drain the full sequence, and neither affects the other.
+- **Fast-forward on falling behind**: a consumer that does not drain for 100 pushes sees `ANIM_EVENT_CAPACITY` events on its next drain and `dropped` has increased by exactly `100 - 64`.
+- **No allocation**: array identities are stable across 10,000 pushes; `ring.kind === ring.kind` before and after.
+- **Push during drain**: pushing from inside the drain callback does not deliver the new event in the same drain and does deliver it in the next.
+- **Payload round-trip**: every field written by `pushEvent` reads back identically through `drainEvents`, for each of the 10 kinds.
+
+### `src/art/vfx/particlePool.test.ts`
+
+- **Budget**: emitting 10x capacity in one frame never writes an index outside `[0, capacity)`.
+  Assert by pre-filling every array with a sentinel and checking the arrays' lengths are unchanged.
+- **Refusal is whole**: an emit of 20 into a pool with 12 free slots writes 0 particles and increments `dropped` by 20.
+- **Recycling**: fill the pool, advance `now` past every `expireAt`, and assert the next emit of `capacity` particles succeeds.
+- **Ring wrap produces two ranges**: an emit of 10 starting at `capacity - 4` produces `rangeCount === 2` with ranges `[capacity - 4, 4]` and `[0, 6]`, covering exactly 10 slots with no overlap.
+- **`maxAlive` enforcement**: a Class 3 effect with `maxAlive = 12` refuses the 13th concurrent particle and accepts one again after the first expires.
+- **`aliveByEffect` accounting**: after a full cycle of fill, expire and refill, every counter in `aliveByEffect` is exactly the number of slots whose `effectOf` matches and whose `expireAt > now`.
+  This is the invariant that `maxAlive` depends on and it is the one most likely to drift.
+- **Short and long partition**: filling the long pool with 2.5 s particles does not reduce the short pool's available capacity at all.
+- **No allocation**: all typed array identities stable across 10,000 emits.
+- **Determinism**: same seed, same emit sequence, byte-identical attribute arrays.
+
+### `src/art/vfx/bloomBudget.test.ts`
+
+Iterates the whole catalogue from `vfxTuning.ts`.
+
+- Every effect returns `null` from `checkBloomBudget`.
+- Every Class 1 effect has peak linear luminance at or below 1.35.
+- Every Class 2 effect has peak at or below 0.24 and `peak * maxOverlap` at or below 1.60.
+- Every Class 3 effect has `maxAlive` at or below 32 and peak at or below 4.2.
+- Every Class 2 and Class 3 effect declares a stepped or golden-angle emission pattern rather than uniform disc sampling, checked by a required `separation` field being non-zero.
+- Sum of `maxAlive` across all Class 3 effects does not exceed the `high` tier's short-pool capacity.
+
+This is the test that makes the section 9 blending policy real rather than aspirational.
+
+### `src/game/camera/shake.test.ts`
+
+- **Decay within budget**: for every trauma value in the section 11 table, `abs(ox)` reaches zero within 250 ms and within 160 ms for all but `Death`.
+- **Zero is exactly zero**: with `trauma = 0`, all four outputs are exactly `0`, not `1e-17`.
+  This is what guarantees the camera is bit-identical when nothing is happening.
+- **Trauma clamps**: five `addTrauma(0.5)` calls in one frame leave `trauma` at exactly 1.
+- **Additive**: `addTrauma(0.3)` then `addTrauma(0.3)` gives 0.6, not 0.3.
+- **Amplitude bound**: over 10,000 random `(trauma, t)` samples, `abs(ox)` never exceeds `SHAKE.amplitude` and `abs(roll)` never exceeds `SHAKE.rollAmplitude`.
+- **Deterministic in `t`**: `stepShake` from the same state with the same `dt` sequence produces identical output.
+- **Frame-rate independence of the envelope**: total shake duration at `dt = 1/60` and `dt = 1/144` agree within 2 ms.
+
+### `src/game/player/footIk.test.ts`
+
+- **Clamping**: a ground sample 2 m below the foot produces an offset of exactly `-FOOT_IK.maxDrop`, not 2 m.
+- **Tilt clamp**: `clampTilt` on a normal 60 degrees off vertical returns a normal exactly `maxTilt` off vertical, with the azimuth preserved to within 1e-6.
+- **Blend engages and disengages**: stepping over a synthetic staircase, the blend is 1 while grounded and reaches 0 within 140 ms of going airborne.
+- **Pelvis follows the lower foot**: with the left foot 0.08 m below the right, `hips.py` is `-0.08 * FOOT_IK.pelvisFollow`.
+- **No feedback loop**: running 600 frames on flat ground, the foot offset stays within 1e-6 of zero and does not accumulate.
+  This is the specific bug that comes from casting from the animated position instead of the rest position.
+
+### `src/art/geometry/*.test.ts`
+
+Following `flowerGeometry.test.ts`.
+
+- `superellipsePoints` with `n = 2` produces points satisfying `x^2/a^2 + y^2/b^2 = 1` to within 1e-9.
+- `superellipsePoints` with `n = 4` produces points satisfying the `n = 4` Lame equation, and the point at `theta = PI/4` is measurably outside the corresponding ellipse, which is what makes it a squircle.
+- `superellipsoidGeometry` produces a position attribute with no NaN, a normal attribute with every normal unit length to within 1e-5, and a bounding box matching the requested half-extents to within 1e-6 at the base.
+- The taper is applied: the maximum `abs(x)` in the top 10% of the geometry's height is within 1e-6 of `a * taperTop`.
+- `roundedDiscProfile` returns a closed profile whose points are all within the requested radius and half-thickness, with no point at a distance from the axis exceeding `radius`.
+
+### What is deliberately not tested
+
+`applyPose` gets one test, that every joint in `RigRefs` receives a non-default transform when the corresponding `Pose` field is non-default, driven by a table of `(rigKey, poseKey)` pairs.
+Beyond that it is mechanical.
+
+Nothing in `.tsx` is tested.
+The existing convention in `vitest.config.ts` says rendering and feel are verified in a real browser, and this document does not change that.
+
+---
+
+## 13. Tier gating and budgets
+
+### New fields on `QualitySettings`
+
+Added to `src/art/quality.ts`, which the README already establishes as the one place anything expensive decides its cost.
+
+```ts
+export type QualitySettings = {
+  // ... existing fields unchanged ...
+
+  /** Particles with lifetimes up to 0.6 s. 0 disables the whole VFX system. */
+  particleBudgetShort: number
+  /** Particles with lifetimes up to 2.5 s. Its own ring, so nothing long blocks anything short. */
+  particleBudgetLong: number
+  /** Whether the two per-foot ground rays run. The body ray always runs. */
+  footIk: boolean
+  /** Two extra shadow quads under the feet. */
+  contactShadowPerFoot: boolean
+  /** 'simple' drops scanlines, the sweep and the glitch from the visor shader. */
+  visorDetail: 'simple' | 'full'
+  /** Cape segments simulated. 0 means the static single quad. */
+  capeSegments: number
+  /** Mesh-family chunk particles. Separate from the budget because they are the only lit particle family. */
+  chunkParticles: boolean
+  /** The high-frequency running emitter. */
+  footstepMotes: boolean
+  /** Speed lines above 85% of max speed. */
+  speedLines: boolean
+}
+```
+
+### The table
+
+| Setting | `low` | `medium` | `high` |
+| --- | --- | --- | --- |
+| `particleBudgetShort` | **0** | 512 | 1536 |
+| `particleBudgetLong` | **0** | 128 | 512 |
+| `footIk` | false | true | true |
+| `contactShadowPerFoot` | false | false | true |
+| `visorDetail` | `'simple'` | `'full'` | `'full'` |
+| `capeSegments` | 0 | 3 | 4 |
+| `chunkParticles` | false | true | true |
+| `footstepMotes` | false | false | true |
+| `speedLines` | false | false | true |
+
+Always on, every tier, deliberately not gated:
+
+| Feature | Why it is not gated |
+| --- | --- |
+| Contact shadow, body | 2 triangles and 1 raycast. It is the single largest visual improvement in this document and it is essentially free. Gating it would be gating the thing that makes the character look like it is standing on the ground. |
+| Shadow radius spike on landing | One uniform write. It is `low`'s entire landing feedback. |
+| Screen shake | Pure arithmetic on 4 floats, and exactly zero when trauma is zero. |
+| Hit-stop | An early return. |
+| Impact flash | A DOM div. |
+| All 16 springs | Roughly 200 flops per frame. |
+| The visor SDF | One 900-pixel quad. `low` gets a cheaper variant, not no variant. |
+| Idle breathing and fidgets | Pure arithmetic. `low` players deserve a character that is alive. |
+| The full proportion and geometry spec | 9,570 triangles and 20 draw calls, against a `low` tier that still draws 15,000 grass blades. |
+
+### `low` is genuinely zero-cost for VFX
+
+`particleBudgetShort: 0` is the switch, and it works like this:
+
+1. `ParticleField` returns `null` when both budgets are 0, so no `InstancedMesh`, no `ShaderMaterial`, no buffers, no shader compilation.
+2. `VfxSystem` returns `null` for the same reason, so no drain loop runs.
+3. `vfx.pools` stays `null`, so `vfx.emit()` is a null check and a return.
+4. No gameplay code anywhere branches on the tier.
+   `Portal.tsx`, `LessonTotem.tsx` and `PlayerController.tsx` all call `vfx.emit` or `vfx.addAmbient` unconditionally.
+
+That is the property worth protecting.
+The moment a call site reads `useQuality()` to decide whether to emit, the tier system has leaked into gameplay and every future effect has to remember to do the same check.
+
+The one cost `low` still pays is the `vfx.emit` call itself, which is a property read and a branch, roughly ten instructions, a handful of times per second.
+
+### Particle budget derivation
+
+The reference brief gives Havok at 7,500 particles at 60 fps on a PS5.
+We are in a browser, on WebGL2, sharing a frame with a 220,000-instance grass field, N8AO, SMAA, bloom and a full post chain.
+
+**1,536 short plus 512 long on `high`, 2,048 total, is 27% of the PS5 figure.**
+That is a deliberate fraction rather than a measured limit, and I am guessing.
+The measurement to take before trusting it: on the `high` tier on a mid-range integrated GPU, fill both pools completely and check the frame time delta against an empty pool.
+The vertex cost is 2,048 x 4 = 8,192 vertices, which is nothing; the real cost is fill rate on the additive quads with `depthWrite: false`, and that depends entirely on how large they are on screen.
+
+The mitigation if it turns out too expensive: cut `particleBudgetShort` on `high` to 1,024 and reduce `jumpDust` and `landingChunks` counts.
+The catalogue is data in `vfxTuning.ts` precisely so this is a one-file change.
+
+### Worst-case concurrent load
+
+The realistic worst frame is a player running at full speed, landing hard, next to a portal, having just completed a lesson.
+
+| Effect | Alive |
+| --- | --- |
+| `speedLines` | 6 |
+| `footstepMotes`, 3 emissions in flight | 9 |
+| `jumpDust` from the previous jump | 14 |
+| `landingChunks` | 14 |
+| `landingRing` | 1 |
+| `collectiblePop` chunks | 18 |
+| `collectiblePop` sparks | 10 |
+| `collectiblePop` ring | 1 |
+| `portalEntryBurst` | 0, mutually exclusive with the above |
+| **Short pool total** | **73** |
+| `portalSparkles` | 24 |
+| `totemMotes`, two totems in range | 32 |
+| **Long pool total** | **56** |
+
+73 of 1,536 and 56 of 512.
+The pools are sized roughly 20x the realistic worst case, which is the right margin for a system whose failure mode is dropping effects: headroom is cheap here because dead slots cost four trivial vertex invocations.
+
+On `medium`, 73 of 512 and 56 of 128.
+The long pool is the tighter one, and if `medium` ever gains a third ambient emitter it should go to 192.
+
+### Per-tier draw call and triangle delta
+
+Against the current build.
+
+| Tier | New draw calls | New triangles, static | Note |
+| --- | --- | --- | --- |
+| `low` | +9 | +5,900 | 8 character meshes, 1 contact shadow. Character triangles net of the current 3,600. |
+| `medium` | +12 | +5,900 | Plus 3 particle meshes. |
+| `high` | +14 | +5,900 | Plus 2 per-foot shadows. |
+
+Particle triangles are dynamic and bounded by `2 * (short + long)` for billboards plus `12 * chunks`, worst case about 5,000 on `high`.
+
+### Ordering of implementation
+
+If this is built in stages, this is the order that gets the most look soonest, following the reference brief's own priority structure.
+
+1. **The contact shadow**, section 8.
+   Standalone, one raycast, and it fixes the single most damaging current problem.
+2. **The proportions and geometry**, sections 1 and 2.
+   Also standalone. The existing inline animation keeps working against the new node names with minimal edits.
+3. **The architecture split**, sections 4 and 5.
+   Pure refactor with no visual change, and it is the prerequisite for everything after.
+4. **The animation features**, section 6.
+   This is where the character comes alive, and it is safe to do in pieces because each feature is a separate pure module.
+5. **The visor**, section 7.
+   Independent of everything else.
+6. **Juice**, section 11.
+   Shake, hit-stop and flash need no particles and land most of the feel.
+7. **The particle system and catalogue**, sections 9 and 10.
+   The largest single piece and the last one needed.
+
+Steps 1, 2, 5 and 6 are each shippable on their own.
+Step 3 must land before step 4, and step 7 is much easier after step 3 because the event ring is already there.
+
+---
+
+## Appendix: things I am guessing at
+
+Flagged so a build agent knows where to measure rather than trust.
+
+- **The particle budget of 2,048 on `high`.** A fraction of a published PS5 figure, not a measurement on our stack. Section 13 says what to measure.
+- **The analytic bounce being worth its complexity.** Roughly 15 vertex-shader ops on chunk particles. The `max(pos.y, groundY)` fallback is specified and is fine.
+- **`rollAmplitude` 0.14 surviving the proportion change.** It was tuned against a smaller head. It may need to drop to 0.115.
+- **Head roughness 0.42 against a canvas map centred on 0.80.** The resulting 0.26-0.40 range is derived from the reference's 0.28-0.38 band, but the map's actual mean depends on the noise implementation and should be checked by sampling it.
+- **`ANTENNA.inertia = 0.022`.** Derived from wanting a 0.5 rad deflection at a 25 m/s^2 deceleration, and 25 m/s^2 is itself an estimate of the landing deceleration.
+- **The camera-glance fidget interval of 6-14 s.** Pure taste, and the number most likely to want adjusting after five minutes of play.
+- **The half-float frame buffer assumption** in section 7. Emissives visibly bloom today so it is almost certainly right, but every bloom number in this document depends on it and it takes thirty seconds to confirm.
+- **N8AO interacting with the multiply-blended contact shadow.** AO runs first in the post chain and the shadow is a transparent forward-rendered quad, so they should compose additively in the wrong way if the shadow is too strong. `SHADOW.maxOpacity = 0.55` may need to come down on the tiers where AO is on.
