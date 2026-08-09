@@ -26,16 +26,32 @@
 import {
   createSpring1,
   createSpring2,
+  impulse1,
+  impulse2,
   resetSpring1,
   resetSpring2,
   squashScale,
   stepSpring1,
+  stepSpring2,
   type Spring1,
   type Spring2,
 } from './springs'
-import { WADDLE } from './tuning'
-import { SHADOW, SPRINGS, SQUASH_ANIM, TURN_ANIM } from './animTuning'
-import type { RobotAnimState, SquashMode } from './robotAnim'
+import { MOVEMENT, WADDLE } from './tuning'
+import {
+  ANTICIPATION,
+  ANTENNA,
+  CAPE,
+  EAR_POD,
+  GAIT,
+  HEAD,
+  IDLE,
+  LANDING,
+  SHADOW,
+  SPRINGS,
+  SQUASH_ANIM,
+  TURN_ANIM,
+} from './animTuning'
+import { drainEvents, EV, pushEvent, type AnimEventRing, type RobotAnimState, type SquashMode } from './robotAnim'
 
 // ---------------------------------------------------------------------------
 // 1. Geometry
@@ -419,6 +435,8 @@ export type AnimRuntime = {
   sinceStep: number
   /** Which foot planted last, 0 left 1 right. */
   lastFoot: 0 | 1
+  /** The half-period index of the last footstep, so one fires per half cycle. */
+  lastFoot2: number
   /** Previous frame's turn rate, for detecting a snap. */
   lastTurnEased: number
 
@@ -481,9 +499,15 @@ export type AnimRuntime = {
     shadowRadius: Spring1
   }
 
+  /** The depth and strength of the landing currently decaying, so the limb offsets share its spring. */
+  landDepth: number
+  landStrength: number
+
   /** Finite-difference memory for the inertial drives. */
   prev: {
     velX: number; velY: number; velZ: number
+    /** A second copy, one frame further back, for the antenna's acceleration. */
+    velXPrev: number; velZPrev: number
     /** Vertical acceleration, smoothed, m/s^2. */
     verticalAccel: number
     /** Foot swing heights before IK, so the IK adds to the animation. */
@@ -508,6 +532,7 @@ export function createAnimRuntime(seed: number): AnimRuntime {
     turnEased: 0,
     sinceStep: 0,
     lastFoot: 0,
+    lastFoot2: Number.NaN,
     lastTurnEased: 0,
 
     breathPhase: 0,
@@ -545,8 +570,12 @@ export function createAnimRuntime(seed: number): AnimRuntime {
       shadowRadius: createSpring1(SHADOW.baseRadius),
     },
 
+    landDepth: 0,
+    landStrength: 0,
+
     prev: {
       velX: 0, velY: 0, velZ: 0,
+      velXPrev: 0, velZPrev: 0,
       verticalAccel: 0,
       swingYL: 0, swingYR: 0,
       ikOffsetL: 0, ikOffsetR: 0,
@@ -675,6 +704,49 @@ export function clampTilt(
 const tiltScratch = { x: 0, y: 1, z: 0 }
 
 /**
+ * The four cape segments' constants, indexed rather than looked up by name.
+ *
+ * Each segment is slower and looser than the one above it, which is what makes
+ * the chain read as a hanging sheet rather than as four hinges of equal weight.
+ */
+const CAPE_SPRINGS = [SPRINGS.cape0, SPRINGS.cape1, SPRINGS.cape2, SPRINGS.cape3] as const
+
+/**
+ * Turns a drained event into velocity impulses on the secondary chains.
+ *
+ * A module-level function taking the runtime as an explicit argument, rather
+ * than a closure capturing it. A closure here would allocate one function per
+ * frame, which is exactly the garbage the no-allocation rule exists to prevent
+ * and is doubly wrong in a drain that only runs when something is happening.
+ */
+function applyEventImpulses(r: AnimEventRing, slot: number, rt: AnimRuntime): void {
+  const kind = r.kind[slot]
+  const a = r.a[slot]
+  if (kind === EV.Land) {
+    impulse1(rt.springs.headPitch, HEAD.landImpulse * a)
+    impulse2(rt.springs.antenna[0], ANTENNA.landImpulse * a, 0)
+    impulse1(rt.springs.earPod[0], EAR_POD.landImpulse * a)
+    impulse1(rt.springs.earPod[1], -EAR_POD.landImpulse * a)
+    for (const seg of rt.springs.cape) impulse2(seg, CAPE.landImpulse * a, 0)
+    // A hard landing is a beat the face should acknowledge.
+    if (a > 0.5) {
+      rt.face.expression = EXPRESSION.Surprised
+      rt.face.expressionHold = 0.5
+    }
+  } else if (kind === EV.Jump) {
+    impulse2(rt.springs.antenna[0], -ANTENNA.eventImpulse * a, 0)
+    impulse1(rt.springs.headPitch, -HEAD.landImpulse * 0.35 * a)
+  } else if (kind === EV.Bonk) {
+    impulse2(rt.springs.antenna[0], ANTENNA.eventImpulse * 1.4 * a, 0)
+    rt.face.expression = EXPRESSION.Surprised
+    rt.face.expressionHold = 0.5
+  } else if (kind === EV.Revive) {
+    rt.face.expression = EXPRESSION.Surprised
+    rt.face.expressionHold = 0.6
+  }
+}
+
+/**
  * The single entry point. Writes into `out` and returns nothing.
  *
  * Allocates nothing, and reads nothing global except the frozen constant
@@ -746,6 +818,16 @@ export function stepAnim(
     rt.springs.squash.x = finite(s.squash, 1)
     rt.springs.squash.v = 0
     rt.springs.squash.target = 1
+    /*
+      Remember how deep this impulse went, so every limb offset a landing moves
+      can be normalised against the same spring and they all recover together.
+      A takeoff stretch drives no limb pose, so it seeds a strength of zero.
+    */
+    rt.landDepth = rt.springs.squashMode === 'takeoff' ? 0 : finite(s.squash, 1)
+    rt.landStrength =
+      rt.springs.squashMode === 'takeoff'
+        ? 0
+        : Math.min(1, Math.max(0, (1 - finite(s.squash, 1)) / 0.45))
   }
   const squashSpring = SPRINGS[
     rt.springs.squashMode === 'takeoff'
@@ -757,8 +839,18 @@ export function stepAnim(
   stepSpring1(rt.springs.squash, squashSpring.omega, squashSpring.zeta, step)
   squashScale(rt.springs.squash.x, SQUASH_ANIM.lateral, out.root)
 
-  // Vertical bob, at double the step frequency because both feet contribute.
-  out.hips.py = Math.sin(p * 2) * WADDLE.bobAmplitude * walking
+  /*
+    Vertical bob, at double the step frequency because both feet contribute,
+    and lagged behind the roll.
+
+    Without the lag the bob peaks exactly when the body is at maximum roll and
+    the two motions fuse into one, which is the single cheapest thing that was
+    wrong with the existing waddle. 0.55 rad puts the peak roughly a third of a
+    step past the roll extreme.
+  */
+  out.hips.py = Math.sin(p * 2 + GAIT.bobPhaseLag) * WADDLE.bobAmplitude * walking
+  /* The weight shifting onto the planted foot. */
+  out.hips.px = Math.sin(p) * GAIT.hipShiftAmplitude * walking
 
   /*
     Side-to-side roll is the actual waddle, plus a bank into the turn.
@@ -778,22 +870,64 @@ export function stepAnim(
   out.hips.rx = WADDLE.leanAmount * walking * Math.sign(throttle)
 
   /*
-    Hips lead the turn and the torso lags behind it, with the head leading
-    further still, looking where it is about to go.
+    Hip yaw, deliberately opposing the roll.
 
-    This is the part that stops a rotation reading as a turntable. The parent
-    group already carries the true facing, so these are offsets against it:
-    positive is behind the turn, because facing decreases as the robot turns
-    right.
-
-    The lag is on the hips rather than on the chest, which is where it was when
-    it lived in the component and where the legs inherit it from. The rig split
-    makes it possible to lag the chest alone and leave the feet tracking the
-    true facing, which is the better behaviour and is a deliberate change rather
-    than a side effect, so it lands with the animation pass and not here.
+    This is what separates a waddle from a metronome: the hip that rises also
+    rotates back, which is how a toddler's pelvis actually moves and why the
+    gait reads as one continuous motion rather than as a roll plus a bounce
+    happening at the same time.
   */
-  out.hips.ry = t * TURN_ANIM.torsoLag
-  out.head.ry = -t * (TURN_ANIM.torsoLag + TURN_ANIM.headLead)
+  out.hips.ry = -Math.sin(p) * GAIT.hipYawAmplitude * walking
+
+  /*
+    Hips lead the turn and the torso lags behind it, with the head leading
+    further still, looking where it is about to go. This is what stops a
+    rotation reading as a turntable.
+
+    The lag now sits on the CHEST rather than on the hips. When this lived in
+    the component there was one body node, so the legs inherited the lag too and
+    the feet swung behind the direction the character was actually facing. The
+    rig split makes it possible to lag the torso alone and leave the stance
+    tracking the true facing, which is the behaviour a turn should have.
+
+    Both yaws go through springs rather than being written straight from the
+    eased input. The exponential ease stays as the input filter; the springs sit
+    downstream and give the lag an overshoot it did not have. The visible
+    difference is that releasing a turn key now lets the torso swing slightly
+    past centre and come back, which is the difference between a lag and a rig.
+  */
+  rt.springs.chestYaw.target = t * TURN_ANIM.torsoLag
+  rt.springs.headYaw.target = -t * TURN_ANIM.headLead
+  stepSpring1(rt.springs.chestYaw, SPRINGS.chestYaw.omega, SPRINGS.chestYaw.zeta, step)
+  stepSpring1(rt.springs.headYaw, SPRINGS.headYaw.omega, SPRINGS.headYaw.zeta, step)
+
+  /*
+    Turn snap.
+
+    Crossing most of the turn rate within one step, having been near zero, is a
+    deliberate stab at the stick rather than a gradual lean, and it gets an
+    impulse into the springs instead of a change of target. That is precisely
+    what a spring integrator is good at and what an easing curve cannot express
+    at all: a target change says the body has moved, an impulse says it has been
+    hit.
+  */
+  const turnMag = Math.abs(finite(s.turnRate)) / MOVEMENT.turnRate
+  const lastMag = Math.abs(rt.lastTurnEased)
+  if (turnMag > GAIT.turnSnapHigh && lastMag < GAIT.turnSnapLow) {
+    const dir = Math.sign(finite(s.turnRate)) || 1
+    impulse1(rt.springs.chestYaw, GAIT.turnSnapChest * dir)
+    impulse1(rt.springs.headYaw, GAIT.turnSnapHead * dir)
+    pushEvent(
+      s.events, EV.TurnSnap, rt.t,
+      finite(s.worldX), finite(s.worldY), finite(s.worldZ),
+      0, 1, 0,
+      Math.min(1, turnMag), dir,
+    )
+  }
+  rt.lastTurnEased = turnMag
+
+  out.chest.ry = rt.springs.chestYaw.x
+  out.head.ry = rt.springs.headYaw.x
 
   // Limbs counter-swing. In the air they tuck instead, so a jump does not look
   // like a mid-stride freeze.
@@ -805,11 +939,220 @@ export function stepAnim(
   out.shoulderL.rx = -swing * 0.7 - tuck * 1.4
   out.shoulderR.rx = swing * 0.7 - tuck * 1.4
 
+  // The outside arm lifts away from the body through a turn. This is the
+  // reference's "feet trail on direction change" applied to the arms, where a
+  // character with no visible knees shows it far more clearly.
+  out.shoulderL.rz = -t * GAIT.armTrail
+  out.shoulderR.rz = -t * GAIT.armTrail
+
+  /*
+    A footstep fires each time the step cycle crosses a half period while the
+    character is actually moving on the ground.
+
+    Tracked on the phase rather than on a timer, so it stays locked to the gait
+    at any speed: the same crossing that puts a foot at the bottom of its swing
+    is the one that emits, which is what will make a dust puff land under a foot
+    rather than near one.
+  */
+  if (grounded && walking > 0.05) {
+    const half = Math.floor(p / Math.PI)
+    if (half !== rt.lastFoot2) {
+      rt.lastFoot2 = half
+      rt.lastFoot = rt.lastFoot === 0 ? 1 : 0
+      rt.sinceStep = 0
+      pushEvent(
+        s.events, EV.Footstep, rt.t,
+        finite(s.worldX), finite(ground.y), finite(s.worldZ),
+        finite(ground.nx), finite(ground.ny, 1), finite(ground.nz),
+        speedNorm, rt.lastFoot,
+      )
+    }
+  } else {
+    // Reset the marker while airborne, so the first step after landing is not
+    // swallowed by a stale half-period index.
+    rt.lastFoot2 = Number.NaN
+  }
+  rt.sinceStep += step
+
   // Feet splay through a pivot so the stance opens into the turn rather than
   // the legs scissoring straight through each other.
   const splay = t * TURN_ANIM.footPivot * (grounded ? 1 : 0)
   out.legL.ry = splay
   out.legR.ry = -splay
+
+  /*
+    Drain the event ring.
+
+    An impulse into a spring produces a much crisper snap than driving its
+    target, and events are the only place the solver learns that something
+    discrete happened. This is also the demonstration that the channel works:
+    the same ring the VFX system will read is what makes the antenna whip.
+  */
+  rt.eventCursor = drainEvents(s.events, rt.eventCursor, applyEventImpulses, rt)
+
+  /*
+    Landing impact, and the reason it is one spring rather than eleven.
+
+    Every limb offset below decays on the SAME landing spring as the squash, by
+    normalising the spring's distance from neutral against the depth it started
+    at. That is what makes a landing read as a single event rather than as
+    eleven things happening near each other, and it is why the squash spring had
+    to move into the solver: a spring inside the controller's frame loop could
+    only ever drive the scale.
+  */
+  const landDepth = 1 - Math.min(1, Math.max(0, rt.landDepth))
+  const landDecay =
+    landDepth > 1e-4
+      ? Math.min(1, Math.max(0, (1 - rt.springs.squash.x) / landDepth))
+      : 0
+  const impact = landDecay * rt.landStrength
+
+  out.kneeL.rx += LANDING.knee * impact
+  out.kneeR.rx += LANDING.knee * impact
+  out.legL.ry += -LANDING.legSplay * impact
+  out.legR.ry += LANDING.legSplay * impact
+  out.footL.rx += LANDING.footPitch * impact
+  out.footR.rx += LANDING.footPitch * impact
+  out.shoulderL.rx += LANDING.shoulderPitch * impact
+  out.shoulderR.rx += LANDING.shoulderPitch * impact
+  out.shoulderL.rz += -LANDING.shoulderRoll * impact
+  out.shoulderR.rz += LANDING.shoulderRoll * impact
+
+  /*
+    Anticipation on an unbuffered jump, and an honest note about it.
+
+    A game cannot anticipate an action the player has not taken without adding
+    input latency, which is never acceptable. So the root is already rising on
+    frame 0 while the knees are still folding and the feet trail below their
+    rest. The body going up while the legs go down is what anticipation looks
+    like from the outside and it costs nothing. A future reader who finds
+    ANTICIPATION.frames and cannot see a crouch on an ordinary jump has not
+    found a bug.
+  */
+  const rising = !grounded && finite(s.verticalVelocity) > 0
+  if (rising) {
+    const fold = Math.min(1, finite(s.airTime) / (ANTICIPATION.frames / 60))
+    const fade = 1 - fold
+    out.kneeL.rx += ANTICIPATION.kneeCompress * fade
+    out.kneeR.rx += ANTICIPATION.kneeCompress * fade
+    out.footL.py -= ANTICIPATION.footTrail * fade
+    out.footR.py -= ANTICIPATION.footTrail * fade
+  }
+
+  /*
+    Head nod, driven by vertical acceleration rather than by an event.
+
+    The head snapping down on landing and lifting on takeoff is most of what
+    sells weight on a character with no neck to sell it with, and taking it from
+    acceleration means it happens on every change of vertical motion rather than
+    only on the ones something remembered to fire an event for.
+  */
+  const vy = finite(s.velY)
+  const verticalAccel = step > 1e-6 ? (vy - rt.prev.velY) / step : 0
+  rt.prev.velX = finite(s.velX)
+  rt.prev.velY = vy
+  rt.prev.velZ = finite(s.velZ)
+  rt.springs.headPitch.target = Math.max(
+    -HEAD.nodClamp,
+    Math.min(HEAD.nodClamp, -verticalAccel * HEAD.nodGain),
+  )
+  rt.springs.headRoll.target = -out.hips.rz * 0.35
+  stepSpring1(rt.springs.headPitch, SPRINGS.headPitch.omega, SPRINGS.headPitch.zeta, step)
+  stepSpring1(rt.springs.headRoll, SPRINGS.headRoll.omega, SPRINGS.headRoll.zeta, step)
+  out.head.rx += rt.springs.headPitch.x
+  out.head.rz += rt.springs.headRoll.x
+
+  /*
+    Antenna, two segments, driven inertially rather than positionally.
+
+    A trailing mass leans OPPOSITE to acceleration, so the drive is the
+    finite-differenced acceleration of its root and not any position. At a hard
+    landing the root decelerates at roughly 25 m/s^2, which asks for 0.55 rad
+    and clamps to 0.5, so the antenna whips to nearly 30 degrees and rings for
+    about 1.4 seconds. That is the most visible piece of secondary motion on the
+    character and it costs four floats.
+  */
+  const accelZ = step > 1e-6 ? (finite(s.velZ) - rt.prev.velZPrev) / step : 0
+  const accelX = step > 1e-6 ? (finite(s.velX) - rt.prev.velXPrev) / step : 0
+  rt.prev.velXPrev = finite(s.velX)
+  rt.prev.velZPrev = finite(s.velZ)
+  const clampA = (v: number) => Math.max(-ANTENNA.clamp, Math.min(ANTENNA.clamp, v))
+  rt.springs.antenna[0].targetX = clampA(-accelZ * ANTENNA.inertia)
+  rt.springs.antenna[0].targetZ = clampA(accelX * ANTENNA.inertia)
+  // The tip trails the base, which is what makes the pair read as one whipping
+  // rod rather than as two independent hinges.
+  rt.springs.antenna[1].targetX = -rt.springs.antenna[0].x * ANTENNA.tipTrail
+  rt.springs.antenna[1].targetZ = -rt.springs.antenna[0].z * ANTENNA.tipTrail
+  stepSpring2(rt.springs.antenna[0], SPRINGS.antennaBase.omega, SPRINGS.antennaBase.zeta, step)
+  stepSpring2(rt.springs.antenna[1], SPRINGS.antennaMid.omega, SPRINGS.antennaMid.zeta, step)
+  out.antennaBase.rx = rt.springs.antenna[0].x
+  out.antennaBase.rz = rt.springs.antenna[0].z
+  out.antennaMid.rx = rt.springs.antenna[1].x
+  out.antennaMid.rz = rt.springs.antenna[1].z
+
+  /*
+    Ear pods counter-swing against the body roll, about X so they flap forward
+    and back rather than up and down. Fast enough to settle inside 300 ms, which
+    is what makes them read as firm rubber rather than as loose.
+  */
+  rt.springs.earPod[0].target = -out.hips.rz * EAR_POD.counterRoll
+  rt.springs.earPod[1].target = -out.hips.rz * EAR_POD.counterRoll
+  stepSpring1(rt.springs.earPod[0], SPRINGS.earPod.omega, SPRINGS.earPod.zeta, step)
+  stepSpring1(rt.springs.earPod[1], SPRINGS.earPod.omega, SPRINGS.earPod.zeta, step)
+  out.earPodL.rx = rt.springs.earPod[0].x
+  out.earPodR.rx = rt.springs.earPod[1].x
+
+  /*
+    Cape, four segments, each inheriting some of its parent's deflection.
+
+    Gravity drapes it, the body's own motion in its local frame blows it back,
+    and each segment picks up a third of the one above. At full speed the drag
+    target is 0.33 rad on the first segment and accumulates to about 0.85 at the
+    tip, so it streams back at roughly 49 degrees.
+  */
+  const cosF = Math.cos(-finite(s.facing))
+  const sinF = Math.sin(-finite(s.facing))
+  const localVelZ = finite(s.velX) * -sinF + finite(s.velZ) * cosF
+  const localVelX = finite(s.velX) * cosF + finite(s.velZ) * sinF
+  for (let i = 0; i < 4; i++) {
+    const seg = rt.springs.cape[i]
+    const inherit = i === 0 ? 0 : rt.springs.cape[i - 1].x * CAPE.inherit
+    seg.targetX = CAPE.hang - localVelZ * CAPE.drag + inherit
+    seg.targetZ = -localVelX * CAPE.drag * 0.6
+    const k = CAPE_SPRINGS[i]
+    stepSpring2(seg, k.omega, k.zeta, step)
+    out.cape[i].rx = seg.x
+    out.cape[i].rz = seg.z
+  }
+
+  /*
+    Idle breathing.
+
+    3.5% on Y, with the X and Z counter-scales at half that, which holds volume
+    to within 0.1% over the cycle to first order. The 0.9 rad lag on the head
+    and shoulders is what stops the whole body pulsing as one unit, which reads
+    as a lighting flicker rather than as breath.
+  */
+  const idle =
+    speedNorm < IDLE.speedThreshold && grounded && finite(s.groundTime) > IDLE.groundDelay
+  if (idle) {
+    rt.idleTime += step
+    rt.breathBlend = Math.min(1, rt.breathBlend + step / IDLE.blendIn)
+  } else {
+    rt.idleTime = 0
+    rt.breathBlend = Math.max(0, rt.breathBlend - step / IDLE.blendOut)
+  }
+  if (rt.breathBlend > 0) {
+    rt.breathPhase += step * ((2 * Math.PI) / IDLE.breathPeriod) * rt.breathBlend
+    const b = Math.sin(rt.breathPhase) * IDLE.breathScale * rt.breathBlend
+    out.root.sy *= 1 + b
+    out.root.sx *= 1 - b * 0.5
+    out.root.sz *= 1 - b * 0.5
+    const lag = Math.sin(rt.breathPhase - IDLE.breathLag) * rt.breathBlend
+    out.head.py += lag * 0.008
+    out.shoulderL.rz += lag * 0.03
+    out.shoulderR.rz -= lag * 0.03
+  }
 
   /*
     The contact shadow.
@@ -868,5 +1211,127 @@ export function stepAnim(
   out.shadow.stretch = 1 + (SHADOW.maxStretch - 1) * speedNorm
   out.shadow.yaw = finite(s.facing)
 
+  solveFace(rt, s, step, grounded, speedNorm, out)
   out.face.scanPhase = rt.t
+}
+
+/**
+ * The six named expressions, as the parameters the visor shader consumes.
+ *
+ * `blink` is not in the table: it overrides `open` alone and inherits arch and
+ * width from whatever is underneath, so a happy blink keeps its arc. Overriding
+ * all three would make every blink identical and the face would lose its mood
+ * for 110 ms at a time.
+ */
+const EXPRESSIONS = [
+  /* Neutral   */ { open: 1.0, arch: 0.0, width: 1.0, bright: 1.0, scan: 0.55 },
+  /* Happy     */ { open: 0.72, arch: 1.0, width: 1.15, bright: 1.12, scan: 0.45 },
+  /* Surprised */ { open: 1.5, arch: 0.0, width: 0.6, bright: 1.18, scan: 0.35 },
+  /* Squint    */ { open: 0.35, arch: 0.35, width: 1.25, bright: 0.88, scan: 0.7 },
+  /* Focused   */ { open: 0.8, arch: -0.25, width: 0.8, bright: 1.06, scan: 0.9 },
+] as const
+
+/** The floor on `open`. The slot never closes, which is the character's identity. */
+const OPEN_FLOOR = 0.06
+
+/** Blink envelope, in seconds: fast close, a hold, then a slower open. */
+const BLINK_CLOSE = 0.035
+const BLINK_HOLD = 0.05
+const BLINK_TOTAL = 0.11
+
+function solveFace(
+  rt: AnimRuntime,
+  s: Readonly<RobotAnimState>,
+  step: number,
+  grounded: boolean,
+  speedNorm: number,
+  out: Pose,
+): void {
+  const f = rt.face
+
+  if (f.expressionHold > 0) {
+    f.expressionHold -= step
+    if (f.expressionHold <= 0) f.expression = EXPRESSION.Neutral
+  }
+
+  const e = EXPRESSIONS[f.expression] ?? EXPRESSIONS[0]
+
+  /*
+    Blink cadence.
+
+    Random 2 to 5 seconds, measured on the scaled clock so hit-stop does not
+    advance it. The close is quadratic and the open is its inverse: linear in
+    both directions reads as a shutter rather than as an eyelid, and the 15 ms
+    hold in between is what makes it read as a blink at all.
+  */
+  if (f.blinkAt === 0) f.blinkAt = rt.t + randomRange(rt.rng, 2, 5)
+
+  /*
+    Suppression, and every rule here is load-bearing.
+
+    Blinking mid-launch reads as the character being bored by its own jump, and
+    a landing already has a face beat of its own so a blink on top of it muddles
+    both. Blinks are deliberately NOT suppressed while focused: a totally
+    unblinking stare while the player reads a prompt is unsettling.
+  */
+  const launching = !grounded && finite(s.verticalVelocity) > 0
+  const suppressed = launching || f.expression === EXPRESSION.Surprised
+
+  if (f.blinkT < 0 && rt.t >= f.blinkAt && !suppressed) {
+    f.blinkT = 0
+  }
+
+  let blinkOpen = 1
+  if (f.blinkT >= 0) {
+    f.blinkT += step
+    const b = f.blinkT
+    if (b < BLINK_CLOSE) {
+      const u = b / BLINK_CLOSE
+      blinkOpen = 1 - u * u * (1 - OPEN_FLOOR)
+    } else if (b < BLINK_CLOSE + BLINK_HOLD) {
+      blinkOpen = OPEN_FLOOR
+    } else if (b < BLINK_TOTAL) {
+      const u = (b - BLINK_CLOSE - BLINK_HOLD) / (BLINK_TOTAL - BLINK_CLOSE - BLINK_HOLD)
+      const eased = 1 - (1 - u) * (1 - u)
+      blinkOpen = OPEN_FLOOR + eased * (1 - OPEN_FLOOR)
+    } else {
+      f.blinkT = -1
+      blinkOpen = 1
+      if (f.doubleRemaining === 1) {
+        // 15% of blinks are doubles, and the second follows 180 ms after the
+        // first ends.
+        f.doubleRemaining = 0
+        f.blinkAt = rt.t + 0.18
+      } else {
+        f.doubleRemaining = nextRandom(rt.rng) < 0.15 ? 1 : 0
+        f.blinkAt = rt.t + randomRange(rt.rng, 2, 5)
+      }
+    }
+  }
+
+  /*
+    Gaze.
+
+    The head already leads a turn, so pointing the eyes further along the
+    direction of travel means the eyes lead the head, which is the order a real
+    look happens in. Smoothed at lambda 10, a 100 ms time constant: instant gaze
+    reads as a machine and anything past about 200 ms reads as sedated.
+  */
+  const gazeTargetX = speedNorm > 0.25 ? Math.max(-1, Math.min(1, -rt.turnEased * 1.6)) : 0
+  const lerp = 1 - Math.exp(-10 * step)
+  f.gazeX += (gazeTargetX - f.gazeX) * lerp
+  f.gazeY += ((grounded ? 0 : Math.max(-1, Math.min(1, finite(s.velY) / 10))) - f.gazeY) * lerp
+
+  const open = Math.max(OPEN_FLOOR, e.open * blinkOpen)
+  out.face.openL = open
+  out.face.openR = open
+  out.face.archL = e.arch
+  out.face.archR = e.arch
+  out.face.widthL = e.width
+  out.face.widthR = e.width
+  out.face.brightness = e.bright
+  out.face.scan = e.scan
+  out.face.gazeX = f.gazeX
+  out.face.gazeY = f.gazeY
+  out.face.glitch = 0
 }

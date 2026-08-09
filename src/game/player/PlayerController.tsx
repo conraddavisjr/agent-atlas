@@ -14,7 +14,7 @@ import { SHADOW } from './animTuning'
 import { headingVector, stepDrive, stepHorizontal, stepVertical } from './movement'
 import { RobotModel } from './RobotModel'
 import { ContactBlob } from './ContactBlob'
-import { createRobotAnimState, pushSquash } from './robotAnim'
+import { createRobotAnimState, EV, pushEvent, pushSquash } from './robotAnim'
 import {
   createAnimRuntime,
   createGroundSample,
@@ -193,6 +193,7 @@ export function PlayerController({
     bufferTimer.current = 0
     reviving.current = true
     dead.current = false
+    pushEvent(anim.current.events, EV.Revive, 0, spawn[0], spawn[1], spawn[2], 0, 1, 0, 1, 0)
   }, [spawn])
 
   useBeforePhysicsStep(() => {
@@ -270,11 +271,26 @@ export function PlayerController({
     coyoteTimer.current = vertical.coyote
     bufferTimer.current = vertical.buffer
 
+    const t0 = body.translation()
+
     if (vertical.jumped) {
       // Stretch on takeoff. Squash and stretch does more for the toy feel than
       // any material in the game. The recovery is the solver's; this states only
       // how far and on which of the three spring profiles.
       pushSquash(anim.current, SQUASH.takeoffStretch, 'takeoff')
+
+      /*
+        One push, several consumers. The solver reads it here to snap the
+        antenna and lift the head; the VFX system will read the same slot for
+        the jump puff without either of them knowing about the other.
+      */
+      const launch = Math.min(1, Math.abs(velocity.current.y) / JUMP.velocity)
+      pushEvent(
+        anim.current.events, EV.Jump, anim.current.groundTime,
+        t0.x, t0.y - 0.7, t0.z,
+        0, 1, 0,
+        launch, bufferTimer.current > 0 ? 1 : 0,
+      )
 
       if (import.meta.env.DEV) debug.current.jumps += 1
     }
@@ -282,8 +298,7 @@ export function PlayerController({
     if (import.meta.env.DEV) {
       // Sampled per physics step rather than per rendered frame, so a jump arc
       // that completes inside a burst of catch-up steps is still observable.
-      const t = body.translation()
-      debug.current.peakY = Math.max(debug.current.peakY, t.y)
+      debug.current.peakY = Math.max(debug.current.peakY, t0.y)
     }
 
     // ---- Landing -----------------------------------------------------------
@@ -303,12 +318,24 @@ export function PlayerController({
           underdamped at zeta 0.55, so the promise is finally kept.
         */
         pushSquash(anim.current, REVIVAL.landSquash, 'revival')
+        pushEvent(
+          anim.current.events, EV.Land, anim.current.airTime,
+          t0.x, t0.y - 0.7, t0.z,
+          0, 1, 0,
+          1, 1,
+        )
         reviving.current = false
       } else {
         const impact = Math.abs(anim.current.verticalVelocity)
         if (impact > SQUASH.minLandSpeed) {
           const strength = Math.min(1, impact / Math.abs(JUMP.maxFallSpeed))
           pushSquash(anim.current, 1 - (1 - SQUASH.landSquash) * strength, 'land')
+          pushEvent(
+            anim.current.events, EV.Land, anim.current.airTime,
+            t0.x, t0.y - 0.7, t0.z,
+            0, 1, 0,
+            strength, 0,
+          )
         }
       }
     }
@@ -329,6 +356,12 @@ export function PlayerController({
     // If the solver cancelled our vertical motion we hit a ceiling, so drop the
     // upward velocity rather than pressing into it for the rest of the arc.
     if (velocity.current.y > 0 && corrected.y < scratch.move.y * 0.5) {
+      pushEvent(
+        anim.current.events, EV.Bonk, anim.current.airTime,
+        t.x, t.y + 0.7, t.z,
+        0, -1, 0,
+        Math.min(1, velocity.current.y / JUMP.velocity), 0,
+      )
       velocity.current.y = 0
     }
 
@@ -337,6 +370,12 @@ export function PlayerController({
     // and would otherwise re-fire death on every step of the way down.
     if (!dead.current && t.y + corrected.y < killY) {
       dead.current = true
+      pushEvent(
+        anim.current.events, EV.Death, anim.current.airTime,
+        t.x, t.y, t.z,
+        0, 1, 0,
+        1, 0,
+      )
       onDeath()
     }
 
@@ -506,6 +545,14 @@ export function PlayerController({
         squash: anim.current.squash,
         squashMode: anim.current.squashMode,
         squashSeq: anim.current.squashSeq,
+        /*
+          Events pushed, and events a consumer fell behind far enough to lose.
+          Exposed so a stall is visible rather than silent; the ring drops on
+          purpose rather than blocking the producer, and a dropped dust puff is
+          nothing, but a steadily climbing counter is a real problem.
+        */
+        events: anim.current.events.head,
+        eventsDropped: anim.current.events.dropped,
         facing: facing.current,
         reviving: reviving.current,
         dead: dead.current,

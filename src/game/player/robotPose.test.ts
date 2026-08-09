@@ -15,9 +15,16 @@ import {
   type GroundSample,
   type Pose,
 } from './robotPose'
-import { createRobotAnimState, type RobotAnimState } from './robotAnim'
+import {
+  createRobotAnimState,
+  drainEvents,
+  EV,
+  pushEvent,
+  pushSquash,
+  type RobotAnimState,
+} from './robotAnim'
 import { BODY, WADDLE } from './tuning'
-import { SHADOW, TURN_ANIM } from './animTuning'
+import { CAPE, IDLE, SHADOW, TURN_ANIM } from './animTuning'
 
 const DT = 1 / 60
 
@@ -275,19 +282,38 @@ describe('the gait, ported from the component', () => {
     expect(rate).toBeCloseTo(WADDLE.bobFrequency * TURN_ANIM.stepScale, 3)
   })
 
-  it('leads with the head and lags with the body', () => {
+  /*
+    The torso lags the turn and the head leads it. The lag lives on the chest
+    now rather than on the hips, so the stance tracks the true facing and only
+    the upper body swings behind, which is what a turn should look like.
+  */
+  it('leads with the head and lags with the torso', () => {
     const rt = createAnimRuntime(1)
     const pose = createPose()
     const g = createGroundSample()
     const s = state({ turnNorm: 1, grounded: true })
-    for (let i = 0; i < 120; i++) {
-      stepAnim(rt, s, g, DT, pose)
-      if (i > 3) {
-        // The head's own offset opposes the body's lag, so the net head yaw is
-        // ahead of the turn while the torso is behind it.
-        expect(Math.sign(pose.head.ry)).toBe(-Math.sign(pose.hips.ry))
-      }
+    for (let i = 0; i < 240; i++) stepAnim(rt, s, g, DT, pose)
+    expect(Math.sign(pose.head.ry)).toBe(-Math.sign(pose.chest.ry))
+    expect(Math.abs(pose.chest.ry)).toBeGreaterThan(0.05)
+  })
+
+  it('lets the torso overshoot centre when a turn is released', () => {
+    // The spring downstream of the input ease is what makes it a rig rather
+    // than a lag: releasing the key swings the torso slightly past centre.
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const held = state({ turnNorm: 1, grounded: true })
+    for (let i = 0; i < 240; i++) stepAnim(rt, held, g, DT, pose)
+    const sign = Math.sign(pose.chest.ry)
+
+    const released = state({ turnNorm: 0, grounded: true })
+    let past = 0
+    for (let i = 0; i < 180; i++) {
+      stepAnim(rt, released, g, DT, pose)
+      past = Math.min(past, pose.chest.ry * sign)
     }
+    expect(past).toBeLessThan(0)
   })
 
   it('tucks the limbs in the air rather than freezing mid-stride', () => {
@@ -307,8 +333,8 @@ describe('the gait, ported from the component', () => {
     const g = createGroundSample()
     for (let i = 0; i < 30; i++) stepAnim(rt, state({ speedNorm: 1, grounded: false }), g, DT, pose)
     // Bob and roll are gated on `walking`, which is zero off the ground.
-    expect(pose.hips.py).toBe(0)
-    expect(pose.hips.rz).toBe(0)
+    expect(pose.hips.py).toBeCloseTo(0, 12)
+    expect(pose.hips.rz).toBeCloseTo(0, 12)
   })
 
   /*
@@ -349,9 +375,20 @@ describe('the gait, ported from the component', () => {
   that shares an implementation with the code it checks proves only that the
   code equals itself.
 
-  The root scale is the one field deliberately excluded. Its recovery spring and
-  its volume preservation both changed on purpose in the same pass that fixed
-  the damping ratio, and `the squash spring` below covers the new behaviour.
+  Three groups of fields are deliberately excluded, each because a later pass
+  changed them on purpose rather than by accident:
+
+    - The root scale, whose recovery spring and volume preservation both changed
+      when the damping ratio was fixed.
+    - The vertical bob, which now lags the roll by 0.55 rad so the two motions
+      stop fusing into one.
+    - The hip yaw, which now carries the waddle's counter-sway, and the torso
+      lag, which moved from the hips to the chest so the stance tracks the true
+      facing.
+
+  What remains is the roll, the lean, the limb swing and the foot splay, and
+  those are asserted to twelve decimal places against the original. The waddle
+  and TURN_ANIM were tuned by eye and this is what keeps them.
 */
 describe('the port preserved the original arithmetic', () => {
   function reference(script: (i: number) => RobotAnimState, frames: number) {
@@ -381,10 +418,10 @@ describe('the port preserved the original arithmetic', () => {
       const armRRx = swing * 0.7 - tuck * 1.4
       const splay = t * TURN_ANIM.footPivot * (a.grounded ? 1 : 0)
 
-      out.push([
-        bodyY, bodyRz, bodyRx, bodyRy, headRy,
-        legLRx, legRRx, armLRx, armRRx, splay, -splay,
-      ])
+      void bodyY
+      void bodyRy
+      void headRy
+      out.push([bodyRz, bodyRx, legLRx, legRRx, armLRx, armRRx, splay, -splay])
     }
     return out
   }
@@ -407,8 +444,7 @@ describe('the port preserved the original arithmetic', () => {
       stepAnim(rt, script(i), g, DT, pose)
       const e = expected[i]
       const actual = [
-        pose.hips.py, pose.hips.rz, pose.hips.rx, pose.hips.ry,
-        pose.head.ry,
+        pose.hips.rz, pose.hips.rx,
         pose.legL.rx, pose.legR.rx,
         pose.shoulderL.rx, pose.shoulderR.rx,
         pose.legL.ry, pose.legR.ry,
@@ -754,6 +790,330 @@ describe('the seeded rng', () => {
       const v = randomRange(rng, 4, 8)
       expect(v).toBeGreaterThanOrEqual(4)
       expect(v).toBeLessThan(8)
+    }
+  })
+})
+
+describe('secondary motion', () => {
+  function landed(strength: number, frames: number) {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    g.hit = true
+    const s = state({ grounded: true })
+    for (let i = 0; i < 30; i++) stepAnim(rt, s, g, DT, pose)
+    pushSquash(s, 1 - (1 - 0.78) * strength, 'land')
+    pushEvent(s.events, EV.Land, 0, 0, 0, 0, 0, 1, 0, strength, 0)
+    const trace: Pose[] = []
+    for (let i = 0; i < frames; i++) {
+      stepAnim(rt, s, g, DT, pose)
+      trace.push(JSON.parse(JSON.stringify(pose)) as Pose)
+    }
+    return trace
+  }
+
+  /*
+    The most visible piece of secondary motion on the character, and the reason
+    an impulse into a spring beats driving its target: a target change says the
+    thing has moved, an impulse says it has been hit.
+  */
+  it('whips the antenna on a landing and rings it down', () => {
+    const trace = landed(1, 150)
+    const peak = Math.max(...trace.map((p) => Math.abs(p.antennaBase.rx)))
+    expect(peak).toBeGreaterThan(0.15)
+    // Settled by about 1.4 s, which is what zeta 0.18 at omega 11.8 gives.
+    expect(Math.abs(trace[trace.length - 1].antennaBase.rx)).toBeLessThan(0.02)
+  })
+
+  it('makes the antenna tip trail its base rather than moving with it', () => {
+    const trace = landed(1, 60)
+    // Opposite signs for most of the ring-down is what reads as a whip.
+    const opposed = trace.filter(
+      (p) => Math.sign(p.antennaMid.rx) === -Math.sign(p.antennaBase.rx) && Math.abs(p.antennaBase.rx) > 0.01,
+    )
+    expect(opposed.length).toBeGreaterThan(10)
+  })
+
+  it('flicks the ear pods in opposite directions on impact', () => {
+    const trace = landed(1, 40)
+    const peakL = Math.max(...trace.map((p) => p.earPodL.rx))
+    const peakR = Math.min(...trace.map((p) => p.earPodR.rx))
+    expect(peakL).toBeGreaterThan(0.05)
+    expect(peakR).toBeLessThan(-0.05)
+  })
+
+  /*
+    One spring driving eleven joints is what makes a landing read as a single
+    event rather than as eleven things happening near each other.
+  */
+  it('folds the knees and throws the arms up on impact, then recovers with the squash', () => {
+    const trace = landed(1, 90)
+    expect(trace[0].kneeL.rx).toBeLessThan(-0.2)
+    expect(trace[0].shoulderL.rx).toBeLessThan(-0.3)
+    // Feet splay outward, which is the wide brace a heavy landing takes.
+    expect(trace[0].legL.ry).toBeLessThan(0)
+    expect(trace[0].legR.ry).toBeGreaterThan(0)
+
+    const settled = trace[trace.length - 1]
+    expect(Math.abs(settled.kneeL.rx)).toBeLessThan(0.02)
+    expect(Math.abs(settled.shoulderL.rx)).toBeLessThan(0.05)
+  })
+
+  it('scales the whole landing pose with impact strength', () => {
+    const hard = landed(1, 5)[0]
+    const soft = landed(0.3, 5)[0]
+    expect(Math.abs(hard.kneeL.rx)).toBeGreaterThan(Math.abs(soft.kneeL.rx))
+    expect(Math.abs(hard.shoulderL.rx)).toBeGreaterThan(Math.abs(soft.shoulderL.rx))
+  })
+
+  it('moves no limb on a takeoff, which is a stretch rather than an impact', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true })
+    for (let i = 0; i < 30; i++) stepAnim(rt, s, g, DT, pose)
+    pushSquash(s, 1.18, 'takeoff')
+    stepAnim(rt, s, g, DT, pose)
+    expect(pose.kneeL.rx).toBeCloseTo(0, 9)
+    expect(pose.shoulderL.rx).toBeCloseTo(0, 9)
+    expect(pose.root.sy).toBeGreaterThan(1.1)
+  })
+
+  it('drapes the cape and blows it back when moving', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const still = state({ grounded: true })
+    for (let i = 0; i < 200; i++) stepAnim(rt, still, g, DT, pose)
+    // At rest it drapes rather than hanging flat against the back.
+    expect(pose.cape[0].rx).toBeCloseTo(CAPE.hang, 2)
+
+    const running = state({ grounded: true, speedNorm: 1, velZ: 6, facing: 0 })
+    for (let i = 0; i < 300; i++) stepAnim(rt, running, g, DT, pose)
+    // Each segment inherits from the one above, so the tip trails furthest.
+    expect(pose.cape[0].rx).toBeLessThan(CAPE.hang)
+    expect(Math.abs(pose.cape[3].rx)).toBeGreaterThan(Math.abs(pose.cape[0].rx))
+  })
+})
+
+describe('idle breathing', () => {
+  function idleFor(seconds: number) {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true, groundTime: 5 })
+    const trace: number[] = []
+    for (let i = 0; i < seconds / DT; i++) {
+      stepAnim(rt, s, g, DT, pose)
+      trace.push(pose.root.sy)
+    }
+    return { trace, pose, rt }
+  }
+
+  it('breathes at 3.5 per cent on the vertical', () => {
+    const { trace } = idleFor(6)
+    const swing = Math.max(...trace) - Math.min(...trace)
+    // Peak to peak is twice the amplitude.
+    expect(swing).toBeGreaterThan(IDLE.breathScale)
+    expect(swing).toBeLessThan(IDLE.breathScale * 2.2)
+  })
+
+  it('holds volume through the breath cycle', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true, groundTime: 5 })
+    for (let i = 0; i < 400; i++) {
+      stepAnim(rt, s, g, DT, pose)
+      // First order, so within a tenth of a per cent rather than exact.
+      expect(Math.abs(pose.root.sx * pose.root.sy * pose.root.sz - 1)).toBeLessThan(0.001)
+    }
+  })
+
+  it('never fights the waddle', () => {
+    // Blends out over 0.2 s once the character moves, rather than snapping off.
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const idle = state({ grounded: true, groundTime: 5 })
+    for (let i = 0; i < 300; i++) stepAnim(rt, idle, g, DT, pose)
+    expect(rt.breathBlend).toBeCloseTo(1, 3)
+
+    const moving = state({ grounded: true, speedNorm: 1, groundTime: 5 })
+    for (let i = 0; i < 30; i++) stepAnim(rt, moving, g, DT, pose)
+    expect(rt.breathBlend).toBe(0)
+  })
+
+  it('does not breathe in the first moments after a landing', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const justLanded = state({ grounded: true, groundTime: 0.1 })
+    for (let i = 0; i < 60; i++) stepAnim(rt, justLanded, g, DT, pose)
+    expect(rt.breathBlend).toBe(0)
+  })
+})
+
+describe('the face', () => {
+  function faceOver(seconds: number, over: Partial<RobotAnimState> = {}) {
+    const rt = createAnimRuntime(0xf00d)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true, groundTime: 5, ...over })
+    const opens: number[] = []
+    for (let i = 0; i < seconds / DT; i++) {
+      stepAnim(rt, s, g, DT, pose)
+      opens.push(pose.face.openL)
+    }
+    return { opens, rt, pose }
+  }
+
+  /*
+    The identity constraint, and the one thing about this face that must not
+    regress. The reference's character loses its eyes on a blink; this one keeps
+    a lit line, and that difference is the entire reason the visor is a bar.
+  */
+  it('never lets the slot close', () => {
+    const { opens } = faceOver(120)
+    expect(Math.min(...opens)).toBeGreaterThanOrEqual(0.06 - 1e-9)
+  })
+
+  it('blinks on a 2 to 5 second cadence', () => {
+    const { opens } = faceOver(300)
+    const onsets: number[] = []
+    for (let i = 1; i < opens.length; i++) {
+      if (opens[i] < 0.9 && opens[i - 1] >= 0.9) onsets.push(i * DT)
+    }
+    expect(onsets.length).toBeGreaterThan(40)
+    const gaps = onsets.slice(1).map((t, i) => t - onsets[i])
+    for (const gap of gaps) {
+      // Either a normal interval or the second half of a double blink.
+      expect(gap > 0.2 - 0.02 && gap < 5.2).toBe(true)
+    }
+  })
+
+  it('completes each blink inside 120 ms', () => {
+    const { opens } = faceOver(120)
+    let start = -1
+    for (let i = 1; i < opens.length; i++) {
+      if (opens[i] < 0.9 && opens[i - 1] >= 0.9) start = i
+      if (start >= 0 && opens[i] >= 0.99 && opens[i - 1] < 0.99) {
+        expect((i - start) * DT).toBeLessThan(0.13)
+        start = -1
+      }
+    }
+  })
+
+  it('does not blink through the rise of a jump', () => {
+    // Blinking mid-launch reads as the character being bored by its own jump.
+    const { opens } = faceOver(60, { grounded: false, verticalVelocity: 6 })
+    expect(Math.min(...opens)).toBeGreaterThan(0.9)
+  })
+
+  it('plays surprised on a hard landing and decays back to neutral', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true })
+    stepAnim(rt, s, g, DT, pose)
+    pushEvent(s.events, EV.Land, 0, 0, 0, 0, 0, 1, 0, 1, 0)
+    stepAnim(rt, s, g, DT, pose)
+    expect(pose.face.openL).toBeGreaterThan(1.2)
+    expect(pose.face.widthL).toBeLessThan(0.8)
+
+    for (let i = 0; i < 60; i++) stepAnim(rt, s, g, DT, pose)
+    expect(pose.face.openL).toBeCloseTo(1, 2)
+  })
+
+  it('ignores a gentle landing, which has no face beat to give', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true })
+    stepAnim(rt, s, g, DT, pose)
+    pushEvent(s.events, EV.Land, 0, 0, 0, 0, 0, 1, 0, 0.2, 0)
+    stepAnim(rt, s, g, DT, pose)
+    expect(pose.face.openL).toBeCloseTo(1, 2)
+  })
+
+  it('clamps the gaze and reaches it in about 200 ms', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true, speedNorm: 1, turnNorm: -1 })
+    let reached = -1
+    for (let i = 0; i < 240; i++) {
+      stepAnim(rt, s, g, DT, pose)
+      expect(Math.abs(pose.face.gazeX)).toBeLessThanOrEqual(1)
+      if (reached < 0 && Math.abs(pose.face.gazeX) > 0.9) reached = i * DT
+    }
+    expect(reached).toBeGreaterThan(0)
+    expect(reached).toBeLessThan(0.6)
+  })
+
+  it('is deterministic for a given seed', () => {
+    const a = faceOver(30).opens
+    const b = faceOver(30).opens
+    expect(a).toEqual(b)
+  })
+})
+
+describe('footsteps', () => {
+  it('fires one per half step cycle while walking', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true, speedNorm: 1, throttle: 1 })
+    let steps = 0
+    let cursor = 0
+    for (let i = 0; i < 600; i++) {
+      stepAnim(rt, s, g, DT, pose)
+      cursor = drainEvents(
+        s.events,
+        cursor,
+        (r, slot) => {
+          if (r.kind[slot] === EV.Footstep) steps++
+        },
+        null,
+      )
+    }
+    // 10 s at bobFrequency 9 rad/s is 90 rad, which is 28 half periods.
+    expect(steps).toBeGreaterThan(24)
+    expect(steps).toBeLessThan(32)
+  })
+
+  it('alternates feet', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true, speedNorm: 1, throttle: 1 })
+    const feet: number[] = []
+    let cursor = 0
+    for (let i = 0; i < 600; i++) {
+      stepAnim(rt, s, g, DT, pose)
+      cursor = drainEvents(
+        s.events,
+        cursor,
+        (r, slot, out: number[]) => {
+          if (r.kind[slot] === EV.Footstep) out.push(r.b[slot])
+        },
+        feet,
+      )
+    }
+    for (let i = 1; i < feet.length; i++) expect(feet[i]).not.toBe(feet[i - 1])
+  })
+
+  it('fires none while airborne or standing still', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    for (const s of [
+      state({ grounded: false, speedNorm: 1 }),
+      state({ grounded: true, speedNorm: 0 }),
+    ]) {
+      const before = s.events.head
+      for (let i = 0; i < 300; i++) stepAnim(rt, s, g, DT, pose)
+      expect(s.events.head).toBe(before)
     }
   })
 })

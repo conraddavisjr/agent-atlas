@@ -83,6 +83,9 @@ export type RobotAnimState = {
 
   /** True through the arrival fall, so the face can play surprised on landing. */
   reviving: boolean
+
+  /** The one-shot channel. See the ring's own doc comment for why it is shaped this way. */
+  events: AnimEventRing
 }
 
 /**
@@ -116,6 +119,7 @@ export function createRobotAnimState(): RobotAnimState {
     velY: 0,
     velZ: 0,
     reviving: true,
+    events: createAnimEventRing(),
   }
 }
 
@@ -128,4 +132,145 @@ export function pushSquash(s: RobotAnimState, depth: number, mode: SquashMode): 
   s.squash = depth
   s.squashMode = mode
   s.squashSeq++
+}
+
+// ---------------------------------------------------------------------------
+// The one-shot event channel
+// ---------------------------------------------------------------------------
+
+/** Power of two, so the slot index is a mask rather than a modulo. */
+export const ANIM_EVENT_CAPACITY = 64
+
+export const EV = {
+  None: 0,
+  Jump: 1,
+  Land: 2,
+  Footstep: 3,
+  Revive: 4,
+  Death: 5,
+  Collect: 6,
+  PortalEnter: 7,
+  TotemFocus: 8,
+  Bonk: 9,
+  TurnSnap: 10,
+} as const
+export type AnimEventKind = (typeof EV)[keyof typeof EV]
+
+/**
+ * One-shot events, as parallel typed arrays rather than objects.
+ *
+ * Typed arrays because the alternative is either allocating an event object per
+ * push, which is garbage at exactly the moments the game is busiest, or a pool
+ * of pre-allocated objects, which is the same thing with more bookkeeping.
+ *
+ * `head` is a monotonically increasing counter that is never wrapped; the slot
+ * is `head & (CAPACITY - 1)`. That is what lets several consumers each hold
+ * their own cursor without coordinating, and it makes "has this consumer fallen
+ * behind" a subtraction rather than a modular comparison.
+ *
+ * The point of the design, stated flatly: when a landing needs a deeper squash,
+ * a dust ring and a screen shake, that is ONE push and three consumers. There
+ * is no second event system, no callback registry, and no effect bridging
+ * gameplay to particles. The animation solver holds one cursor and the VFX
+ * system will hold another, and neither knows about the other.
+ */
+export type AnimEventRing = {
+  kind: Uint8Array
+  /** Emission point, world space. */
+  x: Float32Array; y: Float32Array; z: Float32Array
+  /** Surface normal, or a direction, depending on kind. Unit length. */
+  nx: Float32Array; ny: Float32Array; nz: Float32Array
+  /** Primary magnitude, normalised 0..1 unless a kind says otherwise. */
+  a: Float32Array
+  /** Secondary scalar. Kind-specific: foot index, reward hue, and so on. */
+  b: Float32Array
+  /**
+   * Scaled-clock timestamp of the emission.
+   *
+   * Every event carries its own, so consumer ORDER DOES NOT MATTER. A particle
+   * emitter seeds from `t[slot]` rather than from the current frame time, so if
+   * the VFX system's frame callback happens to run before the character's on
+   * some frame, the arc is still identical. That is what makes it safe to leave
+   * the two unordered, and it is why nothing here reaches for react-three-fiber's
+   * `renderPriority`: passing a non-zero priority to any useFrame disables
+   * automatic rendering for the whole canvas and makes the caller responsible
+   * for gl.render, so using it to fix an ordering problem the timestamps have
+   * already solved would black-screen the game.
+   */
+  t: Float32Array
+  /** Total pushes ever. The slot is `head & (CAPACITY - 1)`. */
+  head: number
+  /** Incremented when a consumer had to fast-forward past unread events. */
+  dropped: number
+}
+
+export function createAnimEventRing(): AnimEventRing {
+  const n = ANIM_EVENT_CAPACITY
+  return {
+    kind: new Uint8Array(n),
+    x: new Float32Array(n), y: new Float32Array(n), z: new Float32Array(n),
+    nx: new Float32Array(n), ny: new Float32Array(n), nz: new Float32Array(n),
+    a: new Float32Array(n),
+    b: new Float32Array(n),
+    t: new Float32Array(n),
+    head: 0,
+    dropped: 0,
+  }
+}
+
+/** Never fails, never allocates. Overwrites the oldest slot when full. */
+export function pushEvent(
+  r: AnimEventRing,
+  kind: AnimEventKind,
+  t: number,
+  x: number, y: number, z: number,
+  nx: number, ny: number, nz: number,
+  a: number, b: number,
+): void {
+  const i = r.head & (ANIM_EVENT_CAPACITY - 1)
+  r.kind[i] = kind
+  r.x[i] = x; r.y[i] = y; r.z[i] = z
+  r.nx[i] = nx; r.ny[i] = ny; r.nz[i] = nz
+  r.a[i] = a
+  r.b[i] = b
+  r.t[i] = t
+  r.head++
+}
+
+/**
+ * Advances `cursor` to `head`, calling `fn` for each event in order, and
+ * returns the new cursor.
+ *
+ * A consumer more than CAPACITY behind has had events overwritten under it, so
+ * it fast-forwards to the oldest slot still valid and counts the loss. That is
+ * the correct trade for a cosmetic channel: a dropped dust puff is nothing, and
+ * a system that blocks the producer to avoid one is a bug. At 60 Hz a consumer
+ * would have to stall for sixteen frames to overflow sixty-four slots, which
+ * only happens when a tab is backgrounded, in which case dropping is exactly
+ * right.
+ *
+ * `head` is read once up front, so an event pushed from inside the callback is
+ * delivered on the NEXT drain rather than re-entrantly during this one.
+ *
+ * The context is passed through rather than captured, so a consumer can use a
+ * module-level callback with a stable identity instead of allocating a closure
+ * every frame.
+ */
+export function drainEvents<C>(
+  r: AnimEventRing,
+  cursor: number,
+  fn: (r: AnimEventRing, slot: number, ctx: C) => void,
+  ctx: C,
+): number {
+  const head = r.head
+  let from = cursor
+  const behind = head - from
+  if (behind > ANIM_EVENT_CAPACITY) {
+    r.dropped += behind - ANIM_EVENT_CAPACITY
+    from = head - ANIM_EVENT_CAPACITY
+  }
+  for (let i = from; i < head; i++) {
+    fn(r, i & (ANIM_EVENT_CAPACITY - 1), ctx)
+  }
+  return head
 }
