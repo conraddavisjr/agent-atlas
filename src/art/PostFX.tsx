@@ -1,9 +1,7 @@
 import {
   EffectComposer,
   Bloom,
-  BrightnessContrast,
   DepthOfField,
-  HueSaturation,
   LUT,
   N8AO,
   Vignette,
@@ -207,15 +205,6 @@ export function PostFX() {
         levels={quality.bloomLevels}
       />
 
-      {/*
-        Grading. Small numbers doing a lot of work: a touch of saturation to
-        keep the palette from going muddy once occlusion is darkening it, and a
-        little contrast to put some snap back after tone mapping rolls the
-        highlights off.
-      */}
-      <HueSaturation hue={0} saturation={0.08} />
-      <BrightnessContrast brightness={0.01} contrast={0.06} />
-
       <Vignette offset={0.3} darkness={0.42} />
 
       {/*
@@ -253,17 +242,21 @@ export function PostFX() {
         a transposed channel index produces a small mean error and a completely
         structured difference image.
 
-        It ships as an IDENTITY first, which is the whole rollout discipline in
-        one decision: the transport is proved correct by a commit that changes
-        nothing, so that if the graded build then looks wrong the bug is
-        provably in the constants. `?lut=off|identity|on` makes all three states
-        comparable in one session without a rebuild.
+        It shipped as an IDENTITY first, which was the whole rollout discipline
+        in one decision: the transport was proved correct by a commit that
+        changed nothing, so if the graded build looks wrong the bug is provably
+        in the constants rather than in the cube layout or the colour space.
+        `?lut=off|identity|on` still makes all three comparable in one session
+        without a rebuild.
 
-        `HueSaturation` and `BrightnessContrast` stay for exactly as long as the
-        LUT is an identity, because removing them in this commit would mean the
-        identity diff was measuring two changes at once. They go in the commit
-        that switches to the real grade, which is the one that actually subsumes
-        them.
+        `HueSaturation` and `BrightnessContrast` are gone, deleted in the same
+        commit that switched this to the real grade. The LUT does everything
+        they did and more - a per-channel S-curve rather than a linear pivot, a
+        chroma boost weighted to the midtones rather than a flat multiplier, and
+        a split tone neither of them could express - in ONE texture fetch inside
+        a shader that already runs, against their two merged function calls. It
+        is cheaper than what it replaces, which is exactly why it can be on at
+        the bottom tier where the palette needs the most help.
       */}
       {quality.colourGrade && GRADE_LUT ? (
         <LUT

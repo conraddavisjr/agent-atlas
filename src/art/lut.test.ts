@@ -11,6 +11,7 @@ import {
   createLookupTexture,
   gradeColour,
   gradeForMode,
+  DEFAULT_LUT_MODE,
   resolveLutMode,
   type GradeConfig,
 } from './lut'
@@ -450,13 +451,26 @@ describe('createLookupTexture', () => {
 
 describe('the mode switch', () => {
   it('reads ?lut and falls back to the default on anything else', () => {
+    /*
+      Written against DEFAULT_LUT_MODE rather than against the literal it
+      currently holds. The three explicit modes are the contract; which one is
+      the default is a rollout decision that has already moved once, from
+      `identity` to `on` when the identity diff passed, and a test that has to
+      be edited for that is a test that will be edited without being read.
+    */
     expect(resolveLutMode('?lut=on')).toBe('on')
     expect(resolveLutMode('?lut=off')).toBe('off')
     expect(resolveLutMode('?lut=identity')).toBe('identity')
-    expect(resolveLutMode('?lut=sepia')).toBe('identity')
-    expect(resolveLutMode('?lut=')).toBe('identity')
-    expect(resolveLutMode('?quality=low')).toBe('identity')
-    expect(resolveLutMode('')).toBe('identity')
+    expect(resolveLutMode('?lut=sepia')).toBe(DEFAULT_LUT_MODE)
+    expect(resolveLutMode('?lut=')).toBe(DEFAULT_LUT_MODE)
+    expect(resolveLutMode('?quality=low')).toBe(DEFAULT_LUT_MODE)
+    expect(resolveLutMode('')).toBe(DEFAULT_LUT_MODE)
+  })
+
+  it('ships the real grade', () => {
+    // The rollout state, asserted so that reverting to the identity for a
+    // diagnostic cannot be left in by accident.
+    expect(DEFAULT_LUT_MODE).toBe('on')
   })
 
   it('maps each mode to its config', () => {

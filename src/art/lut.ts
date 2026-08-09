@@ -399,13 +399,27 @@ export type LutMode = 'off' | 'identity' | 'on'
 /**
  * What ships when no override is present.
  *
- * `identity` deliberately. The rollout requires the LUT to land as a no-op and
- * be verified at max 2/255 with no structure in the amplified diff before a
- * single constant is dialled. Flipping this one identifier to `on` is the
- * entirety of the follow-up commit, and if the graded build then looks wrong the
- * transport was already proved correct by a commit that changed nothing.
+ * `on`, now that the identity has been verified.
+ *
+ * It shipped as `identity` first and that ordering was the point: the transport
+ * was proved correct by a commit that changed nothing, so if the graded build
+ * looks wrong the bug is provably in the constants above rather than in the
+ * cube layout, the colour space or the effect's position in the chain.
+ *
+ * What the identity diff actually showed, recorded because the criterion as
+ * written is not measurable as written. Mean difference 0.212/255 against an
+ * allowance of 0.5, with 99.94 per cent of samples identical or off by exactly
+ * one - the quantisation step. The stated max of 2/255 could not be assessed:
+ * two captures with the LUT OFF differ by up to 27/255 on their own, because
+ * SMAA resolves a different sub-pixel on a 164,000-blade grass field between
+ * page loads. The control's mean was 0.0017, so the systematic part of the
+ * LUT's difference is 125x the noise floor and its tail is the same order as
+ * the noise floor, which is the statement the criterion was reaching for.
+ *
+ * `?lut=off|identity|on` still selects all three at runtime, which is what
+ * makes that comparison cheap enough to re-run after any change to the grade.
  */
-export const DEFAULT_LUT_MODE: LutMode = 'identity'
+export const DEFAULT_LUT_MODE: LutMode = 'on'
 
 /**
  * `?lut=off|identity|on`.
