@@ -170,7 +170,18 @@ export default function App() {
           into the composer's render target and again on the way out, which
           crushes contrast and washes the whole palette out to pastel.
         */
-        gl={{ antialias: false, toneMapping: NoToneMapping }}
+        /*
+          `preserveDrawingBuffer` in development only, because the critique loop
+          reads the frame back with `toDataURL`. Without it the browser is free
+          to clear the buffer the moment the frame is composited, and a readback
+          from a later task returns a fully transparent image - which still
+          decodes, still writes a valid PNG, and still looks like evidence.
+        */
+        gl={{
+          antialias: false,
+          toneMapping: NoToneMapping,
+          preserveDrawingBuffer: import.meta.env.DEV,
+        }}
         style={{ position: 'fixed', inset: 0 }}
       >
         {scene.sky && (

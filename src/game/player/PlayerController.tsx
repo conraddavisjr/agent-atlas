@@ -108,7 +108,7 @@ export function PlayerController({
   const dead = useRef(false)
 
   /** Dev-only counters, sampled per physics step. See window.__player. */
-  const debug = useRef({ peakY: 0, jumps: 0 })
+  const debug = useRef({ peakY: 0, jumps: 0, steps: 0 })
 
   /**
    * Scratch vectors, allocated once and mutated every physics step.
@@ -224,6 +224,8 @@ export function PlayerController({
     const moveY = locked ? 0 : input.moveY
     const jumpPressed = locked ? false : input.jumpPressed
     const jumpHeld = locked ? false : input.jumpHeld
+
+    if (import.meta.env.DEV) debug.current.steps += 1
 
     const grounded = controller.computedGrounded()
 
@@ -536,6 +538,18 @@ export function PlayerController({
         vx: velocity.current.x, vy: velocity.current.y, vz: velocity.current.z,
         speed: Math.hypot(velocity.current.x, velocity.current.z),
         grounded: anim.current.grounded,
+        /*
+          Physics steps taken since mount.
+
+          Here because "the character did not move" and "the character was never
+          asked to move" look identical from outside and have opposite fixes.
+          The screenshot harness teleports the capsule and expects it to fall the
+          rest of the way; when it did not, every other reading - position,
+          velocity, grounded - was a plausible-looking value left over from the
+          last step that actually ran, and there was nothing to distinguish a
+          settled character from a frozen one.
+        */
+        steps: debug.current.steps,
         coyote: coyoteTimer.current,
         buffer: bufferTimer.current,
         /*

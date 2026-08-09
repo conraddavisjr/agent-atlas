@@ -6,3 +6,6 @@ dist-ssr
 .vite
 coverage
 *.tsbuildinfo
+
+# Critique-loop screenshots
+.critique
