@@ -170,12 +170,13 @@ describe('tier settings', () => {
       A stream flipping one of these is expected to change this test in the same
       commit. That is the point: the change becomes deliberate and reviewable
       rather than a value nobody noticed.
+
+      `rimLight`, `bounceFill` and `contactShadow` have left this list, because
+      the light rig and the blob now exist and landed with their acceptance
+      shots.
     */
     for (const tier of ['low', 'medium', 'high'] as const) {
       const q = QUALITY[tier]
-      expect(q.rimLight, tier).toBe(false)
-      expect(q.bounceFill, tier).toBe(false)
-      expect(q.contactShadow, tier).toBe(false)
       expect(q.depthOfField, tier).toBe(false)
       expect(q.chromaticAberration, tier).toBe(false)
       expect(q.colourGrade, tier).toBe(false)
@@ -213,6 +214,29 @@ describe('tier settings', () => {
     expect(low.envResolution).toBeLessThanOrEqual(QUALITY.medium.envResolution)
     expect(low.bloomLevels).toBeLessThanOrEqual(QUALITY.medium.bloomLevels)
     expect(low.bevelSmoothness).toBeLessThanOrEqual(QUALITY.medium.bevelSmoothness)
+  })
+
+  it('gives every tier the two elements that most help a weak image', () => {
+    /*
+      The rim and the contact blob are on everywhere, including `low`, and that
+      is a deliberate exception to "the bottom tier gets less of everything".
+      `low` already gives up ambient occlusion, soft shadows and clouds; taking
+      the rim as well would leave it looking like a different game rather than a
+      cheaper one, and a 1024 shadow map cannot glue the robot to the floor on
+      its own, which is exactly what the blob is for.
+
+      The bounce fill is the one light `low` does not get, which keeps it at
+      three directionals - the same count it had before the rig - and the
+      hemisphere rises to absorb it.
+    */
+    for (const tier of ['low', 'medium', 'high'] as const) {
+      expect(QUALITY[tier].rimLight, tier).toBe(true)
+      expect(QUALITY[tier].contactShadow, tier).toBe(true)
+    }
+    expect(QUALITY.low.bounceFill).toBe(false)
+    expect(QUALITY.medium.bounceFill).toBe(true)
+    expect(QUALITY.high.bounceFill).toBe(true)
+    expect(QUALITY.low.hemisphereIntensity).toBeGreaterThan(QUALITY.medium.hemisphereIntensity)
   })
 
   it('orders the new numeric dials monotonically as well', () => {

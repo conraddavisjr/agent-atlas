@@ -52,6 +52,7 @@ export function PlayerController({
   spawn,
   cosmetics,
   playerRef,
+  contactTint,
   inputLocked,
   killY,
   onDeath,
@@ -63,6 +64,8 @@ export function PlayerController({
   cosmetics: Partial<Record<SocketName, string>>
   /** Exposed so the camera can follow without prop-drilling per frame. */
   playerRef: React.RefObject<Group | null>
+  /** The contact blob's centre tint, from the scene's light rig. */
+  contactTint: string
   inputLocked: React.RefObject<boolean>
   /** Fall below this and the scene kills you. Owned by the scene registry. */
   killY: number
@@ -636,7 +639,7 @@ export function PlayerController({
         a shadow that squashes with the body is the classic tell of a fake
         contact shadow. It is positioned in world space from the ray above.
       */}
-      <ContactBlob pose={poseRef} />
+      <ContactBlob pose={poseRef} color={contactTint} />
     </>
   )
 }

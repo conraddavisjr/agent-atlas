@@ -9,6 +9,7 @@ import {
   ShaderMaterial,
   Vector3,
 } from 'three'
+import { useQuality } from '@/art/useQuality'
 import { SHADOW } from './animTuning'
 import type { Pose } from './robotPose'
 
@@ -102,11 +103,20 @@ const yawQuat = new Quaternion()
  */
 export function ContactBlob({
   pose,
-  color = '#3d4a6b',
+  color,
 }: {
   pose: RefObject<Pose | null>
-  color?: string
+  /**
+   * The centre tint, supplied by the scene rather than defaulted here.
+   *
+   * A contact shadow is the darkest thing the rig produces and its colour is
+   * decided entirely by what else is reaching that pixel, so it belongs to the
+   * light rig. `Lighting.tsx` exports `CONTACT_TINT` per scene; a default here
+   * meant the cave wore a hub-tinted shadow.
+   */
+  color: string
 }) {
+  const quality = useQuality()
   const meshRef = useRef<Mesh>(null)
   /*
     The material is built in the mesh's ref callback and disposed on unmount,
@@ -181,22 +191,26 @@ export function ContactBlob({
   })
 
   /*
-    Not gated on `quality.contactShadow`, and that needs saying out loud.
+    Now gated on `quality.contactShadow`, which is true at every tier.
 
-    The flag exists and is false at every tier, because the whole set of art
-    flags shipped inert ahead of the work. Gating on it today would ship a
-    feature nobody can see. The design spec's own tier table lists the body
-    contact shadow under "always on, every tier, deliberately not gated", and
-    the art bible says low "still gets the rim and the contact blob, because
-    those are what most help a weak image". Two triangles and one raycast is
-    not a cost worth a tier decision. If the flag is ever turned on, re-gating
-    is one line here.
+    It shipped ungated because the flag was false everywhere and gating on it
+    would have shipped a feature nobody could see. With the flag on, leaving it
+    ungated would be worse: `?nogfx=blob` is one of the six rollback levers and
+    it has to actually work, and the tier table has to describe the build.
+
+    The flag is true at low as well, and that is deliberate rather than an
+    oversight. `low` already gives up ambient occlusion, soft shadows and
+    clouds, and a 1024 shadow map cannot glue the robot to the floor on its
+    own, so this is the tier that needs the blob most. Two triangles and one
+    raycast is not a cost worth a tier decision.
 
     renderOrder 1 puts it after the opaque ground and before particles, which
     sit at 2. Without an explicit order three sorts transparents back to front
     by distance, and the shadow can end up drawn after a dust puff that should
     be lying on top of it.
   */
+  if (!quality.contactShadow) return null
+
   return (
     <mesh
       ref={(o) => {

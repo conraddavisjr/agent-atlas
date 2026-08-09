@@ -16,6 +16,7 @@ import { DevHooks } from './dev/DevHooks'
 import { SceneReady } from './game/scenes/SceneReady'
 import { fxOverrides } from './art/fx'
 import { Lighting } from './art/Lighting'
+import { CONTACT_TINT } from './art/contactTint'
 import { PostFX } from './art/PostFX'
 import { useQuality } from './art/useQuality'
 import { HUD } from './ui/HUD'
@@ -250,6 +251,7 @@ export default function App() {
                 spawn={spawn}
                 cosmetics={cosmetics}
                 playerRef={player}
+                contactTint={CONTACT_TINT[scene.lighting]}
                 inputLocked={inputLocked}
                 killY={scene.killY}
                 onDeath={respawn}

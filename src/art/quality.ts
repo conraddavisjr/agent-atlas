@@ -295,12 +295,12 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     maxDpr: 1,
 
     // Lighting.
-    rimLight: false,
+    rimLight: true,
     bounceFill: false,
-    contactShadow: false,
+    contactShadow: true,
     shadowRadius: 0,
     shadowBlurSamples: 0,
-    hemisphereIntensity: 0.5,
+    hemisphereIntensity: 0.6,
     envResolution: 256,
 
     // Post.
@@ -340,12 +340,12 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     maxDpr: 1.5,
 
     // Lighting.
-    rimLight: false,
-    bounceFill: false,
-    contactShadow: false,
+    rimLight: true,
+    bounceFill: true,
+    contactShadow: true,
     shadowRadius: 4,
-    shadowBlurSamples: 12,
-    hemisphereIntensity: 0.5,
+    shadowBlurSamples: 8,
+    hemisphereIntensity: 0.55,
     envResolution: 256,
 
     // Post.
@@ -385,12 +385,12 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     maxDpr: 1.75,
 
     // Lighting.
-    rimLight: false,
-    bounceFill: false,
-    contactShadow: false,
-    shadowRadius: 4,
-    shadowBlurSamples: 12,
-    hemisphereIntensity: 0.5,
+    rimLight: true,
+    bounceFill: true,
+    contactShadow: true,
+    shadowRadius: 6,
+    shadowBlurSamples: 16,
+    hemisphereIntensity: 0.55,
     envResolution: 256,
 
     // Post.
