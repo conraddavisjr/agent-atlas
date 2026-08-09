@@ -108,6 +108,23 @@ export function PostFX() {
           */
           quality={quality.aoQuality}
           /*
+            Half resolution at medium only, which is not a typo in the ladder.
+            It roughly quarters the AO pass's fragment count, and
+            `depthAwareUpsampling` - on by default, stated here because half
+            resolution is what makes it load-bearing - is what stops the
+            upsample bleeding across depth discontinuities and haloing every
+            silhouette. `high` pays full price for the edge quality; `low` has
+            AO off entirely so the flag never reaches a pass.
+          */
+          halfRes={quality.aoHalfRes}
+          depthAwareUpsampling
+          /*
+            World units, not screen space, so occlusion does not change scale as
+            the camera dollies. Stated explicitly because the default is the one
+            we want and a future reader should not have to check.
+          */
+          screenSpaceRadius={false}
+          /*
             This is a MULTIPLIER, not a shadow colour, and the comment it
             replaces had the mechanism backwards.
 

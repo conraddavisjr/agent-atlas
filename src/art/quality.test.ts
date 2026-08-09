@@ -144,6 +144,12 @@ describe('tier settings', () => {
       'anisotropy',
       'transmission',
       'bevelSmoothness',
+      'crystalGroves',
+      'traceSegments',
+      'nodeShells',
+      'pylonCount',
+      'pylonDetail',
+      'visorDetail',
       'decals',
       'wrapDiffuse',
       'footIk',
@@ -175,7 +181,9 @@ describe('tier settings', () => {
       the light rig and the blob now exist and landed with their acceptance
       shots, and `colourGrade` because the LUT does - it is on at every tier
       including `low`, where it replaces two grading effects with one texture
-      fetch and is therefore cheaper than what it removes.
+      fetch and is therefore cheaper than what it removes. `footIk` has left it
+      too: the springs and the ground sample it drives are built, so leaving the
+      flag false meant shipping code that never ran.
     */
     for (const tier of ['low', 'medium', 'high'] as const) {
       const q = QUALITY[tier]
@@ -184,7 +192,6 @@ describe('tier settings', () => {
       expect(q.surfaceMapSize, tier).toBe(0)
       expect(q.decals, tier).toBe(false)
       expect(q.wrapDiffuse, tier).toBe(false)
-      expect(q.footIk, tier).toBe(false)
       expect(q.particleBudget, tier).toBe(0)
       expect(q.vfxDetail, tier).toBe('off')
       expect(q.faceAnimation, tier).toBe(false)
@@ -249,6 +256,12 @@ describe('tier settings', () => {
     expect(medium.bevelSmoothness).toBeLessThanOrEqual(high.bevelSmoothness)
     expect(medium.particleBudget).toBeLessThanOrEqual(high.particleBudget)
     expect(medium.surfaceMapSize).toBeLessThanOrEqual(high.surfaceMapSize)
+    expect(low.crystalGroves).toBeLessThanOrEqual(medium.crystalGroves)
+    expect(medium.crystalGroves).toBeLessThanOrEqual(high.crystalGroves)
+    expect(low.traceSegments).toBeLessThanOrEqual(medium.traceSegments)
+    expect(medium.traceSegments).toBeLessThanOrEqual(high.traceSegments)
+    expect(low.pylonCount).toBeLessThanOrEqual(medium.pylonCount)
+    expect(medium.pylonCount).toBeLessThanOrEqual(high.pylonCount)
     // The hemisphere runs the other way: it is raised at `low` to absorb the
     // bounce fill that tier does not get, so the only invariant is the cap.
     expect(low.hemisphereIntensity).toBeLessThanOrEqual(0.6)

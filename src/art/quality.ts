@@ -237,8 +237,47 @@ export type QualitySettings = {
   wrapDiffuse: boolean
 
   // ---------------------------------------------------------------------
+  // World detail. See docs/design/03-environment.md section 10.1.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Token crystal groves scattered across the island.
+   *
+   * These were derived from the tier inline in `HubIsland` with a comment
+   * saying they belonged here. They belong here: a field that lives at the call
+   * site is a field no other scene can read and no test can assert on, and the
+   * whole reason this table exists is that a tier system retrofitted onto the
+   * art only ever expresses the settings someone remembered to make
+   * configurable.
+   */
+  crystalGroves: number
+  /**
+   * Segments per circuit-trace tube and per overhead arc catenary.
+   *
+   * The single largest triangle dial in the built environment, because the
+   * traces are swept tubes and the count multiplies by the ring resolution.
+   */
+  traceSegments: number
+  /** The translucent outer shell on node sculptures. One extra draw per node. */
+  nodeShells: boolean
+  /** Perimeter pylons in the ring. Their colliders are never gated, only the mesh. */
+  pylonCount: number
+  /** Caps and collars on the pylons, which is detail rather than silhouette. */
+  pylonDetail: boolean
+
+  // ---------------------------------------------------------------------
   // Character and VFX. See docs/design/05-character-vfx.md.
   // ---------------------------------------------------------------------
+
+  /**
+   * How much of the visor shader is compiled.
+   *
+   * `'simple'` compiles out the scanlines and the sweep, which is a `#define`
+   * rather than a branch, so the cost is a shorter shader rather than a skipped
+   * one. The visor is the one emissive surface a player looks at for hours, so
+   * it is cut last and only at the bottom tier.
+   */
+  visorDetail: 'simple' | 'full'
 
   /**
    * Foot placement from ground rays.
@@ -301,13 +340,13 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     shadowRadius: 0,
     shadowBlurSamples: 0,
     hemisphereIntensity: 0.6,
-    envResolution: 256,
+    envResolution: 128,
 
     // Post.
     depthOfField: false,
     chromaticAberration: false,
     colourGrade: true,
-    bloomLevels: 8,
+    bloomLevels: 4,
     aoHalfRes: false,
 
     // Materials and geometry.
@@ -316,11 +355,19 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     sheenWorld: false,
     anisotropy: false,
     transmission: true,
-    bevelSmoothness: 3,
+    bevelSmoothness: 2,
     decals: false,
     wrapDiffuse: false,
 
+    // World detail.
+    crystalGroves: 3,
+    traceSegments: 24,
+    nodeShells: false,
+    pylonCount: 6,
+    pylonDetail: false,
+
     // Character and VFX.
+    visorDetail: 'simple',
     footIk: false,
     particleBudget: 0,
     vfxDetail: 'off',
@@ -352,8 +399,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     depthOfField: false,
     chromaticAberration: false,
     colourGrade: true,
-    bloomLevels: 8,
-    aoHalfRes: false,
+    bloomLevels: 6,
+    aoHalfRes: true,
 
     // Materials and geometry.
     surfaceMapSize: 0,
@@ -365,8 +412,16 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     decals: false,
     wrapDiffuse: false,
 
+    // World detail.
+    crystalGroves: 5,
+    traceSegments: 48,
+    nodeShells: true,
+    pylonCount: 8,
+    pylonDetail: true,
+
     // Character and VFX.
-    footIk: false,
+    visorDetail: 'full',
+    footIk: true,
     particleBudget: 0,
     vfxDetail: 'off',
     faceAnimation: false,
@@ -391,7 +446,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     shadowRadius: 6,
     shadowBlurSamples: 16,
     hemisphereIntensity: 0.55,
-    envResolution: 256,
+    envResolution: 512,
 
     // Post.
     depthOfField: false,
@@ -406,12 +461,20 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     sheenWorld: false,
     anisotropy: false,
     transmission: true,
-    bevelSmoothness: 3,
+    bevelSmoothness: 4,
     decals: false,
     wrapDiffuse: false,
 
+    // World detail.
+    crystalGroves: 6,
+    traceSegments: 64,
+    nodeShells: true,
+    pylonCount: 8,
+    pylonDetail: true,
+
     // Character and VFX.
-    footIk: false,
+    visorDetail: 'full',
+    footIk: true,
     particleBudget: 0,
     vfxDetail: 'off',
     faceAnimation: false,

@@ -107,6 +107,96 @@ export const palette = {
   locked: '#8a93a3',
   lockedDeep: '#4a5160',
   unlocked: '#ffd45e',
+
+  /**
+   * The value bands, as albedo, and the reason they are palette entries.
+   *
+   * The art bible's acceptance test outranks the others and is meant literally:
+   * desaturate a frame and you must still instantly read where you can stand.
+   * That works when three bands are separated with real gaps between them -
+   * gameplay 0.56 to 0.74, midground 0.20 to 0.38, background 0.76 to 0.86 -
+   * and it collapses the moment two surfaces drift into the same one, which is
+   * exactly what happened when the deck sat at 0.850 against a lawn at 0.830.
+   *
+   * These are DISPLAY-space luminances, not linear ones, and the difference
+   * matters enough to say twice. The band test asks what the eye reads off the
+   * screen, so it is measured on gamma-encoded sRGB, the numbers an eyedropper
+   * on a screenshot returns. The bloom budget in `materials.ts` is the opposite
+   * and is measured in linear light, because that is what the threshold
+   * compares. Checking one against the other produces confident nonsense in
+   * both directions.
+   *
+   * `bandDeckTop` is `rock`, repeated by reference rather than by value so the
+   * side face cannot drift away from the top it is defined relative to.
+   */
+  /** Band 1, 0.735. Deck and puck tops - anything the capsule stands on. */
+  bandDeckTop: '#b6bcc7',
+  /** Band 1, 0.589. Deck and puck side faces, one step down from their tops. */
+  bandDeckSide: '#8f97a5',
+  /** Band 2, 0.330. Kerbs and trim, which draw a raised deck's outline. */
+  bandTrim: '#4b5568',
+  /** Band 2, 0.272. Pylons, struts and arcs - the frame, never the floor. */
+  bandFrame: '#3c465a',
 } as const
 
 export type PaletteColor = keyof typeof palette
+
+/** The three value bands from the art bible's section 8. */
+export type ValueBand = 'gameplay' | 'midground' | 'background'
+
+/**
+ * Display-space luma bounds per band, inclusive.
+ *
+ * Kept beside the colours rather than in a spec document because the only
+ * version of this rule that survives is one a test can assert against.
+ */
+export const VALUE_BANDS: Record<ValueBand, readonly [number, number]> = {
+  gameplay: [0.56, 0.74],
+  midground: [0.2, 0.38],
+  background: [0.76, 0.86],
+}
+
+/**
+ * Rec.709 luma of a hex colour in DISPLAY space.
+ *
+ * Deliberately not linearised. See the note above: the band test is a statement
+ * about what the eye reads off a screenshot, so it is computed on the
+ * gamma-encoded values an eyedropper returns.
+ */
+export function displayLuma(hex: string): number {
+  const raw = hex.trim().replace(/^#/, '')
+  const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) {
+    throw new Error(`palette: cannot read "${hex}" as a hex colour`)
+  }
+  const ch = (i: number) => parseInt(full.slice(i * 2, i * 2 + 2), 16) / 255
+  return 0.2126 * ch(0) + 0.7152 * ch(1) + 0.0722 * ch(2)
+}
+
+/**
+ * Assert that a colour sits in the band it claims, and hand it back.
+ *
+ * Meant to be used at the point a surface picks its albedo - `band(palette.rock,
+ * 'gameplay')` - so that the claim travels with the call site rather than
+ * living in a comment that stops being true. It throws rather than warning: a
+ * surface in the wrong band is the one defect the whole art direction is
+ * organised around, and the honest failure is a loud one at startup.
+ *
+ * In production it returns the colour without checking, because the check is a
+ * statement about the palette rather than about the frame and the palette
+ * cannot change at runtime.
+ */
+export function band(hex: string, of: ValueBand): string {
+  if (!import.meta.env.DEV) return hex
+  const [lo, hi] = VALUE_BANDS[of]
+  const luma = displayLuma(hex)
+  if (luma < lo || luma > hi) {
+    throw new Error(
+      `palette: ${hex} has display luma ${luma.toFixed(3)}, outside the ${of} band ` +
+        `of ${lo} to ${hi}. The greyscale readability test is the one that outranks ` +
+        `the others: two surfaces in the same band are one shape once the colour is ` +
+        `gone. See docs/design/00-art-bible.md section 8.`,
+    )
+  }
+  return hex
+}

@@ -2,7 +2,7 @@ import { useMemo, useRef } from 'react'
 import { RigidBody, CuboidCollider, CylinderCollider } from '@react-three/rapier'
 import { useFrame } from '@react-three/fiber'
 import { TorusGeometry, type BufferGeometry, type Group } from 'three'
-import { palette } from '@/art/palette'
+import { band, palette } from '@/art/palette'
 import { GLOW, crystal, emissive, mattePlastic, plastic } from '@/art/materials'
 import {
   boxProjectUV,
@@ -22,7 +22,7 @@ import {
 } from '@/art/geometry'
 import { DECAL_KINDS, createDecalMaps } from '@/art/decalTextures'
 import { mulberry32, type Exclusion } from '@/art/placement'
-import { useQuality, useQualityTier } from '@/art/useQuality'
+import { useQuality } from '@/art/useQuality'
 import { Grass } from '@/art/Grass'
 import { Flowers } from '@/art/Flowers'
 import { Scatter } from '@/art/Scatter'
@@ -92,16 +92,22 @@ import { Terrain, PLATEAU_RADIUS } from './Terrain'
  * later palette change propagates instead of being re-typed - and so that the
  * side value in particular cannot drift away from the top value it is defined
  * relative to.
+ *
+ * They are palette entries now, and each one states the band it claims through
+ * `band()`, which throws in development if the claim is false. That is the
+ * point of the helper: the assertion travels with the call site instead of
+ * living in a comment that quietly stops being true the next time someone
+ * nudges a hex value.
  */
 const BAND = {
   /** Band 1. Deck and puck tops. Luma 0.735. */
-  deckTop: palette.rock,
+  deckTop: band(palette.bandDeckTop, 'gameplay'),
   /** Band 1. Deck and puck side faces. Luma 0.589. */
-  deckSide: '#8f97a5',
+  deckSide: band(palette.bandDeckSide, 'gameplay'),
   /** Band 2. Kerbs and trim. Luma 0.330. */
-  trim: '#4b5568',
+  trim: band(palette.bandTrim, 'midground'),
   /** Band 2. Pylons, struts, arcs. Luma 0.272. */
-  frame: '#3c465a',
+  frame: band(palette.bandFrame, 'midground'),
 } as const
 
 /**
@@ -401,19 +407,16 @@ export function HubIsland() {
   const progress = useProgress()
   const setActiveTotem = useGameStore((s) => s.setActiveTotem)
   const quality = useQuality()
-  const { tier } = useQualityTier()
 
   const hubLessons = LESSONS.filter((l) => l.zoneId === 'basics')
   const caveOpen = isSceneAccessible('cave', ZONES, LESSONS, progress)
   const completedCount = hubLessons.filter((l) => isLessonComplete(l, progress)).length
 
   /*
-    Tier gating.
-
-    These belong in `quality.ts` as the fields the environment spec's section
-    10.1 names - `crystalGroves`, `traceSegments`, `nodeShells`, `pylonCount`,
-    `pylonDetail` - and they are derived from the tier here only because that
-    file belongs to another stream this pass.
+    Tier gating, now read from the table rather than derived from the tier name
+    here. A setting that lives at its call site is one no other scene can read
+    and no test can assert on, which is exactly the retrofit `quality.ts` exists
+    to prevent.
 
     Never gated, at any tier: the kit modules, the kerbs, the colliders and the
     trunk trace. Those are the level and its readability rather than polish. A
@@ -422,13 +425,19 @@ export function HubIsland() {
   */
   const gates = useMemo(
     () => ({
-      groves: tier === 'low' ? 3 : tier === 'medium' ? 5 : 6,
-      traceSegments: tier === 'low' ? 24 : tier === 'medium' ? 48 : 64,
-      nodeShells: tier !== 'low',
-      pylons: tier === 'low' ? 6 : 8,
-      pylonDetail: tier !== 'low',
+      groves: quality.crystalGroves,
+      traceSegments: quality.traceSegments,
+      nodeShells: quality.nodeShells,
+      pylons: quality.pylonCount,
+      pylonDetail: quality.pylonDetail,
     }),
-    [tier],
+    [
+      quality.crystalGroves,
+      quality.traceSegments,
+      quality.nodeShells,
+      quality.pylonCount,
+      quality.pylonDetail,
+    ],
   )
 
   /*

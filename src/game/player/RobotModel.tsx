@@ -126,7 +126,7 @@ export function RobotModel({
           <group ref={(o) => void (rigRef.current!.neck = o)} position={at(REST.neck)}>
             <group ref={(o) => void (rigRef.current!.head = o)} position={at(REST.head)}>
               <HeadShell quality={quality} />
-              <Face pose={pose} />
+              <Face pose={pose} detail={quality.visorDetail} />
 
               <EarPodNode side="L" rigRef={rigRef} quality={quality} />
               <EarPodNode side="R" rigRef={rigRef} quality={quality} />
@@ -175,11 +175,20 @@ function at(v: Vec3): [number, number, number] {
  * it. Low on the face is the infantile placement and it is not a detail: eyes
  * at the vertical centre read as an adult on any head shape.
  */
-function Face({ pose }: { pose: RefObject<Pose | null> }) {
+function Face({
+  pose,
+  detail,
+}: {
+  pose: RefObject<Pose | null>
+  /** From `quality.visorDetail`. `'simple'` compiles the scanlines and the
+   *  sweep out of the visor shader with a `#define`, so the saving is a shorter
+   *  program rather than a skipped branch. */
+  detail: 'simple' | 'full'
+}) {
   return (
     <group position={[0, -0.045, 0.305]}>
       <FacePlate />
-      <RobotFace pose={pose} />
+      <RobotFace pose={pose} detail={detail} />
     </group>
   )
 }
