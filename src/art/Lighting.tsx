@@ -24,6 +24,38 @@ export function Lighting({ variant }: { variant: LightingVariant }) {
   return variant === 'hub' ? <HubLighting /> : <CaveLighting />
 }
 
+/**
+ * The camera-relative rim / kicker. SLOT: renders nothing yet.
+ *
+ * It is the most recognisable missing element in the current image and it has
+ * to be camera-relative, because this camera orbits freely on both mouse drag
+ * and auto-realignment, so a world-fixed rim spends most of a session either
+ * invisible or acting as a second key. That is not a shortcut; it is what a
+ * gaffer physically does on a turntable shoot, which is the reference the whole
+ * art direction is built on.
+ *
+ * Two things about it are already settled and are worth recording here, because
+ * they are the reasons it is one component rather than a light added to the rig
+ * above. Its azimuth comes from `cameraFrame.yaw`, which `FollowCamera` already
+ * publishes and which is exactly the quantity needed, so there is no camera
+ * maths to keep in sync. And its elevation is fixed rather than following
+ * camera pitch, because pitch runs from -0.5 to 1.1 rad and following it would
+ * put the kicker underneath the robot whenever the player looks down.
+ *
+ * The gate is honoured now so that building the light is a change in one file
+ * and one line of quality.ts rather than a change in three. `rimLight` is false
+ * at every tier until then, and `?nogfx=rim` forces it off regardless.
+ */
+function RimLight() {
+  const quality = useQuality()
+  if (!quality.rimLight) return null
+  // TODO(stream 0b): the light itself, per docs/design/01-lighting.md section 2.
+  // Intensity 0.55 against a rim sub-cap of 0.60, colour #bfeaff, and
+  // deliberately not palette.visor: the emissive cyan has to keep meaning "this
+  // is powered", and spraying it across every silhouette destroys that.
+  return null
+}
+
 function HubLighting() {
   const quality = useQuality()
 
@@ -142,8 +174,40 @@ function HubLighting() {
       */}
       <directionalLight position={[2, 3, 12]} intensity={0.45} color="#fff6e8" />
 
-      <Environment frames={1} resolution={256}>
-        <Lightformer intensity={1.1} position={[0, 6, 0]} scale={[12, 12, 1]} rotation-x={Math.PI / 2} color="#ffffff" />
+      <RimLight />
+
+      {/*
+        Resolution comes from the tier now rather than being fixed here. It is a
+        one-off cost: `frames={1}` renders the cube once and the runtime IBL
+        sampling costs the same whatever the resolution is, so all that changes
+        is memory and how sharp the low-roughness mips are.
+
+        Nothing inside this subtree may re-render per frame. The cube is
+        rebuilt in a layout effect keyed on `children`, whose identity changes
+        on every React render of this component, so a camera-relative light or
+        anything reading `useFrame` state placed in here would rebuild the
+        cubemap every frame and undo the entire point of `frames={1}`. That is
+        why `<RimLight />` is a sibling of the environment rather than a child.
+      */}
+      <Environment frames={1} resolution={quality.envResolution}>
+        {/*
+          No `rotation-x`. It was here and it never did anything.
+
+          drei's Lightformer runs `if (!props.rotation) quaternion.identity()`
+          and then `lookAt(target)` in a layout effect. `rotation-x` is a
+          different prop key, so `props.rotation` is undefined, the rotation
+          React applied is reset, and the lookAt wins. It happened to be
+          harmless because this card sits at [0, 6, 0] and looking at the origin
+          points it straight down anyway, which is what the rotation was trying
+          to say.
+
+          The rule that follows is worth keeping: orientation on a Lightformer
+          comes from `target` and never from a rotation prop. `lookAt` resolves
+          roll against the default up of +Y, so a card's local +X always ends up
+          horizontal, which is what makes a long thin scale reliably produce a
+          horizontal strip.
+        */}
+        <Lightformer intensity={1.1} position={[0, 6, 0]} scale={[12, 12, 1]} color="#ffffff" />
         <Lightformer intensity={0.55} position={[6, 2, 4]} scale={[6, 6, 1]} color={palette.skyTop} />
         <Lightformer intensity={0.4} position={[-6, 1, -4]} scale={[6, 6, 1]} color={palette.skyHorizon} />
       </Environment>
@@ -178,8 +242,15 @@ function CaveLighting() {
           them. Without this the interior reads as a black void. */}
       <directionalLight position={[0, 3, 10]} intensity={0.5} color="#c9d9ff" />
 
+      {/*
+        Deliberately a literal 128 rather than `quality.envResolution`. The cave
+        is a dim interior with almost no glossy surface in it, so the sharpness
+        of the low-roughness mips buys nothing here at any tier, and the cave rig
+        is a separate budget from the hub's. Its `rotation-x` is gone for the
+        same reason as the hub's: drei discards it.
+      */}
       <Environment frames={1} resolution={128}>
-        <Lightformer intensity={1.2} position={[0, 4, 0]} scale={[8, 8, 1]} rotation-x={Math.PI / 2} color={palette.caveCrystal} />
+        <Lightformer intensity={1.2} position={[0, 4, 0]} scale={[8, 8, 1]} color={palette.caveCrystal} />
         <Lightformer intensity={0.6} position={[0, 1, 6]} scale={[5, 5, 1]} color="#9fc6ff" />
       </Environment>
     </>
