@@ -229,12 +229,60 @@ export function metal(color: string, overrides: MeshPhysicalMaterialProps = {}):
 
 /**
  * Anything that should look powered: the visor, circuit traces, crystals.
- * `intensity` above 1 is what pushes it past the bloom threshold in PostFX,
- * so this is the only way anything in the game is allowed to glow.
+ *
+ * `glow` is a multiple of the bloom threshold, not an `emissiveIntensity`.
+ * 1.0 sits exactly on the line, `GLOW.bloom` is over it, `GLOW.source` reads as
+ * a light source without blooming. See `emissiveIntensityFor` for the
+ * derivation and for why the old flat `intensity` argument could not work.
+ *
+ * The second argument changed meaning rather than changing name, which is a
+ * decision worth defending. A rename would have left both units in the codebase
+ * during the transition, and the two are indistinguishable at a call site: both
+ * are a bare number somewhere between 0.5 and 4. Changing the meaning breaks
+ * every caller at once, which is the only way to be sure none of them was
+ * missed, and every one of them was reviewed as it moved.
+ *
+ * Colours below `LOW_LUMA_FLOOR` throw here. They need `emissiveRaw` plus a
+ * pale core, and the throw is what stops that decision being deferred by
+ * accident.
  */
 export function emissive(
   color: string,
-  intensity = 2,
+  glow: number = GLOW.source,
+  overrides: MeshPhysicalMaterialProps = {},
+): MeshPhysicalMaterialProps {
+  return {
+    color,
+    emissive: color,
+    emissiveIntensity: emissiveIntensityFor(color, glow),
+    roughness: 0.3,
+    metalness: 0,
+    clearcoat: 1,
+    clearcoatRoughness: 0.1,
+    ...overrides,
+  }
+}
+
+/**
+ * The same preset with an absolute `emissiveIntensity` and no normalisation.
+ *
+ * Two legitimate uses, and they are the same case seen from both ends.
+ *
+ * The coloured halo around a pale core. A violet or magenta element that must
+ * read as a light source is built as a near-white core that blooms and a
+ * saturated shell that deliberately does not, and the shell's brightness is
+ * chosen against the core rather than against the threshold. Normalising it
+ * would be exactly wrong: it is meant to stay under the line.
+ *
+ * And the transitional case, which is what most of its call sites are today. A
+ * colour below `LOW_LUMA_FLOOR` cannot be normalised and its pale core does not
+ * exist yet, because adding one is a geometry change. Holding the current
+ * absolute intensity keeps those objects looking exactly as they do now instead
+ * of guessing at a number that will be replaced anyway.
+ */
+export function emissiveRaw(
+  color: string,
+  intensity: number,
   overrides: MeshPhysicalMaterialProps = {},
 ): MeshPhysicalMaterialProps {
   return {

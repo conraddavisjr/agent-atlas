@@ -3,7 +3,7 @@ import { RigidBody, CuboidCollider } from '@react-three/rapier'
 import { Billboard, RoundedBox, Text } from '@react-three/drei'
 import type { Group } from 'three'
 import { palette } from '@/art/palette'
-import { emissive, mattePlastic, plastic, stone } from '@/art/materials'
+import { GLOW, emissive, mattePlastic, plastic, stone } from '@/art/materials'
 import { usePbrTextures } from '@/art/textures'
 import { PortalShimmer } from '@/art/PortalShimmer'
 import { useProximity } from '../interaction/useProximity'
@@ -104,7 +104,7 @@ export function Portal({
 
       {/* Trim, which carries the accent colour when open. */}
       <RoundedBox args={[3.1, 0.16, 0.16]} radius={0.05} smoothness={3} position={[0, 3.3, 0.35]}>
-        <meshPhysicalMaterial {...(locked ? mattePlastic(frameColor) : emissive(frameColor, 1.6))} />
+        <meshPhysicalMaterial {...(locked ? mattePlastic(frameColor) : emissive(frameColor, GLOW.bloom))} />
       </RoundedBox>
 
       {/* The opening itself. */}

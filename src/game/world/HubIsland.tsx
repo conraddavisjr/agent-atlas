@@ -1,7 +1,7 @@
 import { RigidBody, CuboidCollider } from '@react-three/rapier'
 import { RoundedBox } from '@react-three/drei'
 import { palette } from '@/art/palette'
-import { emissive, mattePlastic, plastic, stone } from '@/art/materials'
+import { GLOW, emissive, emissiveRaw, mattePlastic, plastic, stone } from '@/art/materials'
 import { usePbrTextures } from '@/art/textures'
 import { Grass } from '@/art/Grass'
 import { Flowers } from '@/art/Flowers'
@@ -170,7 +170,7 @@ export function HubIsland() {
       ].map((trace, i) => (
         <mesh key={i} position={trace.pos} rotation={[-Math.PI / 2, 0, trace.rot]} receiveShadow>
           <planeGeometry args={[0.22, trace.len]} />
-          <meshPhysicalMaterial {...emissive(palette.circuit, 1.2)} transparent opacity={0.75} />
+          <meshPhysicalMaterial {...emissive(palette.circuit, GLOW.source)} transparent opacity={0.75} />
         </mesh>
       ))}
 
@@ -243,13 +243,16 @@ function PortalRing({
       <mesh position={[0, 0, 0.004]}>
         <ringGeometry args={[1.56, 1.66, 64]} />
         {/*
-          Kept below the arch trim and the portal surface on purpose. At 2 the
-          groove bloomed out to a flat white donut that pulled the eye off the
-          doorway it is supposed to be pointing at. The inlay is a supporting
-          cue, so it reads as cyan rather than as a light source.
+          Kept below the arch trim and the portal surface on purpose. The inlay
+          is a supporting cue: it should read as cyan rather than as a light
+          source, so it sits at two thirds of the bloom threshold and does not
+          cross it. The note this replaces recorded that an intensity of 2 blew
+          the groove out into a flat white donut that pulled the eye off the
+          doorway; under the new unit that observation is the definition of
+          GLOW.source rather than a number to remember.
         */}
         {lit ? (
-          <meshPhysicalMaterial {...emissive(palette.visor, 1.15)} />
+          <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
         ) : (
           <meshPhysicalMaterial {...mattePlastic('#2c3240')} />
         )}
@@ -264,11 +267,11 @@ function TokenCrystal({ position, seed }: { position: [number, number, number]; 
     <group position={position} rotation={[0, seed * 1.1, 0]}>
       <mesh position={[0, height / 2, 0]} castShadow>
         <coneGeometry args={[0.26, height, 6]} />
-        <meshPhysicalMaterial {...emissive(palette.token, 0.9)} transparent opacity={0.9} />
+        <meshPhysicalMaterial {...emissive(palette.token, GLOW.source)} transparent opacity={0.9} />
       </mesh>
       <mesh position={[0.22, height * 0.32, 0.12]} rotation={[0, 0, 0.4]} castShadow>
         <coneGeometry args={[0.14, height * 0.6, 6]} />
-        <meshPhysicalMaterial {...emissive(palette.token, 0.7)} transparent opacity={0.9} />
+        <meshPhysicalMaterial {...emissive(palette.token, GLOW.source * 0.8)} transparent opacity={0.9} />
       </mesh>
     </group>
   )
@@ -287,7 +290,14 @@ function NodeSculpture({ position, scale = 1 }: { position: [number, number, num
       </mesh>
       <mesh position={[0, 3.1, 0]} castShadow>
         <icosahedronGeometry args={[0.7, 1]} />
-        <meshPhysicalMaterial {...emissive(palette.node, 1.1)} />
+        {/*
+          TODO(stream C2): violet at 0.2202 linear luminance cannot be
+          normalised, so this holds its old absolute intensity and reads as
+          saturated plastic rather than as light. The fix is a small near-white
+          core inside the icosahedron, blooming, with this shell as its halo,
+          per the art bible's pale-core rule.
+        */}
+        <meshPhysicalMaterial {...emissiveRaw(palette.node, 1.1)} />
       </mesh>
       {[0, 1, 2].map((i) => {
         const angle = (i / 3) * Math.PI * 2
@@ -298,7 +308,13 @@ function NodeSculpture({ position, scale = 1 }: { position: [number, number, num
             castShadow
           >
             <sphereGeometry args={[0.2, 12, 12]} />
-            <meshPhysicalMaterial {...emissive(palette.nodeGlow, 1.4)} />
+            {/*
+              TODO(stream C2): held rather than normalised. nodeGlow is at
+              0.3910, just over the floor, but the art bible names it with the
+              violets as a pale-core case, and normalising a satellite while its
+              core stays dim would invert which of the two reads as the light.
+            */}
+            <meshPhysicalMaterial {...emissiveRaw(palette.nodeGlow, 1.4)} />
           </mesh>
         )
       })}

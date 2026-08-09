@@ -1,7 +1,7 @@
 import { RigidBody, CuboidCollider } from '@react-three/rapier'
 import { RoundedBox } from '@react-three/drei'
 import { palette } from '@/art/palette'
-import { emissive, mattePlastic } from '@/art/materials'
+import { emissiveRaw, mattePlastic } from '@/art/materials'
 import { useGame } from '../GameContext'
 import { useGameStore, useProgress } from '@/state/gameStore'
 import { LESSONS } from '@/state/lessons'
@@ -139,24 +139,35 @@ export function CaveScene() {
       ].map((p, i) => (
         <mesh key={`c${i}`} position={p as [number, number, number]} rotation={[Math.PI, 0, 0]} castShadow>
           <coneGeometry args={[0.3, 1.4, 6]} />
-          <meshPhysicalMaterial {...emissive(palette.caveCrystal, 1.3)} transparent opacity={0.9} />
+          <meshPhysicalMaterial {...emissiveRaw(palette.caveCrystal, 1.3)} transparent opacity={0.9} />
         </mesh>
       ))}
     </group>
   )
 }
 
+/*
+  TODO(stream C2): the cave crystals hold their old absolute intensities.
+
+  caveCrystal is #8b7bff at 0.2687 linear luminance, well under the 0.35 floor,
+  so normalising them would need an emissiveIntensity above 6 and the tone
+  mapper would render the whole room's light source as white cones. They need
+  the pale-core treatment instead: a near-white core inside each cone that
+  blooms, with the violet as its halo. That is geometry rather than a material
+  argument, so it is not made here, and these read exactly as they did before
+  the emissive unit changed.
+*/
 function CaveCrystal({ position, seed }: { position: [number, number, number]; seed: number }) {
   const height = 1.4 + (seed % 4) * 0.45
   return (
     <group position={position} rotation={[0, seed * 0.9, 0]}>
       <mesh position={[0, height / 2, 0]} castShadow>
         <coneGeometry args={[0.34, height, 6]} />
-        <meshPhysicalMaterial {...emissive(palette.caveCrystal, 1.6)} transparent opacity={0.92} />
+        <meshPhysicalMaterial {...emissiveRaw(palette.caveCrystal, 1.6)} transparent opacity={0.92} />
       </mesh>
       <mesh position={[0.3, height * 0.3, 0.18]} rotation={[0, 0, 0.45]} castShadow>
         <coneGeometry args={[0.18, height * 0.55, 6]} />
-        <meshPhysicalMaterial {...emissive(palette.caveCrystal, 1.2)} transparent opacity={0.92} />
+        <meshPhysicalMaterial {...emissiveRaw(palette.caveCrystal, 1.2)} transparent opacity={0.92} />
       </mesh>
       {/* A real point light per crystal would be far too many lights; one dim
           emissive plus the hemisphere fill reads the same for a fraction of the cost. */}

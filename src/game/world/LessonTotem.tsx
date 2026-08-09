@@ -4,7 +4,7 @@ import { RigidBody, CylinderCollider } from '@react-three/rapier'
 import { Billboard, RoundedBox, Text } from '@react-three/drei'
 import type { Group, Mesh } from 'three'
 import { palette } from '@/art/palette'
-import { emissive, gel, plastic, stone } from '@/art/materials'
+import { GLOW, emissive, emissiveRaw, gel, plastic, stone } from '@/art/materials'
 import { usePbrTextures } from '@/art/textures'
 import { useProximity } from '../interaction/useProximity'
 import type { Lesson } from '@/state/types'
@@ -87,7 +87,17 @@ export function LessonTotem({
       {/* Accent ring, which brightens on approach so the highlight is unmissable. */}
       <mesh position={[0, 0.98, 0]} rotation={[Math.PI / 2, 0, 0]}>
         <torusGeometry args={[0.44, 0.05, 8, 28]} />
-        <meshPhysicalMaterial {...emissive(glow, near ? 3.2 : 1.4)} />
+        {/*
+          TODO(stream C2): held at its old absolute intensities because `glow`
+          is one of two colours and one of them cannot be normalised. Incomplete
+          is palette.node at 0.2202 linear luminance, under the floor; complete
+          is palette.unlocked at 0.6916, over it. Normalising only the branch
+          that can be would make an unfinished totem dimmer than a finished one
+          by a factor unrelated to the state it is signalling, which is worse
+          than both being unchanged. The pale-core rule resolves it, and that is
+          a geometry change.
+        */}
+        <meshPhysicalMaterial {...emissiveRaw(glow, near ? 3.2 : 1.4)} />
       </mesh>
 
       {/* The concept node itself. Translucent so it reads as a held idea rather
@@ -100,7 +110,7 @@ export function LessonTotem({
       {/* Completion tick, which is how progress reads at a glance from a distance. */}
       {completed && (
         <RoundedBox args={[0.34, 0.34, 0.08]} radius={0.06} smoothness={3} position={[0, 1.35, 0.45]}>
-          <meshPhysicalMaterial {...emissive(palette.unlocked, 2.2)} />
+          <meshPhysicalMaterial {...emissive(palette.unlocked, GLOW.bloom)} />
         </RoundedBox>
       )}
 

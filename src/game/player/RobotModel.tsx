@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber'
 import { RoundedBox } from '@react-three/drei'
 import type { Group } from 'three'
 import { palette } from '@/art/palette'
-import { emissive, mattePlastic, metal, plastic, rubber } from '@/art/materials'
+import { GLOW, emissive, mattePlastic, metal, plastic, rubber } from '@/art/materials'
 import { WADDLE } from './tuning'
 import { TURN_ANIM } from './animTuning'
 import type { RobotAnimState } from './robotAnim'
@@ -153,10 +153,13 @@ export function RobotModel({
             <meshPhysicalMaterial {...plastic(palette.shell)} />
           </RoundedBox>
 
-          {/* The visor bar. Emissive so it pushes past the bloom threshold and is
-              the only thing on the character that glows. */}
+          {/* The visor bar, and the one thing on the character that glows.
+              GLOW.bloom is 1.25 times the bloom threshold, which for cyan is an
+              emissiveIntensity of 3.46. The 2.4 this replaces reached 1.517
+              against a threshold of 1.75, so the comment claiming it pushed past
+              the threshold had never been true. */}
           <RoundedBox args={[0.42, 0.1, 0.04]} radius={0.03} smoothness={3} position={[0, 0.02, 0.235]}>
-            <meshPhysicalMaterial {...emissive(palette.visor, 2.4)} />
+            <meshPhysicalMaterial {...emissive(palette.visor, GLOW.bloom)} />
           </RoundedBox>
 
           {/* Antenna */}
@@ -166,7 +169,7 @@ export function RobotModel({
           </mesh>
           <mesh position={[0.16, 0.4, 0]}>
             <sphereGeometry args={[0.045, 12, 12]} />
-            <meshPhysicalMaterial {...emissive(palette.accent, 2.0)} />
+            <meshPhysicalMaterial {...emissive(palette.accent, GLOW.bloom)} />
           </mesh>
 
           {/* Ear pods, which break up the boxy head silhouette. */}
