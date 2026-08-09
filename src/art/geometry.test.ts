@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { BoxGeometry, BufferGeometry, Vector2, Vector3 } from 'three'
 import {
   beveledExtrude,
+  boxProjectUV,
   chamferedBox,
   counterClockwise,
   fin,
@@ -426,6 +427,53 @@ describe('paintByFacing', () => {
   it('needs normals', () => {
     const bare = new BufferGeometry()
     expect(() => paintByFacing(bare, { up: '#fff', side: '#000' })).toThrow(/normal attribute/)
+  })
+})
+
+describe('boxProjectUV', () => {
+  it('gives every face the same physical tile size regardless of the source UVs', () => {
+    /*
+      The reason merging needs this at all. A 12 m deck and a 0.7 m plinth
+      carry unrelated UV conventions, so one tiled material across the merged
+      batch puts the same stone at two sizes on two pieces of one structure.
+      Deriving UVs from position makes the physical scale identical by
+      construction.
+    */
+    const merged = mergeProp([
+      { geometry: slab(12, 2, 4), position: [0, 0, -8.6] },
+      { geometry: puck(0.7, 0.5), position: [5, 0.4, 5] },
+    ])
+    boxProjectUV(merged, 2)
+
+    const positions = merged.getAttribute('position')
+    const normals = merged.getAttribute('normal')
+    const uv = merged.getAttribute('uv')
+    expect(uv.count).toBe(positions.count)
+
+    // On any up-facing vertex the UV must be world XZ over the tile size.
+    for (let i = 0; i < positions.count; i++) {
+      if (normals.getY(i) < 0.99) continue
+      expect(uv.getX(i)).toBeCloseTo(positions.getX(i) / 2, 5)
+      expect(uv.getY(i)).toBeCloseTo(positions.getZ(i) / 2, 5)
+    }
+  })
+
+  it('projects side faces down their own axis pair', () => {
+    const geometry = boxProjectUV(slab(4, 2, 4, 0.1), 1)
+    const positions = geometry.getAttribute('position')
+    const normals = geometry.getAttribute('normal')
+    const uv = geometry.getAttribute('uv')
+
+    for (let i = 0; i < positions.count; i++) {
+      // A face pointing along +X takes ZY, so V tracks height rather than depth.
+      if (normals.getX(i) < 0.99) continue
+      expect(uv.getX(i)).toBeCloseTo(positions.getZ(i), 5)
+      expect(uv.getY(i)).toBeCloseTo(positions.getY(i), 5)
+    }
+  })
+
+  it('needs normals', () => {
+    expect(() => boxProjectUV(new BufferGeometry(), 1)).toThrow(/normal attribute/)
   })
 })
 

@@ -611,6 +611,67 @@ export function paintByFacing(
   return geometry
 }
 
+/**
+ * Rewrite a geometry's UVs as a world-scale box projection.
+ *
+ * Merging is what buys the built environment its draw-call budget, and it is
+ * also what destroys UVs. A batch holding a 12 m deck, a 6 m puck and a 0.7 m
+ * plinth carries three unrelated UV conventions, none of them area-uniform, so
+ * a single tiled material applied to the merged result puts the same stone at
+ * three different sizes on three adjacent pieces of one structure. That is the
+ * exact failure `HubIsland.tsx` already documents for the photographic stone,
+ * arrived at from the other direction.
+ *
+ * The fix is to stop carrying the sources' UVs at all and derive them from
+ * position instead, picking the axis pair each triangle most faces. Physical
+ * scale then comes out identical everywhere by construction, and the authoring
+ * unit becomes metres per tile, which is what the materials spec asks callers to
+ * think in anyway.
+ *
+ * Applied AFTER the merge and after any transform, because it reads position in
+ * whatever space the geometry is currently in. The classic seam of a box
+ * projection - a visible break where the dominant axis flips - lands on the
+ * fillets here rather than on a flat face, which is where it is least visible.
+ */
+export function boxProjectUV(geometry: BufferGeometry, metresPerTile: number): BufferGeometry {
+  const positions = geometry.getAttribute('position')
+  const normals = geometry.getAttribute('normal')
+  if (!normals) {
+    throw new Error('geometry: boxProjectUV needs a normal attribute')
+  }
+
+  const scale = 1 / metresPerTile
+  const uv = new Float32Array(positions.count * 2)
+
+  for (let i = 0; i < positions.count; i++) {
+    const x = positions.getX(i)
+    const y = positions.getY(i)
+    const z = positions.getZ(i)
+    const nx = Math.abs(normals.getX(i))
+    const ny = Math.abs(normals.getY(i))
+    const nz = Math.abs(normals.getZ(i))
+
+    let u: number
+    let v: number
+    if (ny >= nx && ny >= nz) {
+      u = x
+      v = z
+    } else if (nx >= nz) {
+      u = z
+      v = y
+    } else {
+      u = x
+      v = y
+    }
+
+    uv[i * 2] = u * scale
+    uv[i * 2 + 1] = v * scale
+  }
+
+  geometry.setAttribute('uv', new BufferAttribute(uv, 2))
+  return geometry
+}
+
 // ---------------------------------------------------------------------------
 // The kit
 //
