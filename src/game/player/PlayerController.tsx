@@ -16,6 +16,7 @@ import { createRobotAnimState } from './robotAnim'
 import { cameraFrame } from '../camera/cameraFrame'
 import type { InputIntent } from '../input/useInput'
 import type { SocketName } from '@/state/types'
+import { devBridge } from '@/dev/devBridge'
 
 /** Derived from the world handle so no direct dependency on the rapier package is needed. */
 type CharacterController = ReturnType<RapierContext['world']['createCharacterController']>
@@ -400,6 +401,42 @@ export function PlayerController({
       }
     }
   })
+
+  /*
+    Let the screenshot harness place the character.
+
+    Registered here rather than reached into from outside because the body is
+    kinematic: the controller integrates the velocity itself, so a teleport that
+    only moved the body would leave the two disagreeing and the character would
+    slide back under its own momentum. Zeroing velocity and clearing the death
+    latch is what makes the move actually stick.
+  */
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    devBridge.teleport = (x, y, z, nextFacing) => {
+      /*
+        Both calls are needed, and setNextKinematicTranslation alone silently
+        does nothing here.
+
+        It sets where the body should be after the next step, but this
+        controller opens every step by reading the body's CURRENT translation
+        and setting the next one to current-plus-movement. So a pending target
+        is overwritten before it is ever applied. setTranslation moves the body
+        now, which is what the following step then reads.
+      */
+      bodyRef.current?.setTranslation({ x, y, z }, true)
+      bodyRef.current?.setNextKinematicTranslation({ x, y, z })
+      velocity.current.x = 0
+      velocity.current.y = 0
+      velocity.current.z = 0
+      if (nextFacing !== undefined) facing.current = nextFacing
+      dead.current = false
+      anim.current.squash = 1
+    }
+    return () => {
+      devBridge.teleport = null
+    }
+  }, [])
 
   return (
     <RigidBody

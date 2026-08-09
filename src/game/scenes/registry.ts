@@ -1,5 +1,6 @@
 import { lazy, type LazyExoticComponent, type ComponentType } from 'react'
 import type { LightingVariant } from '@/art/Lighting'
+import { palette } from '@/art/palette'
 
 /**
  * The scene registry.
@@ -54,7 +55,20 @@ export const SCENES: Record<string, SceneDefinition> = {
       */
       'from-cave': [9, 2, -3.2],
     },
-    sky: { top: '#7fd4f5', horizon: '#ffe6c4' },
+    /*
+      Taken from the palette rather than written out again here.
+
+      These were literals, and they had drifted: the horizon was still the warm
+      cream '#ffe6c4' that palette.ts records as having been replaced, while
+      SkyDome renders the cool '#d6ecfb' the palette actually holds. Since these
+      two values drive the background colour and the fog, and SkyDome draws the
+      gradient behind them, the fog was warm, the sky was cool, and the seam
+      between them sat right on the horizon where it is most visible.
+
+      A scene wanting a sky of its own is free to pass different values. What it
+      cannot do any more is silently disagree with the palette by default.
+    */
+    sky: { top: palette.skyTop, horizon: palette.skyHorizon },
     /*
       The island's soil cone bottoms out at about y=-6.2. Set well below that so
       a player who walks off the edge gets a real moment of falling before the

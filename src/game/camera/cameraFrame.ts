@@ -14,7 +14,14 @@
  * One owner per field:
  *   yaw        written by FollowCamera
  *   following  written by PlayerController
+ *   override   written by the dev harness, in development only
  */
+export type CameraOverride = {
+  position: [number, number, number]
+  lookAt: [number, number, number]
+  fov: number
+}
+
 export const cameraFrame = {
   /** Camera orbit angle, from both manual drag and auto-realignment. */
   yaw: 0,
@@ -27,6 +34,15 @@ export const cameraFrame = {
    * still does not, so the view stays where it was left after a drag.
    */
   following: false,
+  /**
+   * A fixed camera placement that replaces the follow behaviour entirely.
+   *
+   * Set by the screenshot harness so a capture is framed identically every
+   * time, and null in normal play. It is expressed here rather than by
+   * unmounting FollowCamera because the camera is keyed by scene: unmounting it
+   * would remount a fresh one on release, which snaps rather than resumes.
+   */
+  override: null as CameraOverride | null,
 }
 
 /**
@@ -34,6 +50,9 @@ export const cameraFrame = {
  *
  * Called when a scene is entered, so the frame does not carry the previous
  * scene's orientation into the new one's opening shot.
+ *
+ * Deliberately leaves `override` alone. A harness that pinned the camera and
+ * then triggered a scene change means to keep it pinned across the change.
  */
 export function resetCameraFrame(yaw = 0) {
   cameraFrame.yaw = yaw

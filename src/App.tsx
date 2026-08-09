@@ -12,6 +12,7 @@ import { useSceneTravel, type TravelRequest } from './game/scenes/SceneHost'
 import { getScene } from './game/scenes/registry'
 import { Transition } from './game/scenes/Transition'
 import { IrisTracker } from './game/scenes/IrisTracker'
+import { DevHooks } from './dev/DevHooks'
 import { SceneReady } from './game/scenes/SceneReady'
 import { Lighting } from './art/Lighting'
 import { PostFX } from './art/PostFX'
@@ -257,6 +258,15 @@ export default function App() {
           </Physics>
         </GameContext.Provider>
         </Suspense>
+
+        {/*
+          The screenshot and measurement harness. Outside the Suspense boundary
+          and outside Physics on purpose: it is never keyed by scene and has no
+          dependency on either, so it stays registered across travel and is
+          available while the world is still coming up. Renders null, and
+          everything it installs is gated on import.meta.env.DEV.
+        */}
+        <DevHooks />
 
         {!DISABLE_POSTFX && <PostFX />}
       </Canvas>

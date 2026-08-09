@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useRapier } from '@react-three/rapier'
-import { Vector3, type Group } from 'three'
+import { Vector3, type Group, type PerspectiveCamera } from 'three'
 import { CAMERA } from '../player/tuning'
 import { stepCameraYaw } from '../player/movement'
 import { cameraFrame, resetCameraFrame } from './cameraFrame'
@@ -89,9 +89,35 @@ export function FollowCamera({
   /** Reused collision ray. Rapier's Ray is a plain JS object, so no free is needed. */
   const rayRef = useRef<InstanceType<typeof rapier.Ray> | null>(null)
 
-  useFrame((_, delta) => {
+  useFrame((state, delta) => {
     const focus = target.current
     if (!focus) return
+
+    /*
+      A pinned camera short-circuits everything below.
+
+      Placed here rather than by unmounting this component, because it is keyed
+      by scene: unmounting and remounting would re-run the first-frame snap on
+      release instead of resuming the spring from where it was.
+
+      The camera comes off the frame state rather than the one captured at
+      render, because changing the field of view is a property assignment and
+      the hooks lint rule rightly objects to mutating a render-scope binding.
+    */
+    const override = cameraFrame.override
+    if (override) {
+      const cam = state.camera as PerspectiveCamera
+      cam.position.set(override.position[0], override.position[1], override.position[2])
+      cam.lookAt(override.lookAt[0], override.lookAt[1], override.lookAt[2])
+      if (cam.isPerspectiveCamera && cam.fov !== override.fov) {
+        cam.fov = override.fov
+        cam.updateProjectionMatrix()
+      }
+      // Left false so releasing the pin does not immediately whip the camera
+      // round to wherever the robot happens to be pointing.
+      initialised.current = false
+      return
+    }
 
     const dt = Math.min(delta, 0.05)
 

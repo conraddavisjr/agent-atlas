@@ -23,7 +23,7 @@ export function HUD() {
   const alreadyDone = activeLesson ? progress.completedLessons.includes(activeLesson.id) : false
 
   return (
-    <div style={styles.root}>
+    <div style={styles.root} data-hud="">
       <div style={styles.topLeft}>
         <div style={styles.sceneTitle}>{scene.title}</div>
         {stats && (
