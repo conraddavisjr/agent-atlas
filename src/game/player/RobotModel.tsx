@@ -5,6 +5,7 @@ import type { Group } from 'three'
 import { palette } from '@/art/palette'
 import { emissive, mattePlastic, metal, plastic, rubber } from '@/art/materials'
 import { WADDLE } from './tuning'
+import { TURN_ANIM } from './animTuning'
 import type { RobotAnimState } from './robotAnim'
 import type { SocketName } from '@/state/types'
 
@@ -30,11 +31,13 @@ export function RobotModel({
 }) {
   const root = useRef<Group>(null)
   const body = useRef<Group>(null)
+  const head = useRef<Group>(null)
   const legL = useRef<Group>(null)
   const legR = useRef<Group>(null)
   const armL = useRef<Group>(null)
   const armR = useRef<Group>(null)
   const phase = useRef(0)
+  const turn = useRef(0)
 
   useFrame((_, delta) => {
     const a = anim.current
@@ -44,11 +47,31 @@ export function RobotModel({
     // advance the walk cycle by a huge step and snap the limbs.
     const dt = Math.min(delta, 0.05)
 
+    /*
+      Turn input, eased rather than read raw.
+
+      Exponential damping, so it behaves the same at any refresh rate, matching
+      the convention the camera uses. Without the ease, tapping a turn key snaps
+      the whole upper body a tenth of a radian in one frame and reads as a
+      glitch rather than as a lean.
+    */
+    turn.current += (a.turnNorm - turn.current) * (1 - Math.exp(-TURN_ANIM.damping * dt))
+    const t = turn.current
+
+    /*
+      The step cycle runs on whichever is doing more work, travel or rotation.
+
+      A pivot on the spot moves no distance but the feet still cover ground, so
+      it has to step. Taking the max rather than the sum means walking and
+      turning at once does not double the cadence.
+    */
+    const stride = Math.max(a.speedNorm, Math.abs(t) * TURN_ANIM.stepScale)
+
     // The walk cycle advances with actual speed, so the waddle stays in step with
     // movement instead of drifting out of sync at different speeds.
-    phase.current += dt * WADDLE.bobFrequency * a.speedNorm
+    phase.current += dt * WADDLE.bobFrequency * stride
 
-    const walking = a.grounded ? a.speedNorm : 0
+    const walking = a.grounded ? stride : 0
     const p = phase.current
 
     // Squash and stretch is applied at the root so the whole robot deforms as one
@@ -62,12 +85,34 @@ export function RobotModel({
     const bob = Math.sin(p * 2) * WADDLE.bobAmplitude * walking
     body.current.position.y = bob
 
-    // Side-to-side roll is the actual waddle. This single term does more for the
-    // toy-like charm than any other line in the file.
-    body.current.rotation.z = Math.sin(p) * WADDLE.rollAmplitude * walking
+    /*
+      Side-to-side roll is the actual waddle, plus a bank into the turn.
 
-    // Lean into travel, which sells momentum and weight.
-    body.current.rotation.x = WADDLE.leanAmount * walking
+      Local +X is the robot's left, so a positive rotation about Z tips the top
+      toward its right, which is the way you want it falling in a right-hand
+      turn. Kept small: the low centre of gravity is a deliberate part of the
+      design and a deep lean fights it.
+    */
+    body.current.rotation.z = Math.sin(p) * WADDLE.rollAmplitude * walking + t * TURN_ANIM.bankAmount
+
+    /*
+      Lean into travel, which sells momentum and weight, and signed by throttle
+      so reversing leans back. It used to lean forward in both directions, which
+      read as the robot being dragged backwards against its will.
+    */
+    body.current.rotation.x = WADDLE.leanAmount * walking * Math.sign(a.throttle)
+
+    /*
+      Hips lead the turn and the torso lags behind it, with the head leading
+      further still, looking where it is about to go.
+
+      This is the part that stops a rotation reading as a turntable. The parent
+      group already carries the true facing, so these are offsets against it:
+      positive is behind the turn, because facing decreases as the robot turns
+      right.
+    */
+    body.current.rotation.y = t * TURN_ANIM.torsoLag
+    if (head.current) head.current.rotation.y = -t * (TURN_ANIM.torsoLag + TURN_ANIM.headLead)
 
     // Limbs counter-swing. In the air they tuck instead, so a jump does not look
     // like a mid-stride freeze.
@@ -79,6 +124,12 @@ export function RobotModel({
     if (legR.current) legR.current.rotation.x = -swing - tuck
     if (armL.current) armL.current.rotation.x = -swing * 0.7 - tuck * 1.4
     if (armR.current) armR.current.rotation.x = swing * 0.7 - tuck * 1.4
+
+    // Feet splay through a pivot so the stance opens into the turn rather than
+    // the legs scissoring straight through each other.
+    const splay = t * TURN_ANIM.footPivot * (a.grounded ? 1 : 0)
+    if (legL.current) legL.current.rotation.y = splay
+    if (legR.current) legR.current.rotation.y = -splay
   })
 
   return (
@@ -97,7 +148,7 @@ export function RobotModel({
         </RoundedBox>
 
         {/* Head */}
-        <group position={[0, 1.12, 0]}>
+        <group ref={head} position={[0, 1.12, 0]}>
           <RoundedBox args={[0.56, 0.44, 0.46]} radius={0.14} smoothness={4} castShadow>
             <meshPhysicalMaterial {...plastic(palette.shell)} />
           </RoundedBox>

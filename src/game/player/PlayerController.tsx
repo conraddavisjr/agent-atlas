@@ -317,6 +317,14 @@ export function PlayerController({
     anim.current.speedNorm = Math.min(1, horizontalSpeed / MOVEMENT.maxSpeed)
     anim.current.grounded = grounded
     anim.current.verticalVelocity = velocity.current.y
+    /*
+      Turn and throttle come from the input rather than from velocity, and they
+      have to. A pivot on the spot produces no velocity at all, so anything
+      derived from it reports a stationary character and the robot rotates with
+      its feet planted. These two are what let the model animate a turn.
+    */
+    anim.current.turnNorm = moveX
+    anim.current.throttle = drive.throttle
 
     /*
       Facing is not recomputed here any more. It was previously read back from

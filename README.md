@@ -23,11 +23,16 @@ Saves written under the old `ai-academy-progress` key are copied across once on 
 
 | Input | Action |
 | --- | --- |
-| WASD or arrow keys | Move, relative to the camera |
+| W/S or up/down arrows | Drive forward and back, along the way the robot is facing |
+| A/D or left/right arrows | Turn on the spot, continuously and in either direction |
 | Space | Jump, with variable height |
 | Mouse drag | Orbit the camera |
 | E or Enter | Interact with the totem you are standing at |
-| Gamepad | Left stick moves, A jumps, X interacts, right stick orbits |
+| Gamepad | Left stick drives and turns, A jumps, X interacts, right stick orbits |
+
+Movement is tank-style rather than camera-relative: the robot drives along its own facing, and the camera has no say in which way that is.
+Turning and driving are independent axes, so holding forward and a turn together gives full speed *and* full turn rate, and the robot arcs at a radius of `maxSpeed / turnRate`.
+Neither input taxes the other, which is the property `inputAxes.ts` exists to protect.
 
 The camera swings back behind the direction you are travelling on its own, and it arrives rather than trailing.
 Dragging always wins while you are dragging, and auto-alignment resumes the moment you move again, with no cooldown in between.

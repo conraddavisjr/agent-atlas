@@ -187,11 +187,23 @@ export function Grass({
           when three decides to define USE_INSTANCING_COLOR, which depends on
           the attribute existing before the material first compiles.
         */
+        /*
+          Written against `.rgb` rather than the whole varying, because three
+          does not always declare `vColor` with the same width.
+
+          It is a vec3 normally and a vec4 once anything in the build enables the
+          alpha-carrying colour path, and three 0.185 takes the vec4 branch here.
+          `vColor *= iColor` then fails to compile with "cannot convert from
+          3-component to 4-component", which takes the whole grass material down:
+          the mesh stays in the scene, reports its full instance count, and draws
+          nothing at all. Swizzling works on both widths and cannot regress the
+          same way.
+        */
         .replace(
           '#include <color_vertex>',
           /* glsl */ `
             #include <color_vertex>
-            vColor *= iColor;
+            vColor.rgb *= iColor;
           `,
         )
     }

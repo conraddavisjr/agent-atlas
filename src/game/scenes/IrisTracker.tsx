@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { Vector3, type Group } from 'three'
 import { CAMERA } from '../player/tuning'
@@ -20,8 +20,24 @@ import { advanceIris, iris, radiusToCover } from './irisHandle'
 export function IrisTracker({ target }: { target: React.RefObject<Group | null> }) {
   const camera = useThree((s) => s.camera)
   const size = useThree((s) => s.size)
+  const gl = useThree((s) => s.gl)
+  const scene = useThree((s) => s.scene)
 
   const projected = useRef(new Vector3())
+
+  /*
+    Dev-only handle on the render state, alongside window.__player.
+
+    This component is the one thing inside the Canvas that is always mounted and
+    never keyed by scene, which makes it the natural place to hang it. "Is that
+    instanced mesh actually drawing, and how much of it" is a question that
+    otherwise costs a round trip through a screenshot to answer, and instanced
+    geometry fails by rendering nothing rather than by throwing.
+  */
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    ;(window as unknown as { __scene?: unknown }).__scene = { scene, gl }
+  }, [scene, gl])
 
   useFrame(() => {
     const el = iris.el

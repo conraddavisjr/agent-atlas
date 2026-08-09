@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { clampStick, foldKeyAxes } from './inputAxes'
 
 /**
  * One normalised intent object, whatever the source.
@@ -8,7 +9,13 @@ import { useEffect, useRef } from 'react'
  * without touching the character controller.
  */
 export type InputIntent = {
-  /** Raw stick/key direction in screen space, magnitude clamped to 1. */
+  /**
+   * Tank axes in screen convention, each independently in [-1, 1].
+   *
+   * `moveX` is a turn rate, positive to the right; `moveY` is a throttle,
+   * negative forward. They are deliberately not normalised against each other.
+   * See `inputAxes.ts` for why.
+   */
   moveX: number
   moveY: number
   /** True on the frame jump was pressed. Consumed by the controller. */
@@ -124,21 +131,31 @@ export function useInput() {
     const k = keys.current
     const held = (codes: readonly string[]) => codes.some((c) => k.has(c))
 
-    let x = (held(MOVE_KEYS.right) ? 1 : 0) - (held(MOVE_KEYS.left) ? 1 : 0)
-    let y = (held(MOVE_KEYS.back) ? 1 : 0) - (held(MOVE_KEYS.forward) ? 1 : 0)
+    const keyAxes = foldKeyAxes({
+      left: held(MOVE_KEYS.left),
+      right: held(MOVE_KEYS.right),
+      forward: held(MOVE_KEYS.forward),
+      back: held(MOVE_KEYS.back),
+    })
+    let x = keyAxes.x
+    let y = keyAxes.y
 
     let jumpHeld = held(JUMP_KEYS)
 
     const pads = navigator.getGamepads?.() ?? []
     const pad = pads.find((p) => p !== null)
     if (pad) {
-      const gx = applyDeadzone(pad.axes[0] ?? 0)
-      const gy = applyDeadzone(pad.axes[1] ?? 0)
+      // A stick, unlike the keys, really is a 2D vector, so it is the one input
+      // whose magnitude has to be clamped to the unit circle.
+      const stick = clampStick(
+        applyDeadzone(pad.axes[0] ?? 0),
+        applyDeadzone(pad.axes[1] ?? 0),
+      )
       // The stick wins only when actually deflected, so a connected-but-idle pad
       // never suppresses the keyboard.
-      if (gx !== 0 || gy !== 0) {
-        x = gx
-        y = gy
+      if (stick.x !== 0 || stick.y !== 0) {
+        x = stick.x
+        y = stick.y
       }
 
       const padJump = pad.buttons[0]?.pressed ?? false
@@ -152,13 +169,6 @@ export function useInput() {
 
       intent.current.lookX += applyDeadzone(pad.axes[2] ?? 0) * 12
       intent.current.lookY += applyDeadzone(pad.axes[3] ?? 0) * 12
-    }
-
-    // Normalise so diagonal movement is not faster than cardinal movement.
-    const mag = Math.hypot(x, y)
-    if (mag > 1) {
-      x /= mag
-      y /= mag
     }
 
     intent.current.moveX = x

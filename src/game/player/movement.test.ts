@@ -357,6 +357,52 @@ describe('tank controls', () => {
     expect(Math.abs(z)).toBeGreaterThan(0.8)
   })
 
+  it('does not tax the throttle for also turning', () => {
+    /*
+      The companion to the fold test in `input/inputAxes.test.ts`, asserted here
+      at the layer the player actually feels.
+
+      The input layer used to normalise the two axes onto the unit circle, which
+      is correct when they are the components of one direction vector and wrong
+      when one is a turn rate and the other a throttle. The visible symptom was
+      that adding a turn slowed the drive to 70%, so pressing a second key made
+      the first key do less.
+    */
+    const forwardOnly = stepDrive({ ...still, moveY: -1 })
+    const forwardAndTurning = stepDrive({ ...still, moveX: 1, moveY: -1 })
+
+    expect(forwardAndTurning.throttle).toBe(forwardOnly.throttle)
+    expect(forwardAndTurning.facing).toBe(stepDrive({ ...still, moveX: 1 }).facing)
+  })
+
+  it('holds full speed all the way around a turning circle', () => {
+    /*
+      Integrated rather than asserted per step, because the thing being protected
+      is a property of the path: at full throttle and full turn the robot traces
+      a circle of radius maxSpeed / turnRate at top speed, and it never slows
+      into the corner.
+    */
+    const steps = 60
+    let facing = 0
+    let x = 0
+    let z = 0
+    for (let i = 0; i < steps; i++) {
+      const step = stepDrive({ moveX: 1, moveY: -1, facing, dt: DT })
+      facing = step.facing
+      const heading = headingVector(facing)
+      const speed = Math.abs(step.throttle) * MOVEMENT.maxSpeed
+      expect(speed).toBeCloseTo(MOVEMENT.maxSpeed, 10)
+      x += heading.x * step.throttle * MOVEMENT.maxSpeed * DT
+      z += heading.z * step.throttle * MOVEMENT.maxSpeed * DT
+    }
+
+    // A second of turning at 3 rad/s is most of a full circle, and the chord
+    // across it should land near the diameter rather than near zero.
+    const radius = MOVEMENT.maxSpeed / MOVEMENT.turnRate
+    expect(Math.hypot(x, z)).toBeLessThan(radius * 2 + 1e-6)
+    expect(Math.hypot(x, z)).toBeGreaterThan(radius)
+  })
+
   it('keeps facing inside a single turn of the circle', () => {
     // Facing feeds trigonometry and a camera target every step, so letting it
     // grow without bound would eventually cost precision.

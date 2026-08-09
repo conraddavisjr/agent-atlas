@@ -34,7 +34,8 @@ export function HUD() {
       </div>
 
       <div style={styles.topRight}>
-        <Key label="WASD / Arrows" action="Move" />
+        <Key label="W / S" action="Drive" />
+        <Key label="A / D" action="Turn" />
         <Key label="Space" action="Jump" />
         <Key label="Drag" action="Look" />
         <QualitySelector />
