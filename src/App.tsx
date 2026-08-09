@@ -14,6 +14,7 @@ import { Transition } from './game/scenes/Transition'
 import { IrisTracker } from './game/scenes/IrisTracker'
 import { DevHooks } from './dev/DevHooks'
 import { SceneReady } from './game/scenes/SceneReady'
+import { fxOverrides } from './art/fx'
 import { Lighting } from './art/Lighting'
 import { PostFX } from './art/PostFX'
 import { useQuality } from './art/useQuality'
@@ -23,16 +24,24 @@ import { COSMETICS, LESSONS } from './state/lessons'
 import { earnedCosmetics } from './state/progression'
 
 /**
- * Escape hatch: `?nofx` renders without post-processing.
+ * Escape hatches, parsed in `src/art/fx.ts` and read once at module scope.
  *
  * Kept in production builds on purpose. Post-processing is the first thing to
  * suspect when the game runs badly or looks wrong on unfamiliar hardware, and
  * with no accounts and no telemetry, asking a player to reload with one query
  * parameter is the only remote diagnostic available.
  *
- * Read once at module scope rather than per render.
+ *   ?nofx              the whole post chain off
+ *   ?threshold=<n>     Bloom's luminanceThreshold, for bisecting it
+ *   ?bloomdebug        intensity 6 and no smoothing, so the threshold is a hard mask
+ *   ?nogfx=a,b,c       individual systems off: rim, dof, lut, vfx, blob, face
+ *   ?quality=low|medium|high   forces a tier, handled in quality.ts
+ *
+ * `?nogfx` is applied to the quality settings themselves in `useQuality`,
+ * rather than plumbed down as props, so it reaches every system that reads its
+ * gate from the tier, including ones that do not exist yet.
  */
-const DISABLE_POSTFX = new URLSearchParams(window.location.search).has('nofx')
+const FX = fxOverrides()
 
 export default function App() {
   const { intent, sample, endFrame } = useInput()
@@ -268,7 +277,7 @@ export default function App() {
         */}
         <DevHooks />
 
-        {!DISABLE_POSTFX && <PostFX />}
+        {!FX.disabled && <PostFX />}
       </Canvas>
 
       <HUD />

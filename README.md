@@ -117,6 +117,11 @@ All three send `X-Frame-Options` headers that make the browser refuse to render 
 
 - `?quality=low|medium|high` forces a graphics tier. `low` turns off ambient occlusion and soft shadows and cuts grass to a ring around the player, which makes it the fastest way to tell a rendering bug from a performance one.
 - `?nofx` disables post-processing. Between it and `?quality=low`, most "the world looks wrong" reports can be bisected in two reloads.
+- `?nogfx=rim,dof,lut,vfx,blob,face` forces individual rendering systems off, whatever the tier says.
+  It is applied to the quality settings themselves rather than plumbed through props, so it reaches anything that reads its gate from the tier.
+- `?threshold=<n>` overrides the bloom threshold, and `?bloomdebug` sets bloom to intensity 6 with no smoothing so the threshold becomes a hard binary mask.
+  Together they are how the shipped threshold gets measured rather than guessed: sweep the threshold at a fixed camera and record the lowest value at which no non-emissive surface glows.
+  The case that decides it is white plastic at a grazing angle against the sky, because that is where clearcoat Fresnel peaks.
 - In dev, `window.__player` exposes live position, velocity, grounded state, the coyote and buffer timers, and both camera angles.
   `camYaw - inputYaw` is how far the camera has swung on its own since the player last let go, which is the number to look at if auto-alignment ever misbehaves again.
 

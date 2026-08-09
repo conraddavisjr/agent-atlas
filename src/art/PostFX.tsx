@@ -10,8 +10,12 @@ import {
   ToneMapping,
 } from '@react-three/postprocessing'
 import { ToneMappingMode } from 'postprocessing'
+import { fxOverrides } from './fx'
 import { BLOOM_THRESHOLD } from './materials'
 import { useQuality } from './useQuality'
+
+/** Read once per session, as the tier table is. See `fx.ts`. */
+const FX = fxOverrides()
 
 /**
  * Post-processing.
@@ -163,11 +167,20 @@ export function PostFX() {
         dimensions, so the marginal cost of one is a quarter of the one before
         it, and dropping levels gives a tighter, less wide glow rather than a
         different exposure.
+
+        ?bloomdebug turns the threshold into a hard binary mask: smoothing to
+        zero so nothing ramps, and intensity to 6 so whatever crosses is
+        unmistakable. Sweeping ?threshold under it at a fixed camera is how the
+        shipped value gets measured instead of guessed, and the specific thing
+        being looked for is the lowest value at which no non-emissive surface
+        glows. The prediction on record is that it lands between 1.2 and 1.6,
+        and that the case which decides it is white plastic at a grazing angle
+        against the sky, where clearcoat Fresnel peaks.
       */}
       <Bloom
-        intensity={0.55}
-        luminanceThreshold={BLOOM_THRESHOLD}
-        luminanceSmoothing={0.3}
+        intensity={FX.bloomDebug ? 6 : 0.55}
+        luminanceThreshold={FX.bloomThreshold ?? BLOOM_THRESHOLD}
+        luminanceSmoothing={FX.bloomDebug ? 0 : 0.3}
         mipmapBlur
         radius={0.6}
         levels={quality.bloomLevels}
