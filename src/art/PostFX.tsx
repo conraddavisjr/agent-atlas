@@ -221,11 +221,21 @@ export function PostFX() {
         LUT would silently be handed sRGB-encoded values. The two effects after
         it are in passes of their own.
 
-        The texture comes from src/art/lut.ts, which does not exist yet. When it
-        does, this becomes <LUT lut={GRADE_LUT} tetrahedralInterpolation={false} />
-        built once at module scope, and HueSaturation and BrightnessContrast are
-        deleted in the same commit, because the LUT subsumes both in a single
-        fetch and is therefore cheaper than what it replaces.
+        The grade itself lives in src/art/lut.ts, which builds the cube from a
+        pure function and currently ships as an identity. Wiring it is a
+        separate commit and a deliberate one, because its acceptance test is a
+        screenshot diff whose expected result is not zero: an 8-bit 32-entry
+        identity LUT quantises each grid value and reconstructs between them by
+        hardware trilinear interpolation, so the criterion is at most 2/255
+        maximum error, 0.5/255 mean, and no structure at all in the amplified
+        difference. That last clause is the one that catches real bugs, because
+        a transposed channel index produces a small mean error and a completely
+        structured difference image.
+
+        When it lands, this becomes <LUT> with the texture built once at module
+        scope, and HueSaturation and BrightnessContrast are deleted in the same
+        commit, because the LUT subsumes both in a single fetch and is therefore
+        cheaper than what it replaces.
       */}
       {quality.colourGrade ? <></> : <></>}
 
