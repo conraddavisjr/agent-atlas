@@ -306,7 +306,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     // Post.
     depthOfField: false,
     chromaticAberration: false,
-    colourGrade: false,
+    colourGrade: true,
     bloomLevels: 8,
     aoHalfRes: false,
 
@@ -351,7 +351,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     // Post.
     depthOfField: false,
     chromaticAberration: false,
-    colourGrade: false,
+    colourGrade: true,
     bloomLevels: 8,
     aoHalfRes: false,
 
@@ -396,7 +396,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     // Post.
     depthOfField: false,
     chromaticAberration: false,
-    colourGrade: false,
+    colourGrade: true,
     bloomLevels: 8,
     aoHalfRes: false,
 

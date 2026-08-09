@@ -4,6 +4,7 @@ import {
   BrightnessContrast,
   DepthOfField,
   HueSaturation,
+  LUT,
   N8AO,
   Vignette,
   SMAA,
@@ -11,11 +12,27 @@ import {
 } from '@react-three/postprocessing'
 import { ToneMappingMode } from 'postprocessing'
 import { fxOverrides } from './fx'
+import { createGradeLut } from './lut'
 import { BLOOM_THRESHOLD } from './materials'
 import { useQuality } from './useQuality'
 
 /** Read once per session, as the tier table is. See `fx.ts`. */
 const FX = fxOverrides()
+
+/**
+ * The grade cube, built exactly once.
+ *
+ * At module scope, not in the component, and that is not a style preference.
+ * r3f's `<LUT>` memoises its effect on `[lut, ...restProps]` and `restProps` is
+ * a fresh object identity on every render, so the `LUT3DEffect` is
+ * reconstructed whenever `PostFX` re-renders. A stable `lut` reference makes
+ * that reconstruction cheap instead of a 33,000-iteration rebuild plus a
+ * texture upload every time the quality tier changes.
+ *
+ * It reads `?lut=off|identity|on` itself and returns null for `off`, so there
+ * is no second copy of that parsing here to drift out of step.
+ */
+const GRADE_LUT = createGradeLut()
 
 /**
  * Post-processing.
@@ -236,12 +253,36 @@ export function PostFX() {
         a transposed channel index produces a small mean error and a completely
         structured difference image.
 
-        When it lands, this becomes <LUT> with the texture built once at module
-        scope, and HueSaturation and BrightnessContrast are deleted in the same
-        commit, because the LUT subsumes both in a single fetch and is therefore
-        cheaper than what it replaces.
+        It ships as an IDENTITY first, which is the whole rollout discipline in
+        one decision: the transport is proved correct by a commit that changes
+        nothing, so that if the graded build then looks wrong the bug is
+        provably in the constants. `?lut=off|identity|on` makes all three states
+        comparable in one session without a rebuild.
+
+        `HueSaturation` and `BrightnessContrast` stay for exactly as long as the
+        LUT is an identity, because removing them in this commit would mean the
+        identity diff was measuring two changes at once. They go in the commit
+        that switches to the real grade, which is the one that actually subsumes
+        them.
       */}
-      {quality.colourGrade ? <></> : <></>}
+      {quality.colourGrade && GRADE_LUT ? (
+        <LUT
+          lut={GRADE_LUT}
+          /*
+            False, and this is the cheaper of the two. Tetrahedral forces
+            NearestFilter on the texture and does a four-tap manual
+            interpolation in the shader. It exists for LUTs with sharp
+            discontinuities, typically imported from a colourist's .cube file.
+            Ours is a smooth analytic function sampled on a regular grid, which
+            is exactly the case hardware trilinear reconstructs almost exactly,
+            so this would cost three extra texture fetches per pixel for no
+            visible gain.
+          */
+          tetrahedralInterpolation={false}
+        />
+      ) : (
+        <></>
+      )}
 
       {/*
         Last, and this is a correction rather than a preference.

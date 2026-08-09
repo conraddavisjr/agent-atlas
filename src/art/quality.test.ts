@@ -171,15 +171,16 @@ describe('tier settings', () => {
       commit. That is the point: the change becomes deliberate and reviewable
       rather than a value nobody noticed.
 
-      `rimLight`, `bounceFill` and `contactShadow` have left this list, because
+      `rimLight`, `bounceFill` and `contactShadow` have left this list because
       the light rig and the blob now exist and landed with their acceptance
-      shots.
+      shots, and `colourGrade` because the LUT does - it is on at every tier
+      including `low`, where it replaces two grading effects with one texture
+      fetch and is therefore cheaper than what it removes.
     */
     for (const tier of ['low', 'medium', 'high'] as const) {
       const q = QUALITY[tier]
       expect(q.depthOfField, tier).toBe(false)
       expect(q.chromaticAberration, tier).toBe(false)
-      expect(q.colourGrade, tier).toBe(false)
       expect(q.surfaceMapSize, tier).toBe(0)
       expect(q.decals, tier).toBe(false)
       expect(q.wrapDiffuse, tier).toBe(false)
