@@ -50,7 +50,21 @@ This is the fix that makes the bloom budget checkable rather than folkloric.
 
 > **Any emissive whose linear luminance is below 0.35 must use a pale core with a coloured halo, never a saturated bright surface.** The geometry gets a near-white emissive core sized to read at distance, surrounded by a dimmer saturated shell that does not itself bloom. This is how Astro's LEDs are built and it is why they read as light sources rather than as bright plastic.
 
-By that rule: cyan (0.632), gold (0.585 for `unlocked`) and pink (0.366) may be normalised directly. Violet `node` (0.220), `nodeGlow`, and `caveCrystal` (0.269) take the pale-core treatment.
+By that rule, with the linear luma of every emissive in the palette recomputed rather than estimated:
+
+| Colour | Hex | Linear luma | Treatment |
+| --- | --- | --- | --- |
+| `unlocked` | `#ffd45e` | 0.6916 | normalise |
+| `visor` / `circuit` | `#4de2ff` | 0.6319 | normalise |
+| `accent` | `#ff9a3c` | 0.4470 | normalise |
+| `nodeGlow` | `#a99bff` | 0.3910 | normalise, but see below |
+| `token` | `#ff6bd6` | 0.3663 | normalise |
+| `caveCrystal` | `#8b7bff` | 0.2687 | **pale core** |
+| `node` | `#7c6bff` | 0.2202 | **pale core** |
+
+Two corrections to earlier drafts of this file, both found by Stream 0 and confirmed here.
+`unlocked` is 0.6916, not the 0.585 originally written, which was estimated rather than computed.
+And `nodeGlow` at 0.3910 sits *above* the 0.35 floor, so the automatic guard does not catch it - but it must still be held back by hand, because normalising it would make an orbiting satellite brighter than the core it orbits. The floor is a safety net, not the whole rule.
 
 **The threshold itself stays at 1.75 until it is measured, and is then expected to fall.** Stream 0 ships `?threshold=<n>` and `?bloomdebug` so the value is binary-searched against real frames rather than guessed. The prediction on record is 1.2 to 1.6. The acceptance shot is `hub-backlit`, because a rim light hits grazing angles where clearcoat Fresnel peaks, and that is where diffuse-safe lighting still blows out.
 
