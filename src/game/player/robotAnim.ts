@@ -31,9 +31,41 @@ export type RobotAnimState = {
   throttle: number
   grounded: boolean
   verticalVelocity: number
-  /** 1 is neutral, below 1 is squashed, above 1 is stretched. */
+  /**
+   * The DEPTH of the most recent squash impulse. 1 is neutral, below 1 is
+   * squashed, above 1 is stretched.
+   *
+   * No longer the live value. The controller used to integrate this field back
+   * toward neutral in its own frame loop; the spring now lives in the solver,
+   * where it can be tested and where it can share one recovery with the eleven
+   * other joints a landing moves. So this is the impulse channel: the
+   * controller states how deep, in which profile, and the solver owns
+   * everything after that.
+   */
   squash: number
+  /** Which spring profile recovers the impulse. */
+  squashMode: SquashMode
+  /**
+   * Bumped on every impulse.
+   *
+   * Without it, two landings of identical depth in a row are indistinguishable
+   * from one landing still recovering, and the second one would not re-seed the
+   * spring. The old code got away with the ambiguity because it zeroed the
+   * velocity on the same line it set the depth; making the edge explicit is
+   * what lets the solver be a pure function of the state it is handed.
+   */
+  squashSeq: number
 }
+
+/**
+ * Which spring recovers a squash.
+ *
+ * Three rather than one because the beats are genuinely different: a landing
+ * should snap, a takeoff stretch should read through the whole rise, and the
+ * revival wants the slowest and loosest of the three so the arrival lands as a
+ * bounce rather than as a correction.
+ */
+export type SquashMode = 'land' | 'takeoff' | 'revival'
 
 export function createRobotAnimState(): RobotAnimState {
   return {
@@ -43,5 +75,18 @@ export function createRobotAnimState(): RobotAnimState {
     grounded: true,
     verticalVelocity: 0,
     squash: 1,
+    squashMode: 'land',
+    squashSeq: 0,
   }
+}
+
+/**
+ * Fires a squash impulse. The only supported way to write the three fields,
+ * because writing `squash` without bumping `squashSeq` is a no-op the type
+ * system cannot catch.
+ */
+export function pushSquash(s: RobotAnimState, depth: number, mode: SquashMode): void {
+  s.squash = depth
+  s.squashMode = mode
+  s.squashSeq++
 }

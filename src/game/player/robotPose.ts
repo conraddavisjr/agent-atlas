@@ -28,12 +28,14 @@ import {
   createSpring2,
   resetSpring1,
   resetSpring2,
+  squashScale,
+  stepSpring1,
   type Spring1,
   type Spring2,
 } from './springs'
 import { WADDLE } from './tuning'
-import { TURN_ANIM } from './animTuning'
-import type { RobotAnimState } from './robotAnim'
+import { SPRINGS, SQUASH_ANIM, TURN_ANIM } from './animTuning'
+import type { RobotAnimState, SquashMode } from './robotAnim'
 
 // ---------------------------------------------------------------------------
 // 1. Geometry
@@ -389,10 +391,12 @@ export type AnimRuntime = {
   }
 
   springs: {
-    /** Vertical scale, driven by the squash targets. */
+    /** Vertical scale, driven by the squash impulses on RobotAnimState. */
     squash: Spring1
     /** Which spring profile the squash is currently running. */
-    squashMode: 'land' | 'takeoff' | 'revival'
+    squashMode: SquashMode
+    /** The last impulse consumed, so each one re-seeds the spring exactly once. */
+    squashSeq: number
     /** Torso lag against the hips. */
     chestYaw: Spring1
     /** Head lead. */
@@ -459,6 +463,7 @@ export function createAnimRuntime(seed: number): AnimRuntime {
     springs: {
       squash: createSpring1(1),
       squashMode: 'land',
+      squashSeq: 0,
       chestYaw: createSpring1(0),
       headYaw: createSpring1(0),
       headPitch: createSpring1(0),
@@ -498,6 +503,7 @@ export function resetAnimRuntime(rt: AnimRuntime): void {
   rt.breathBlend = 0
   rt.idleTime = 0
   resetSpring1(rt.springs.squash, 1)
+  rt.springs.squash.target = 1
   resetSpring1(rt.springs.chestYaw)
   resetSpring1(rt.springs.headYaw)
   resetSpring1(rt.springs.headPitch)
@@ -601,14 +607,29 @@ export function stepAnim(
   /*
     Squash and stretch at the root, so the whole robot deforms as one object.
 
-    Volume is roughly preserved by widening as it flattens, which is what stops
-    it reading as a scaling bug rather than as a deformation.
+    The controller states a depth and a profile; the recovery happens here. Each
+    impulse snaps the spring to its depth with zero velocity and points it back
+    at neutral, which is exactly what the controller's own frame loop used to
+    do, except that the spring is now underdamped and therefore actually
+    bounces. `squashSeq` rather than a value comparison, so two landings of the
+    same depth in a row are two events.
   */
-  const squash = finite(s.squash, 1)
-  const widen = 1 + (1 - squash) * 0.6
-  out.root.sx = widen
-  out.root.sy = squash
-  out.root.sz = widen
+  if (s.squashSeq !== rt.springs.squashSeq) {
+    rt.springs.squashSeq = s.squashSeq
+    rt.springs.squashMode = s.squashMode ?? 'land'
+    rt.springs.squash.x = finite(s.squash, 1)
+    rt.springs.squash.v = 0
+    rt.springs.squash.target = 1
+  }
+  const squashSpring = SPRINGS[
+    rt.springs.squashMode === 'takeoff'
+      ? 'squashTakeoff'
+      : rt.springs.squashMode === 'revival'
+        ? 'squashRevival'
+        : 'squashLand'
+  ]
+  stepSpring1(rt.springs.squash, squashSpring.omega, squashSpring.zeta, step)
+  squashScale(rt.springs.squash.x, SQUASH_ANIM.lateral, out.root)
 
   // Vertical bob, at double the step frequency because both feet contribute.
   out.hips.py = Math.sin(p * 2) * WADDLE.bobAmplitude * walking

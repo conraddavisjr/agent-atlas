@@ -12,7 +12,7 @@ import { Vector3, type Group } from 'three'
 import { BODY, JUMP, MOVEMENT, REVIVAL, SQUASH } from './tuning'
 import { headingVector, stepDrive, stepHorizontal, stepVertical } from './movement'
 import { RobotModel } from './RobotModel'
-import { createRobotAnimState } from './robotAnim'
+import { createRobotAnimState, pushSquash } from './robotAnim'
 import { cameraFrame } from '../camera/cameraFrame'
 import type { InputIntent } from '../input/useInput'
 import type { SocketName } from '@/state/types'
@@ -71,7 +71,6 @@ export function PlayerController({
   const bufferTimer = useRef(0)
   const wasGrounded = useRef(true)
   const facing = useRef(0)
-  const squashVelocity = useRef(0)
 
   /**
    * True from the moment the robot is placed above the spawn until it first
@@ -247,9 +246,9 @@ export function PlayerController({
 
     if (vertical.jumped) {
       // Stretch on takeoff. Squash and stretch does more for the toy feel than
-      // any material in the game.
-      anim.current.squash = SQUASH.takeoffStretch
-      squashVelocity.current = 0
+      // any material in the game. The recovery is the solver's; this states only
+      // how far and on which of the three spring profiles.
+      pushSquash(anim.current, SQUASH.takeoffStretch, 'takeoff')
 
       if (import.meta.env.DEV) debug.current.jumps += 1
     }
@@ -270,18 +269,20 @@ export function PlayerController({
           make the bounce depend on REVIVAL.dropHeight, so tuning the drop for
           how it looks would silently retune how the landing feels.
 
-          The bounce itself is the existing spring in the frame loop below
-          recovering from this compression. There is no separate animation.
+          There is still no separate bounce animation: the rebound is the
+          recovery spring overshooting on its way back to neutral. What is new
+          is that it now does. REVIVAL.landSquash's comment has promised that
+          bounce since it was written, against a spring damped at exactly 1.0,
+          which by definition cannot overshoot. The 'revival' profile is
+          underdamped at zeta 0.55, so the promise is finally kept.
         */
-        anim.current.squash = REVIVAL.landSquash
-        squashVelocity.current = 0
+        pushSquash(anim.current, REVIVAL.landSquash, 'revival')
         reviving.current = false
       } else {
         const impact = Math.abs(anim.current.verticalVelocity)
         if (impact > SQUASH.minLandSpeed) {
           const strength = Math.min(1, impact / Math.abs(JUMP.maxFallSpeed))
-          anim.current.squash = 1 - (1 - SQUASH.landSquash) * strength
-          squashVelocity.current = 0
+          pushSquash(anim.current, 1 - (1 - SQUASH.landSquash) * strength, 'land')
         }
       }
     }
@@ -340,20 +341,24 @@ export function PlayerController({
    * Visual-only work runs per frame rather than per physics step so it stays
    * smooth at any refresh rate.
    */
-  useFrame((_, delta) => {
-    const dt = Math.min(delta, 0.05)
-
+  useFrame(() => {
     if (visualRef.current) {
       visualRef.current.rotation.y = facing.current
     }
 
-    // Spring the squash back toward neutral. A critically damped spring rather
-    // than a lerp, so it overshoots very slightly and reads as springy plastic.
-    const displacement = anim.current.squash - 1
-    const springForce = -displacement * SQUASH.recovery * SQUASH.recovery
-    const damping = -squashVelocity.current * 2 * SQUASH.recovery
-    squashVelocity.current += (springForce + damping) * dt
-    anim.current.squash += squashVelocity.current * dt
+    /*
+      The squash spring used to be integrated here, and it has moved into the
+      solver in robotPose.ts.
+
+      Two reasons. It was untestable in a useFrame, and it was wrong: the form
+      was `-x * w^2` against `-v * 2 * w`, which is a damping ratio of exactly
+      1.0, while the comment above it claimed it "overshoots very slightly and
+      reads as springy plastic". A critically damped spring has zero overshoot
+      by definition, so that bounce had never happened. Second, a landing moves
+      eleven joints and they all have to recover together or the beat reads as
+      eleven things happening near each other; one spring in the solver can
+      drive all of them, and a spring in here can only drive the scale.
+    */
 
     // Keep the follow target in sync with the interpolated physics transform.
     if (playerRef.current && bodyRef.current) {
@@ -382,7 +387,16 @@ export function PlayerController({
         grounded: anim.current.grounded,
         coyote: coyoteTimer.current,
         buffer: bufferTimer.current,
+        /*
+          The depth and profile of the last squash impulse, not the live scale.
+          The live value is the solver's spring and is visible on the character
+          itself; what is useful here is what was asked for, because a landing
+          that looks wrong is nearly always a wrong depth rather than a wrong
+          recovery.
+        */
         squash: anim.current.squash,
+        squashMode: anim.current.squashMode,
+        squashSeq: anim.current.squashSeq,
         facing: facing.current,
         reviving: reviving.current,
         dead: dead.current,

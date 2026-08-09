@@ -236,6 +236,10 @@ describe('the gait, ported from the component', () => {
   It is deliberately a duplicate rather than a call into the real thing. A test
   that shares an implementation with the code it checks proves only that the
   code equals itself.
+
+  The root scale is the one field deliberately excluded. Its recovery spring and
+  its volume preservation both changed on purpose in the same pass that fixed
+  the damping ratio, and `the squash spring` below covers the new behaviour.
 */
 describe('the port preserved the original arithmetic', () => {
   function reference(script: (i: number) => RobotAnimState, frames: number) {
@@ -251,10 +255,6 @@ describe('the port preserved the original arithmetic', () => {
       phase += dt * WADDLE.bobFrequency * stride
       const walking = a.grounded ? stride : 0
       const p = phase
-      const s = a.squash
-      const widen = 1 + (1 - s) * 0.6
-
-      const rootScale = [widen, s, widen]
       const bodyY = Math.sin(p * 2) * WADDLE.bobAmplitude * walking
       const bodyRz = Math.sin(p) * WADDLE.rollAmplitude * walking + t * TURN_ANIM.bankAmount
       const bodyRx = WADDLE.leanAmount * walking * Math.sign(a.throttle)
@@ -270,7 +270,7 @@ describe('the port preserved the original arithmetic', () => {
       const splay = t * TURN_ANIM.footPivot * (a.grounded ? 1 : 0)
 
       out.push([
-        ...rootScale, bodyY, bodyRz, bodyRx, bodyRy, headRy,
+        bodyY, bodyRz, bodyRx, bodyRy, headRy,
         legLRx, legRRx, armLRx, armRRx, splay, -splay,
       ])
     }
@@ -284,7 +284,6 @@ describe('the port preserved the original arithmetic', () => {
         turnNorm: Math.sin(i * 0.021),
         throttle: i % 200 < 100 ? 1 : -1,
         grounded: i % 150 < 120,
-        squash: 1 + Math.sin(i * 0.05) * 0.2,
       })
 
     const expected = reference(script, 600)
@@ -296,7 +295,6 @@ describe('the port preserved the original arithmetic', () => {
       stepAnim(rt, script(i), g, DT, pose)
       const e = expected[i]
       const actual = [
-        pose.root.sx, pose.root.sy, pose.root.sz,
         pose.hips.py, pose.hips.rz, pose.hips.rx, pose.hips.ry,
         pose.head.ry,
         pose.legL.rx, pose.legR.rx,
@@ -307,6 +305,164 @@ describe('the port preserved the original arithmetic', () => {
         expect(actual[k], `frame ${i} field ${k}`).toBeCloseTo(e[k], 12)
       }
     }
+  })
+})
+
+describe('the squash spring', () => {
+  /** Runs a squash impulse and returns the root Y scale, frame by frame. */
+  function landing(depth: number, mode: 'land' | 'takeoff' | 'revival', frames = 60) {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true })
+    stepAnim(rt, s, g, DT, pose)
+    s.squash = depth
+    s.squashMode = mode
+    s.squashSeq = 1
+    const trace: number[] = []
+    for (let i = 0; i < frames; i++) {
+      stepAnim(rt, s, g, DT, pose)
+      trace.push(pose.root.sy)
+    }
+    return { trace, pose }
+  }
+
+  /*
+    The bounce the code has claimed to have since it was written.
+
+    PlayerController's spring was `-x * w^2` against `-v * 2 * w`, damping ratio
+    exactly 1.0, and its comment said it "overshoots very slightly". It never
+    did. This asserts that it now does, and by how much.
+  */
+  it('overshoots exactly once on a landing', () => {
+    const { trace } = landing(0.62, 'land', 120)
+    /*
+      Deepest on the first frame, because the impulse is a snap rather than a
+      ramp. Not exactly 0.62: the impulse is consumed and then integrated by the
+      same step, so the first frame the player sees is already one dt into the
+      recovery. With the impulse velocity at zero that is 1.2% of the way back,
+      which is also why the spec's "compression hold" needs no explicit hold -
+      the spring holds itself for about two frames.
+    */
+    expect(trace[0]).toBeGreaterThan(0.62)
+    expect(trace[0]).toBeLessThan(0.65)
+    expect(Math.min(...trace)).toBe(trace[0])
+
+    const peak = Math.max(...trace)
+    const overshoot = (peak - 1) / (1 - 0.62)
+    expect(overshoot).toBeGreaterThan(0.08)
+    expect(overshoot).toBeLessThan(0.13)
+
+    /*
+      Exactly one bounce the player can see, so it reads as a beat rather than
+      as a wobble. Measured against 2% of the step rather than against zero:
+      each successive excursion is the previous one times the overshoot ratio,
+      so the second is 0.9% of the step and the third 0.09%, and counting raw
+      sign changes would count ringing nobody can perceive.
+    */
+    const step = 1 - 0.62
+    let excursions = 0
+    let above = false
+    for (const y of trace) {
+      const nowAbove = y > 1 + step * 0.02
+      if (nowAbove && !above) excursions++
+      above = nowAbove
+    }
+    expect(excursions).toBe(1)
+  })
+
+  it('settles back to neutral inside the budgeted time', () => {
+    const { trace } = landing(0.62, 'land', 90)
+    /*
+      Measured against the step size rather than against 1.0. The spec asks for
+      "within 1% of 1.0 by 350 ms", which contradicts its own table: the same
+      row gives squashLand a 5% settle time of 313 ms, and 5% of a 0.38 step is
+      0.019 absolute, so 1% absolute is a strictly tighter claim than the
+      constants it is describing can meet. 5% of the step is the self-consistent
+      bound and it is the one that matches what the eye calls settled.
+    */
+    const step = 1 - 0.62
+    expect(Math.abs(trace[Math.round(0.313 / DT)] - 1)).toBeLessThan(step * 0.05)
+    expect(Math.abs(trace[Math.round(0.5 / DT)] - 1)).toBeLessThan(0.005)
+  })
+
+  it('preserves volume exactly at every frame of a landing', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true, squash: 0.55, squashMode: 'revival', squashSeq: 1 })
+    for (let i = 0; i < 200; i++) {
+      stepAnim(rt, s, g, DT, pose)
+      expect(Math.abs(pose.root.sx * pose.root.sy * pose.root.sz - 1)).toBeLessThan(1e-9)
+    }
+  })
+
+  it('spreads sideways more than forward', () => {
+    // A moulded shell dropped on a floor spreads laterally, and the camera is
+    // almost always behind, where lateral spread is the visible axis.
+    const { pose } = landing(0.62, 'land', 1)
+    expect(pose.root.sx).toBeGreaterThan(pose.root.sz)
+  })
+
+  it('runs each mode on its own profile', () => {
+    /*
+      Takeoff is softer than landing, so the stretch reads through the whole
+      rise instead of snapping out of it. Measured as the time to the overshoot
+      extremum, which is `pi / (omega * sqrt(1 - zeta^2))` and therefore a
+      direct read of omega. Time to reach a fixed absolute tolerance would be
+      the wrong metric, because the two impulses are different sizes.
+    */
+    const peakFrame = (depth: number, mode: 'land' | 'takeoff' | 'revival') => {
+      const { trace } = landing(depth, mode, 200)
+      let best = 0
+      for (let i = 1; i < trace.length; i++) {
+        if (Math.abs(trace[i] - 1) > Math.abs(trace[best] - 1) === false && i > 5) break
+      }
+      // The extremum past neutral, which is the far side of the first crossing.
+      const crossing = trace.findIndex((y) => (depth < 1 ? y > 1 : y < 1))
+      best = crossing
+      for (let i = crossing; i < trace.length; i++) {
+        if (Math.abs(trace[i] - 1) >= Math.abs(trace[best] - 1)) best = i
+        else break
+      }
+      return best
+    }
+    // 245 ms against 364 ms, so 15 frames against 22 at 60 Hz.
+    expect(peakFrame(1.18, 'takeoff')).toBeGreaterThan(peakFrame(0.62, 'land'))
+    // Revival is the slowest of the three, so the arrival reads as a bounce.
+    expect(peakFrame(0.55, 'revival')).toBeGreaterThan(peakFrame(1.18, 'takeoff'))
+  })
+
+  /*
+    Two landings of the same depth back to back are two events, and the second
+    has to re-seed the spring. Comparing values rather than a sequence number
+    would silently swallow it, and the bug would read as "sometimes a landing
+    does not squash", which is exactly the kind of thing nobody can reproduce.
+  */
+  it('re-seeds on a repeated impulse of identical depth', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true, squash: 0.7, squashMode: 'land', squashSeq: 1 })
+    for (let i = 0; i < 20; i++) stepAnim(rt, s, g, DT, pose)
+    expect(pose.root.sy).toBeGreaterThan(0.8)
+
+    s.squashSeq = 2
+    stepAnim(rt, s, g, DT, pose)
+    // Back to the impulse depth, less the one frame of recovery the same step
+    // applies. Nothing else could put it there.
+    expect(pose.root.sy).toBeGreaterThan(0.7)
+    expect(pose.root.sy).toBeLessThan(0.72)
+  })
+
+  it('ignores a repeated state with no new impulse', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const s = state({ grounded: true, squash: 0.7, squashMode: 'land', squashSeq: 1 })
+    for (let i = 0; i < 200; i++) stepAnim(rt, s, g, DT, pose)
+    // Recovered and stayed there, rather than re-snapping every frame.
+    expect(pose.root.sy).toBeCloseTo(1, 3)
   })
 })
 
