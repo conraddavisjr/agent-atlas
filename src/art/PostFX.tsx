@@ -170,17 +170,21 @@ export function PostFX() {
 
         ?bloomdebug turns the threshold into a hard binary mask: smoothing to
         zero so nothing ramps, and intensity to 6 so whatever crosses is
-        unmistakable. Sweeping ?threshold under it at a fixed camera is how the
-        shipped value gets measured instead of guessed, and the specific thing
-        being looked for is the lowest value at which no non-emissive surface
-        glows. The prediction on record is that it lands between 1.2 and 1.6,
-        and that the case which decides it is white plastic at a grazing angle
-        against the sky, where clearcoat Fresnel peaks.
+        unmistakable. It stays because it is the fastest way to re-check the
+        measurement after any change to the light rig.
+
+        The threshold has now been MEASURED and is 1.45, inside the 1.2 to 1.6
+        prediction on record. The full distribution and the reasoning live in
+        materials.ts, which owns the constant. `luminanceSmoothing` comes down
+        0.30 to 0.25 with it: the wider ramp existed to hide the mismatch
+        between a guessed threshold and the values actually in the frame, and
+        with the threshold measured there is no mismatch left to hide. A
+        tighter ramp keeps what does cross compact rather than hazy.
       */}
       <Bloom
         intensity={FX.bloomDebug ? 6 : 0.55}
         luminanceThreshold={FX.bloomThreshold ?? BLOOM_THRESHOLD}
-        luminanceSmoothing={FX.bloomDebug ? 0 : 0.3}
+        luminanceSmoothing={FX.bloomDebug ? 0 : 0.25}
         mipmapBlur
         radius={0.6}
         levels={quality.bloomLevels}

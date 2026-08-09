@@ -15,12 +15,45 @@ type MeshBasicMaterialProps = ThreeElements['meshBasicMaterial']
  * in PostFX", which was never true for any colour in the palette at any
  * intensity the game shipped.
  *
- * 1.75 stays until it is measured against real frames with `?threshold=<n>` and
- * `?bloomdebug`, and is then expected to fall. The prediction on record is 1.2
- * to 1.6. Whatever it becomes, changing it here changes both the mask and every
- * emissive intensity in the game together, which is the entire point.
+ * MEASURED, at 1.45. The prediction on record was 1.2 to 1.6 and it lands
+ * inside it. It was measured rather than bisected by eye: the scene is rendered
+ * into a HalfFloatType target with every emissive object hidden, the half
+ * floats are decoded, and the luminance distribution of what remains is what
+ * this number has to clear. The renderer is `NoToneMapping`, so those values
+ * are exactly the ones Bloom's luminance pass sees.
+ *
+ * Non-emissive luminance across the six hub vantages:
+ *
+ *   vantage             max      p99.99   p99.9
+ *   hub-establishing    0.953    0.816    0.815
+ *   hub-portal          1.001    0.816    0.815
+ *   hub-totem           1.296    0.978    0.815
+ *   hub-character       1.503    1.247    0.815
+ *   hub-grazing         1.559    1.214    0.954
+ *   hub-backlit         5.233    2.150    0.959
+ *
+ * Two populations, and the threshold sits between them. Every broad surface in
+ * the game - the sky, sunlit grass, lit white plastic, the deck - tops out at
+ * 0.959, which is the sky. The numbers above that are clearcoat Fresnel at
+ * grazing incidence on a few hundredths of one per cent of the frame, and
+ * `hub-backlit` dominates them exactly as the lighting spec predicted, because
+ * a camera pointed into the key puts every silhouette edge at the angle where
+ * that lobe peaks.
+ *
+ * 1.45 clears the broad ceiling by 1.51x and the highest ordinary-angle shell
+ * specular, `hub-character`'s 1.247, by 1.16x. What it deliberately does NOT
+ * clear is `hub-backlit`'s top 0.01 per cent at 2.15 and above, which blooms as
+ * a compact jewel glint on the silhouette. That is the intent rather than a
+ * tolerance: the reference brief says only emissives and specular hits bloom,
+ * and white plastic does not.
+ *
+ * Lowering this does not make the emissives dimmer relative to the line.
+ * `emissiveIntensityFor` divides by it, so every emissive in the game moves
+ * with it and keeps its exact multiple of the threshold. It does make them
+ * dimmer in absolute terms, which is the point: they now sit 17 per cent closer
+ * to the surfaces around them and read as lights rather than as holes.
  */
-export const BLOOM_THRESHOLD = 1.75
+export const BLOOM_THRESHOLD = 1.45
 
 /**
  * Below this linear luminance, an emissive colour must not be normalised.

@@ -133,12 +133,34 @@ describe('emissiveIntensityFor', () => {
     expect(emissiveIntensityFor(palette.visor, 0.5)).toBeCloseTo(at1 / 2, 10)
   })
 
-  it('reproduces the spec table', () => {
-    expect(emissiveIntensityFor(palette.visor, GLOW.bloom)).toBeCloseTo(3.46, 2)
-    expect(emissiveIntensityFor(palette.accent, GLOW.bloom)).toBeCloseTo(4.89, 2)
-    expect(emissiveIntensityFor(palette.unlocked, GLOW.bloom)).toBeCloseTo(3.16, 2)
-    expect(emissiveIntensityFor(palette.visor, GLOW.source)).toBeCloseTo(1.83, 2)
-    expect(emissiveIntensityFor(palette.token, GLOW.source)).toBeCloseTo(3.15, 2)
+  it('reproduces the spec table at the measured threshold', () => {
+    /*
+      These were the spec's own numbers at a threshold of 1.75. The threshold
+      has since been measured at 1.45, and every one of them scales by exactly
+      1.45 / 1.75 = 0.82857, because the whole point of the normalisation is
+      that an emissive's distance above the line does not depend on the line.
+      The next assertion is what actually holds that invariant; these are here
+      so the absolute values are pinned and a silent drift in either direction
+      has to be typed out on purpose.
+    */
+    expect(emissiveIntensityFor(palette.visor, GLOW.bloom)).toBeCloseTo(2.87, 2)
+    expect(emissiveIntensityFor(palette.accent, GLOW.bloom)).toBeCloseTo(4.06, 2)
+    expect(emissiveIntensityFor(palette.unlocked, GLOW.bloom)).toBeCloseTo(2.62, 2)
+    expect(emissiveIntensityFor(palette.visor, GLOW.source)).toBeCloseTo(1.51, 2)
+    expect(emissiveIntensityFor(palette.token, GLOW.source)).toBeCloseTo(2.61, 2)
+  })
+
+  it('keeps every emissive at the same multiple of the threshold, whatever it is', () => {
+    /*
+      The invariant that makes the threshold safe to move. Lowering it must move
+      every emissive with it, or measuring the threshold would silently change
+      which things glow - which is the failure the normalisation was introduced
+      to end.
+    */
+    for (const hex of [palette.visor, palette.unlocked, palette.accent, palette.token]) {
+      const raw = linearLuma(hex) * emissiveIntensityFor(hex, GLOW.bloom)
+      expect(raw / BLOOM_THRESHOLD).toBeCloseTo(GLOW.bloom, 10)
+    }
   })
 
   it('puts tier A above the threshold and tier B below it, whatever the hue', () => {
