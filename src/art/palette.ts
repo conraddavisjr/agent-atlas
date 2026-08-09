@@ -55,9 +55,29 @@ export const palette = {
     that actually closes it: at #d5d9e0 the deck measured 0.850 against a
     ground texture at 0.830, so the two were indistinguishable in greyscale no
     matter what the ground did on its own.
+
+    **And turned from cool grey to warm grey, at the same luma, because the
+    world had no temperature axis at all.** Measured on a lit deck in
+    `hub-character`: (162,174,184). Red was the LOWEST channel on every lit
+    surface in every vantage - deck, puck top, spur lobe alike - so the
+    reference brief's split-tone was half built. The shadows are correctly
+    cool; there was no warm side for them to be cool against, which is why the
+    grey read as dead rather than moulded and why depth had to come from fog.
+
+    The grade was the obvious suspect and it is innocent: captured with
+    `?nogfx=lut` the same pixel reads (159,169,181), a shift of three to five
+    points. The cause was here. `#b6bcc7` is (182,188,199) - the ALBEDO itself
+    leans 17 points blue, so no rig could have fixed it.
+
+    `#bfbbb4` is (191,187,180), display luma 0.7347 against the old 0.7357, so
+    the band membership and every measurement in the bible's section 8 table
+    are unchanged to within a thousandth. Only the hue moves. Kept a warm
+    NEUTRAL rather than a sandstone, because the substrate is meant to read as
+    moulded grey with coloured components on it, and against shadows this cool
+    eleven points is already a legible axis.
   */
-  rock: '#b6bcc7',
-  rockDeep: '#a7aebb',
+  rock: '#bfbbb4',
+  rockDeep: '#b0aca4',
   rockAccent: '#c3a8dd',
   gold: '#e8b84b',
 
@@ -129,10 +149,25 @@ export const palette = {
    * `bandDeckTop` is `rock`, repeated by reference rather than by value so the
    * side face cannot drift away from the top it is defined relative to.
    */
+  /**
+   * The two gameplay-band surfaces are WARM and the two frame surfaces are
+   * COOL, and that split is the point rather than a coincidence of picking.
+   *
+   * The reference brief asks for cool shadows against warm highlights, and the
+   * build had only the first half: every lit surface measured red-lowest, so
+   * there was nothing for the cool to be cool against. Putting the warmth on
+   * exactly the surfaces the player stands on means the temperature axis and
+   * the value axis carry the same message - warm and light is floor, cool and
+   * dark is frame - instead of the temperature wandering independently.
+   *
+   * Luma is held to within two thousandths of the values the bible's section 8
+   * table records, so the greyscale test is unaffected by this and the two axes
+   * stay independently checkable.
+   */
   /** Band 1, 0.735. Deck and puck tops - anything the capsule stands on. */
-  bandDeckTop: '#b6bcc7',
-  /** Band 1, 0.589. Deck and puck side faces, one step down from their tops. */
-  bandDeckSide: '#8f97a5',
+  bandDeckTop: '#bfbbb4',
+  /** Band 1, 0.592. Deck and puck side faces, one step down from their tops. */
+  bandDeckSide: '#9d968d',
   /** Band 2, 0.330. Kerbs and trim, which draw a raised deck's outline. */
   bandTrim: '#4b5568',
   /** Band 2, 0.272. Pylons, struts and arcs - the frame, never the floor. */

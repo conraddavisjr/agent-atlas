@@ -636,6 +636,64 @@ export function DevHooks() {
       }
     }
 
+    /**
+     * Mean colour and display luma of a rectangle of the rendered frame.
+     *
+     * The art bible's section 8 test is a statement about what the eye reads off
+     * the screen, and until now the only thing enforcing it was `palette.band()`,
+     * which asserts on an albedo hex. Those are not the same measurement and the
+     * gap between them is where the whole value structure went: the palette
+     * table says the lawn is 0.668 and `palette.test.ts` proves it, while the
+     * rendered lawn measures 0.22 to 0.42 because a field of blades shadows
+     * itself. Both are correct about different things, and only one of them is
+     * the test.
+     *
+     * Same convention as `palette.displayLuma`: gamma-encoded sRGB, not
+     * linearised, because that is what an eyedropper on a screenshot returns.
+     *
+     * Coordinates are in canvas pixels from the top left.
+     */
+    const sample = (x: number, y: number, w = 24, h = 24) => {
+      const probe = document.createElement('canvas')
+      probe.width = w
+      probe.height = h
+      const ctx = probe.getContext('2d')
+      if (!ctx) throw new Error('no 2d context for sample')
+      ctx.drawImage(gl.domElement, x, y, w, h, 0, 0, w, h)
+      const data = ctx.getImageData(0, 0, w, h).data
+
+      let r = 0
+      let g = 0
+      let b = 0
+      const pixels = data.length / 4
+      for (let i = 0; i < data.length; i += 4) {
+        r += data[i]
+        g += data[i + 1]
+        b += data[i + 2]
+      }
+      r /= pixels
+      g /= pixels
+      b /= pixels
+
+      const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+      const bands: Record<string, readonly [number, number]> = {
+        gameplay: [0.56, 0.74],
+        midground: [0.2, 0.38],
+        background: [0.76, 0.86],
+      }
+      const inBand =
+        Object.keys(bands).find((name) => luma >= bands[name][0] && luma <= bands[name][1]) ?? 'none'
+
+      return {
+        rgb: [Math.round(r), Math.round(g), Math.round(b)],
+        luma: +luma.toFixed(3),
+        /** Which of the art bible's three bands this patch lands in, if any. */
+        band: inBand,
+        /** Positive means warm. The temperature axis, in raw sRGB points. */
+        warmth: Math.round(r - b),
+      }
+    }
+
     const hud = (visible: boolean) => {
       document.querySelectorAll<HTMLElement>('[data-hud]').forEach((el) => {
         el.style.visibility = visible ? '' : 'hidden'
@@ -656,6 +714,7 @@ export function DevHooks() {
       settled,
       frameStats,
       framing,
+      sample,
       /**
        * Where the camera actually ended up, as opposed to where a vantage asked
        * it to go. The two are not the same question, and only one of them can
