@@ -30,10 +30,20 @@ export function FollowCamera({
   target,
   intent,
   inputLocked,
+  cameraScale,
 }: {
   target: React.RefObject<Group | null>
   intent: React.RefObject<InputIntent>
   inputLocked: React.RefObject<boolean>
+  /**
+   * Per-scene multiplier on the rest offset, from `SceneDefinition`.
+   *
+   * Both components are scaled by it rather than only the distance, which is
+   * what preserves the rest pitch: how far down the camera looks is an art
+   * decision that belongs to the whole game, and how far back it can sit
+   * belongs to the room.
+   */
+  cameraScale: number
 }) {
   const camera = useThree((s) => s.camera)
   const { world, rapier } = useRapier()
@@ -50,8 +60,11 @@ export function FollowCamera({
   useEffect(() => {
     resetCameraFrame(yaw.current)
   }, [])
+  const restDistance = CAMERA.distance * cameraScale
+  const restHeight = CAMERA.height * cameraScale
+
   /** Current distance, which eases back out after a collision rather than popping. */
-  const distance = useRef<number>(CAMERA.distance)
+  const distance = useRef<number>(restDistance)
 
   /**
    * Scratch vectors, allocated once and mutated every frame.
@@ -161,10 +174,10 @@ export function FollowCamera({
     scratch.lookAt.y += CAMERA.lookHeight
 
     // Ideal camera position on a sphere around the look target.
-    const horizontal = Math.cos(pitch.current) * CAMERA.distance
+    const horizontal = Math.cos(pitch.current) * restDistance
     scratch.offset.set(
       Math.sin(yaw.current) * horizontal,
-      CAMERA.height + Math.sin(pitch.current) * CAMERA.distance,
+      restHeight + Math.sin(pitch.current) * restDistance,
       Math.cos(yaw.current) * horizontal,
     )
 

@@ -150,7 +150,19 @@ export default function App() {
         */
         shadows={quality.softShadows ? { type: VSMShadowMap } : true}
         dpr={[1, quality.maxDpr]}
-        camera={{ fov: 55, near: 0.1, far: 250, position: [0, 6, 14] }}
+        /*
+          Field of view 40, not 55, and this is the single largest contributor
+          to the diorama read. A long lens compresses depth, so the background
+          layers stop shrinking into irrelevance and start reading as a stage
+          set at a known distance: an object 20 m behind the character comes in
+          27 per cent larger relative to it.
+
+          `CAMERA.distance` and `CAMERA.height` in tuning.ts are derived from
+          this number and hold the character the same size in frame. The three
+          move together or the framing is wrong; the arithmetic is in the
+          comment above them.
+        */
+        camera={{ fov: 40, near: 0.1, far: 250, position: [0, 6, 14] }}
         /*
           Tone mapping is disabled on the renderer and applied once at the end of
           the effect chain instead. Leaving it on here means ACES runs twice, once
@@ -255,6 +267,7 @@ export default function App() {
               target={player}
               intent={intent}
               inputLocked={inputLocked}
+              cameraScale={scene.cameraScale}
             />
 
             {/*

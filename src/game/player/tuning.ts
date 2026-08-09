@@ -108,11 +108,16 @@ export const REVIVAL = {
   /**
    * How far above the spawn point the robot materialises before dropping in.
    *
-   * The brief asked for "about 50 pixels". At the default framing - fov 55,
-   * camera distance 7.5, a 1080-tall viewport - one screen pixel is about
-   * 0.0072 world units at the player, so 50px works out to 0.36. That reads as
-   * a stumble rather than as coming back to life, so the default here is the
-   * height that actually sells the beat. Set it to 0.36 for the literal reading.
+   * The brief asked for "about 50 pixels". At the current framing - fov 40,
+   * slant range hypot(10.7, 4.3) = 11.53, a 1080-tall viewport - one screen
+   * pixel is `2 * 11.53 * tan(20 deg) / 1080` = 0.0078 world units at the
+   * player, so 50px works out to 0.39. That reads as a stumble rather than as
+   * coming back to life, so the default here is the height that actually sells
+   * the beat. Set it to 0.39 for the literal reading.
+   *
+   * The value itself was chosen on feel and is unaffected by the field of view
+   * change; only the arithmetic above moved, and it is corrected rather than
+   * left to mislead the next person who reads it.
    */
   dropHeight: 1.6,
 
@@ -142,9 +147,37 @@ export const WADDLE = {
 } as const
 
 export const CAMERA = {
-  /** Resting offset behind and above the player, before orbit is applied. */
-  distance: 7.5,
-  height: 3.0,
+  /**
+   * Resting offset behind and above the player, before orbit is applied.
+   *
+   * These two are not taste values and must not be tuned independently. They
+   * are derived from the field of view, which `03-environment.md` section 6
+   * takes from 55 to 40 to buy the diorama read, and they exist to hold the
+   * character the same size in frame while it changes.
+   *
+   * The apparent height of an object at slant range D is
+   * `H / (2 D tan(fov / 2))`, so holding it constant means holding
+   * `D tan(fov / 2)` constant. At rest `D = hypot(distance, height)`:
+   *
+   *   old   hypot(7.5, 3.0)   = 8.0777,  tan(27.5 deg) = 0.520567
+   *         product                                      4.2045   <- invariant
+   *   new   4.2045 / tan(20 deg) = 11.5518,  so scale k = 1.43004
+   *         distance  7.5 * k = 10.725  ->  10.7
+   *         height    3.0 * k =  4.290  ->   4.3
+   *   check hypot(10.7, 4.3) * tan(20 deg) = 4.1970 vs 4.2045, 0.2% out
+   *
+   * Both components scale by the same k so the rest pitch is preserved:
+   * `atan(4.3 / 10.7)` is 21.90 degrees against the old 21.80. How far down
+   * the camera looks is a separate art decision from the focal length, and
+   * this change is not making it.
+   *
+   * What actually changes is compression behind the character. An object 20 m
+   * behind it renders at 11.5313 / 31.5313 = 0.366 of its size at the
+   * character's depth, against 0.288 before, so the background comes in 27
+   * per cent larger relative to the subject. That is the whole point.
+   */
+  distance: 10.7,
+  height: 4.3,
   /** Look target sits above the feet so the robot is not centred in frame. */
   lookHeight: 1.0,
   /**
@@ -165,8 +198,14 @@ export const CAMERA = {
    */
   collisionPadding: 0.4,
   minDistance: 1.6,
-  /** Pull in instantly to avoid clipping, but ease back out so it is not jarring. */
-  pullOutSpeed: 4,
+  /**
+   * Pull in instantly to avoid clipping, but ease back out so it is not jarring.
+   *
+   * Raised from 4 with the field of view. The recovery now has 11.5 m of slant
+   * range to travel rather than 8.1, and at the old rate covering half again
+   * the distance at the same speed reads as the camera being slow to forgive.
+   */
+  pullOutSpeed: 5,
 
   /**
    * How hard the camera pulls back behind the player, as an exponential

@@ -27,6 +27,19 @@ export type SceneDefinition = {
   /** Sky colours, or null for scenes that are fully enclosed. */
   sky: { top: string; horizon: string } | null
   /**
+   * Multiplier on `CAMERA.distance` and `CAMERA.height` for this scene.
+   *
+   * Required rather than optional, for the same reason `killY` is: an interior
+   * that silently inherits an exterior's camera is a framing bug nobody
+   * notices until they walk into it, and a default of 1 would make forgetting
+   * the question the easy path.
+   *
+   * `FollowCamera` scales both components by it, which preserves the rest
+   * pitch - the downward look angle is an art decision and does not belong to
+   * the room's size - while letting an enclosed scene sit closer.
+   */
+  cameraScale: number
+  /**
    * Fall below this height and the scene kills you.
    *
    * Required rather than optional so that adding a scene forces the question to
@@ -87,6 +100,8 @@ export const SCENES: Record<string, SceneDefinition> = {
       cannot do any more is silently disagree with the palette by default.
     */
     sky: { top: palette.skyTop, horizon: palette.skyHorizon },
+    /* Open air on a 16 m plateau. Nothing to back into. */
+    cameraScale: 1,
     /*
       The island's soil cone bottoms out at about y=-6.2. Set well below that so
       a player who walks off the edge gets a real moment of falling before the
@@ -102,14 +117,33 @@ export const SCENES: Record<string, SceneDefinition> = {
     lighting: 'cave',
     spawns: {
       /*
-        Deep enough into the room that the camera, which rests ~7.5 behind the
-        player, still sits inside the walls at z=±12. Spawning at z=7 put the
-        default camera position outside the room and left the collision raycast
-        responsible for the opening shot, which is fragile framing.
+        Deep enough into the room that the camera still sits inside the walls
+        at z=±12. Spawning at z=7 put the default camera position outside the
+        room and left the collision raycast responsible for the opening shot,
+        which is fragile framing.
       */
       entrance: [0, 2, 3],
     },
     sky: null,
+    /*
+      The field of view change regressed this room and this is the fix that
+      ships with it. At the hub's rest distance of 10.7 the camera from the
+      `entrance` spawn at z=3 wants to sit at z=13.7, which is outside a room
+      whose walls are at z=±12, so the collision pull-in fires on the first
+      frame and stays engaged for the whole scene - handing the opening shot to
+      a raycast again, which is exactly what the spawn depth was chosen to
+      avoid.
+
+      At 0.62 the camera rests 6.63 back and 2.66 up, which fits with margin,
+      and because both components scale together the room keeps the same
+      downward look angle as the island.
+
+      The better fix is to enlarge the cave to half-depth 20, move `entrance`
+      to (0, 2, 6) and set this back to 1. That is a scene rework and out of
+      scope here; the field exists so the choice can be made per scene rather
+      than globally.
+    */
+    cameraScale: 0.62,
     /*
       The cave is a sealed box with a floor at y=0, so nothing can reach this.
       It is here because the field is required, and it is required so that the
