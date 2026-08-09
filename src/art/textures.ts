@@ -8,15 +8,30 @@ import {
   SRGBColorSpace,
   type Texture,
 } from 'three'
+import { createMouldedStoneMaps } from './groundTexture'
 
 /**
  * Surfacing for the world's rock and earth.
  *
  * The plateau is not here. Its surface is generated in groundTexture.ts,
  * because a photographic grass map gives the whole island the relief of gravel
- * and reads as wet rock the moment a highlight crosses it. Photographs earn
- * their place on the cliff face and the stonework, which are meant to look like
- * rock, and nowhere else.
+ * and reads as wet rock the moment a highlight crosses it.
+ *
+ * Neither is the stone, any more. It was a photograph of granite, and the
+ * reference brief's deepest rule is that everything in this world is a
+ * manufactured object: stone is a moulded stone-shaped object, and a photograph
+ * of real rock is the clearest violation of that rule in the project. It is
+ * generated in `groundTexture.ts` now and reaches call sites through
+ * `useMouldedStone` below, which shares every tiling decision with the
+ * photographic path so the two behave identically at a call site.
+ *
+ * What survives is the dirt, deliberately and in a demoted form. It appears
+ * only on the island's underside - the rim cylinder, the soil band and the root
+ * cone - which is never approached, never walked on and never a gameplay
+ * surface, and it sits in the background value band where the brief explicitly
+ * permits less material discipline. The rim is also the one place in the world
+ * where the fiction is "this island was cut out of the ground", so a photograph
+ * is doing the right job there.
  *
  * Each set ships three files: colour, a tangent-space normal map, and an ORM
  * pack with ambient occlusion in red and roughness in green. The pack is the
@@ -131,6 +146,76 @@ export type PbrTextures = {
 }
 
 /**
+ * A tiled, filtered clone of a source texture.
+ *
+ * Shared by the photographic and the generated paths so that the half dozen
+ * decisions below are made once. Every one of them has a failure mode that is
+ * silent, which is why this is a function rather than six lines repeated twice.
+ */
+function tiled(
+  source: Texture,
+  repeat: [number, number],
+  anisotropy: number,
+  srgb: boolean,
+): Texture {
+  const t = source.clone()
+  // clone() copies the descriptor but leaves needsUpdate false, so without
+  // this the GPU never receives the new wrap and repeat settings.
+  t.needsUpdate = true
+  t.wrapS = RepeatWrapping
+  t.wrapT = RepeatWrapping
+  t.repeat.set(repeat[0], repeat[1])
+  /*
+    Anisotropy is the single biggest quality difference on ground. Without it a
+    tiled surface viewed at a grazing angle dissolves into aliased mush a few
+    metres out, which is most of what makes tiling obvious.
+  */
+  t.anisotropy = anisotropy
+  // Normal and ORM are data rather than colour. Tagging them sRGB applies a
+  // decode curve to vectors and gloss values, bending normals toward the
+  // surface and making everything read shinier than authored.
+  t.colorSpace = srgb ? SRGBColorSpace : LinearSRGBColorSpace
+  /*
+    Ambient occlusion defaults to the second UV set, which none of this geometry
+    has. Pinning every map to channel 0 means the ORM pack lines up with the
+    colour map instead of silently sampling nothing.
+  */
+  t.channel = 0
+  return t
+}
+
+/**
+ * The generated moulded stone, tiled for one caller.
+ *
+ * `repeat` follows the same convention as `usePbrTextures` and the same
+ * authoring target: one stone tile every 1.2 m of world, solved per mesh rather
+ * than shared as a repeat count. That target is kept from `HubIsland.tsx`,
+ * whose comment about matching repeat counts instead of physical scale being
+ * what makes tiled stone read as wallpaper is correct and survives this change
+ * unaltered.
+ *
+ * Generation is memoized at module scope inside `createMouldedStoneMaps`, so
+ * the first caller pays for the canvases and every later one pays for four
+ * texture descriptors.
+ */
+export function useMouldedStone(repeat: [number, number] = [1, 1]): PbrTextures {
+  const gl = useThree((s) => s.gl)
+  const [ru, rv] = repeat
+
+  return useMemo(() => {
+    const maps = createMouldedStoneMaps()
+    const anisotropy = gl.capabilities.getMaxAnisotropy()
+    const packed = tiled(maps.roughnessMap, [ru, rv], anisotropy, false)
+    return {
+      map: tiled(maps.map, [ru, rv], anisotropy, true),
+      normalMap: tiled(maps.normalMap, [ru, rv], anisotropy, false),
+      roughnessMap: packed,
+      aoMap: packed,
+    }
+  }, [gl, ru, rv])
+}
+
+/**
  * A tiled PBR set at a given density.
  *
  * `repeat` is in tiles across the mesh's UV space, so a large floor wants a
@@ -160,40 +245,12 @@ export function usePbrTextures(
         ? color
         : levelAlbedo(color.image as HTMLImageElement, config.level, config.detail)
 
-    /*
-      Anisotropy is the single biggest quality difference on ground. Without it
-      a tiled surface viewed at a grazing angle dissolves into aliased mush a
-      few metres out, which is most of what makes tiling obvious.
-    */
     const maxAnisotropy = gl.capabilities.getMaxAnisotropy()
-
-    const prepare = (source: Texture, srgb: boolean) => {
-      const t = source.clone()
-      // clone() copies the descriptor but leaves needsUpdate false, so without
-      // this the GPU never receives the new wrap and repeat settings.
-      t.needsUpdate = true
-      t.wrapS = RepeatWrapping
-      t.wrapT = RepeatWrapping
-      t.repeat.set(ru, rv)
-      t.anisotropy = maxAnisotropy
-      t.colorSpace = srgb ? SRGBColorSpace : LinearSRGBColorSpace
-      /*
-        Ambient occlusion defaults to the second UV set, which none of this
-        geometry has. Pinning every map to channel 0 means the ORM pack lines up
-        with the colour map instead of silently sampling nothing.
-      */
-      t.channel = 0
-      return t
-    }
-
-    // Normal and ORM are data rather than colour. Tagging them sRGB would apply
-    // a decode curve to vectors and gloss values, bending normals toward the
-    // surface and making everything read shinier than authored.
-    const packed = prepare(orm, false)
+    const packed = tiled(orm, [ru, rv], maxAnisotropy, false)
 
     return {
-      map: prepare(base, true),
-      normalMap: prepare(normal, false),
+      map: tiled(base, [ru, rv], maxAnisotropy, true),
+      normalMap: tiled(normal, [ru, rv], maxAnisotropy, false),
       roughnessMap: packed,
       aoMap: packed,
     }
