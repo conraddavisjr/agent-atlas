@@ -70,7 +70,22 @@ This is a composition decision, not a value to tune, and it is why the loop has 
 
 **8. Low tier still ships a floating cable** with both ends square-cut clear of the culled pylon caps, and its meadow is a 200 px strip with the rest bald.
 
-**9. Frame rate.** 65.5 mean / 24 p95 at 1660x934 against targets of 55 and 45. Mean clears, p95 does not. **Measure within one page session**: four consecutive runs vary by 0.4 fps, but the same configuration across separate page loads has read anywhere from 46 to 65, so any A/B done across reloads is worthless.
+**9. Frame rate, and ambient occlusion's share of it.**
+
+**Do not trust an absolute fps number from this environment.** One configuration read 65.5 mean in one session and 21 to 36 in another twenty minutes later, with nothing changed. Four consecutive runs inside a single session agree to 0.4 fps, which makes the stability look real and is exactly what makes it misleading. Measure ratios, alternating the two configurations close together, and only believe a difference whose runs do not overlap.
+
+Measured that way, three runs each, at 1660x934 on `hub-establishing`, after the grass-shadow fix:
+
+| | mean fps | p95 |
+| --- | --- | --- |
+| AO on (half-res, r 0.28, i 3.0) | 35.9 / 21.0 / 31.3 | 11.5 / 9.5 / 10.0 |
+| AO off | 74.2 / 61.7 / 59.9 | 21.9 / 22.4 / 15.6 |
+
+No overlap in either column: **AO is still costing about half the frame rate at high.**
+
+The case for turning it off at that tier is stronger than it looks, and it is not only about cost. AO exists here to stop objects reading as pasted onto the ground. The blade-to-ground contact it was most needed for is now baked into the grass's own vertex colour and does not depend on the pass. The object bases it was also meant to serve - pylon shafts, node legs, totem plinths - are listed as still uncontacted in round 2's F14, so the pass is not delivering there either. And being screen-space, it cannot tell the hero from the lawn he stands in.
+
+The case against is item 1: AO is one of the few things in this frame still producing darks, and removing it pushes the shadow end further the wrong way. **Decide it together with item 1, not before it.** `?nogfx=ao` and `quality.ambientOcclusion` make the change itself a one-liner at any point; nothing else depends on the pass existing.
 
 **10. Depth of field was never built,** and `05-character-vfx.md` sections 9-11 (the pooled particle system) were never built. Both unchanged from the previous handoff. Anyone enabling DoF must delete the near field first.
 
