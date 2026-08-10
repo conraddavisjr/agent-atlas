@@ -47,7 +47,7 @@ Fixed and confirmed visible: the second specular lobe on the shell, the hole in 
 
 **Round 2's verdict, which is the live one:** the world now has no shadow end. Only 5.1% of `hub-establishing` is below 0.30, against 16.6% in the pre-round baseline. Everything else is downstream - bloom cannot read because there is nothing dark for light to sit against, the rim cannot read because the shell's shadow side is already at 0.55, the steps cannot read because tread and riser are 0.02 apart.
 
-The full round-2 report is `.critique/round2-findings.md`. Round 1's is `.critique/round1-findings.md`.
+The full round-2 report is `98-critique-round2.md`. Round 1's is `98-critique-round1.md`.
 
 ---
 
