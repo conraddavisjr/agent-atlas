@@ -435,17 +435,26 @@ export function Backpack() {
         <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
       </RoundedBox>
 
-      {/* Copper bezel, the proudest of the three. */}
+      {/*
+        Copper bezel, the LEAST proud of the three.
+
+        The three stack outward, each smaller than and slightly in front of the one
+        behind it, so what stays visible of each is the annulus its successor does
+        not cover. Nesting them inward - which is what "a lit pip in a recess"
+        sounds like it wants - hides both inner rings completely, because
+        `cylinderGeometry` builds a solid disc and not a ring. `BACKPACK_BLOCK.port`
+        has the z ladder and the reason the total protrusion is capped at 0.013.
+      */}
       <mesh position={[0, 0, port.bezelZ]} rotation={[Math.PI / 2, 0, 0]} castShadow>
         <cylinderGeometry args={[port.bezelRadius, port.bezelRadius, port.bezelDepth, port.segments]} />
         <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
       </mesh>
 
       {/*
-        The dark well. `visorPlate()` and not a dark plastic, because this is the
-        same material problem as the face: a lit element reads as a light source
-        when it sits inside a glossy near-black recess, and as a bright sticker
-        when it sits on a matte one.
+        The dark surround. `visorPlate()` and not a dark plastic, because this is
+        the same material problem as the face: a lit element reads as a light
+        source against a glossy near-black ground, and as a bright sticker against
+        a matte one.
       */}
       <mesh position={[0, 0, port.wellZ]} rotation={[Math.PI / 2, 0, 0]}>
         <cylinderGeometry args={[port.wellRadius, port.wellRadius, port.wellDepth, port.segments]} />
@@ -568,11 +577,18 @@ export function Foot() {
       {/*
         The blue oval on the sole.
 
+        It PROTRUDES below the sole plane rather than sitting flush with it or
+        recessed above it, and that is not a preference. The foot is a solid
+        `RoundedBox` spanning y -0.085 to 0.085, so the first version of this pad -
+        placed a millimetre "above the sole plane" to avoid z-fighting with the
+        ground - sat entirely inside opaque rubber and could not be seen at any
+        time from any angle. See `SOLE_LIGHT`.
+
         GLOW.source and not GLOW.bloom, and this is the one place on the character
         where the choice is genuinely arguable. The reference's sole lights do
         glow. But the art bible keeps the must-bloom tier "deliberately tiny", the
         eyes are already in it, and a bloom on a downward-facing surface a few
-        centimetres off the ground would halo onto the floor and fight the contact
+        millimetres off the ground would halo onto the floor and fight the contact
         blob, which is the single highest value-per-cost item on the character. So
         the soles read as lit and do not halo, and this is the dial to turn if a
         render says otherwise.
@@ -580,11 +596,10 @@ export function Foot() {
         Scaled on z rather than built as an ellipse, because a cylinder scaled
         non-uniformly is still exactly an elliptical cylinder and its normals stay
         correct: the scale is on the mesh, so three renormalises through the normal
-        matrix. `SOLE_LIGHT` carries the arithmetic that keeps it on the flat part
-        of the sole and 0.001 clear of the ground plane.
+        matrix.
       */}
       <mesh
-        position={[0, -0.085 + SOLE_LIGHT.lift + SOLE_LIGHT.thickness / 2, 0]}
+        position={[0, -0.085 - SOLE_LIGHT.proud + SOLE_LIGHT.thickness / 2, 0]}
         scale={[1, 1, SOLE_LIGHT.stretchZ]}
       >
         <cylinderGeometry

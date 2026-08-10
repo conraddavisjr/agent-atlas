@@ -130,9 +130,13 @@ export const HEAD_SHELL = {
  *     **0.020 proud.**
  *   - Over the rear crown, at z -0.24 the head tops out at y 0.2625 and the cap
  *     reaches 0.270: **0.0075 proud**, which is a lip rather than a ledge.
- *   - At the cap's own upper side corners, (0.28, 0.27, -0.33) is 0.164 from the
- *     inner box against the head's 0.110, so **0.054 proud** at the corner the
- *     silhouette reads from behind.
+ *   - At the cap's own upper side corners the BOUNDING-box corner (0.28, 0.27,
+ *     -0.33) is 0.173 from the inner box, so 0.063 outside the head - but that
+ *     point is not on the cap's surface, because the cap is rounded at 0.090 too.
+ *     The rounded corner itself is about **0.007 proud**, which is a lip. Recorded
+ *     because comparing bounding-box corners is the easy version of this question
+ *     and it overstates the answer by an order of magnitude; the honest test
+ *     samples one surface against the other's signed distance.
  *
  * It clears both neighbours by arithmetic rather than by luck, which is what
  * `robotGeometry.test.ts` pins. The antenna is at z -0.040 and this cap ends at
@@ -160,20 +164,39 @@ export const HEAD_CAP = {
  * pods read as a hole in the cheek. At radius 0.085 stretched 1.6 in z the oval
  * spans 0.085 by 0.136, so it clears the flat region by 0.010 and 0.019.
  *
- * It sits 0.001 ABOVE the sole plane rather than flush with it. Flush means
- * coplanar with the ground the character stands on, which z-fights; proud means
- * the light is what takes the character's weight. Recessed by a millimetre is
- * the only version with no failure mode, and it costs nothing visually because
- * a planted sole is not visible anyway - this mark is for the moment the foot
- * leaves the floor.
+ * ## It has to PROTRUDE, and the first version of it was invisible
+ *
+ * This shipped for one iteration with a `lift` of 0.001 meaning "sits a
+ * millimetre above the sole plane", on the reasoning that flush would z-fight
+ * with the ground. That reasoning describes a decal on a surface, and this is not
+ * one: the foot is a SOLID `RoundedBox` spanning y -0.085 to 0.085, so a pad from
+ * -0.084 to -0.072 sat entirely inside opaque rubber and could not be seen from
+ * any angle at any time. A recess only reads if something is cut out of the
+ * housing, and nothing here cuts.
+ *
+ * That is the defect this whole pass is about, committed while writing the fix for
+ * it: no error, a clean frame, every triangle present, and an emissive rendering
+ * into the inside of another part - exactly what the deleted `Helmet` did to the
+ * antenna bulb.
+ *
+ * So `proud` is how far the pad's bottom face sits BELOW the sole plane. At 0.004
+ * with a thickness of 0.012 the pad spans y -0.089 to -0.077: buried 0.008 in the
+ * foot, which is what attaches it with no stalk to model, and standing 0.004 clear,
+ * which is what puts it outside the foot's surface where it can be seen.
+ *
+ * The 0.004 does not lift the character. `REST.footL.y` puts the sole plane on the
+ * ground, so a planted pad is 4 mm INTO the floor and invisible, which is correct -
+ * this mark is for the moment the foot leaves it. Seen edge on it is a 4 mm bright
+ * band along the bottom of the foot, which is the reference's read from a normal
+ * camera angle.
  */
 export const SOLE_LIGHT = {
   radius: 0.085,
   /** Stretch along z, so it is an oval along the foot rather than a circle. */
   stretchZ: 1.6,
   thickness: 0.012,
-  /** Clearance of the pad's own bottom face above the sole plane. */
-  lift: 0.001,
+  /** How far the pad's bottom face stands BELOW the sole plane. Must be positive. */
+  proud: 0.004,
   segments: 20,
 } as const
 
@@ -304,11 +327,34 @@ export const HAND = { radius: 0.14 } as const
  * plastic rather than as a light" failure the art bible's section 1 is about.
  * Only the core is emissive.
  *
- * The z values stack front to back as bezel 0.082, core 0.080, well 0.078, all
- * measured from the pack's own centre, so the rim stands proudest, the lit pip
- * sits 0.002 inside it and the dark well sits 0.002 behind that. Asserted rather
- * than trusted: a port whose well ended up in FRONT of its bezel would render a
- * dark disc over the light and would still be a clean frame.
+ * ## The rings stack OUTWARD, and the first version of them was invisible
+ *
+ * This shipped for one iteration with the bezel proudest and the well and core
+ * nested 0.002 behind it, on the reasoning that a lit pip belongs inside a recess.
+ * `cylinderGeometry` does not make a recess. It makes a SOLID disc, so a 0.068
+ * copper cylinder with a 0.050 well and a 0.030 core both inside its radius AND
+ * inside its z span rendered as one plain copper disc with nothing on it. The
+ * comment describing "three concentric rings" described a shape the geometry could
+ * not produce, and the test asserted the exact nesting that hid them.
+ *
+ * Concentric rings out of solid discs come from stacking outward, not inward: each
+ * disc is smaller than the one behind it and stands slightly proud of it, so what
+ * is left visible of each is the annulus its successor does not cover. Reading from
+ * the pack outward, with the pack's rear face at -0.070:
+ *
+ *     bezel  r 0.068   z -0.077 .. -0.063   0.007 proud of the pack
+ *     well   r 0.050   z -0.080 .. -0.072   0.003 proud of the bezel, 0.005 into it
+ *     core   r 0.030   z -0.083 .. -0.077   0.003 proud of the well,  0.003 into it
+ *
+ * So the eye sees a copper annulus from 0.050 to 0.068, a dark annulus from 0.030
+ * to 0.050, and a lit disc inside 0.030. Every ring is also anchored behind its
+ * successor's front face rather than floating in front of it, which is what stops
+ * the stack reading as three separate coins.
+ *
+ * Total protrusion is 0.013 and that is a constraint rather than a preference: the
+ * cape's front face is at -0.093, so the core cannot pass -0.083 without eating the
+ * 0.010 of clearance. All four relationships are asserted, because every one of
+ * them is a clean frame when it is wrong.
  */
 export const BACKPACK_BLOCK = {
   width: 0.36,
@@ -318,16 +364,16 @@ export const BACKPACK_BLOCK = {
   port: {
     /** Copper rim. 0.068 against a flat half-height of 0.075 leaves 0.007. */
     bezelRadius: 0.068,
-    bezelDepth: 0.016,
-    bezelZ: -0.074,
-    /** The dark recess the core sits in. */
+    bezelDepth: 0.014,
+    bezelZ: -0.07,
+    /** The dark surround, standing 0.003 proud of the bezel so it is not swallowed. */
     wellRadius: 0.05,
-    wellDepth: 0.01,
-    wellZ: -0.073,
+    wellDepth: 0.008,
+    wellZ: -0.076,
     /** The lit pip. Small on purpose: a pilot light, not a lamp. */
     coreRadius: 0.03,
-    coreDepth: 0.008,
-    coreZ: -0.076,
+    coreDepth: 0.006,
+    coreZ: -0.08,
     segments: 24,
   },
 } as const
@@ -713,8 +759,16 @@ const RIBBON_EULER = /*@__PURE__*/ new Euler()
  *
  * Each step rotates by its segment's share of that segment's angle and then
  * advances one `stepLength` down the new -Y, so the total rotation accumulated
- * over `stepsPerSegment` steps is exactly the segment's own angle and the tip's
- * total sweep is exactly the sum of the four. Distributing the rotation along
+ * over `stepsPerSegment` steps is the segment's own angle and the tip's total sweep
+ * is the sum of the four.
+ *
+ * "Exactly", for the pitch alone. Rotations about X and Z do not commute, so with a
+ * non-zero roll the composed frame picks up a little spurious yaw: at the peak roll
+ * of 0.068 rad per segment the accumulated frame reads x 0.848, y -0.108, z -0.243
+ * against a nominal x 0.856, z -0.274, about 6 degrees of yaw. That is not a
+ * regression introduced here - the drift goes as `N^2 * alpha * beta` with both
+ * angles proportional to `1/N`, so the four-joint chain this replaces had the same
+ * drift to leading order - and with `rz` at zero the pitch is exact to 1e-16. Distributing the rotation along
  * the segment rather than applying it at the joint is the whole difference
  * between an arc and the staircase: with equal angles the result is a
  * constant-curvature arc, which is what a cape streaming behind a runner

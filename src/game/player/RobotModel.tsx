@@ -106,7 +106,11 @@ export function RobotModel({
     every frame, so two characters sharing one would fight over the same vertices.
     Built here rather than inside the `Cape` part so it survives the cosmetic being
     unequipped and re-equipped without a fresh GPU allocation, and so the part
-    stays a pure description of what the cape is made of.
+    stays a pure description of what the cape is made of. The cost of that choice
+    is that a character with no cape still allocates the ribbon: 416 vertices, about
+    10 kB of CPU arrays and no GPU upload at all until something renders it. Paid
+    knowingly, because the alternative is building a geometry inside the frame in
+    which a player equips something.
 
     `useMemo` with no dependencies rather than `useRef`, because it is a pure
     construction and React may not call it twice for the same mount.

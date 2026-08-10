@@ -543,14 +543,32 @@ describe('the blue oval under each sole', () => {
   })
 
   /*
-    The sole plane is y = 0 in world space by construction - `REST.footL.y` is
-    chosen so it lands there - so a pad flush with the sole is coplanar with the
-    ground and z-fights. A millimetre of recess is the only version with no
-    failure mode.
+    THE REGRESSION THIS BLOCK EXISTS FOR, and it is one this stream committed
+    itself before catching it.
+
+    The first version of the pad sat 0.001 ABOVE the sole plane, to avoid z-fighting
+    with the ground. The foot is a SOLID `RoundedBox` spanning y -0.085 to 0.085, so
+    that put the pad from -0.084 to -0.072 - entirely inside opaque rubber, visible
+    from nowhere, at no time. The test that shipped with it asserted
+    `0 < lift < 0.005`, which is precisely the range that buries it: it pinned the
+    defect instead of catching it.
+
+    A recess only reads if something is cut out of the housing, and nothing here
+    cuts. So the pad must break the foot's own surface, and that is what is asserted
+    now - against the foot's real extent rather than against a tolerance.
   */
-  it('sits clear of the ground plane rather than flush with it', () => {
-    expect(SOLE_LIGHT.lift).toBeGreaterThan(0)
-    expect(SOLE_LIGHT.lift).toBeLessThan(0.005)
+  it('protrudes through the sole rather than being buried inside the foot', () => {
+    const soleY = -0.17 / 2
+    const padBottom = soleY - SOLE_LIGHT.proud
+    const padTop = padBottom + SOLE_LIGHT.thickness
+    // Below the foot's own surface, so it can be seen at all.
+    expect(padBottom).toBeLessThan(soleY)
+    expect(SOLE_LIGHT.proud).toBeGreaterThan(0.002)
+    // And still buried enough to read as moulded into the foot rather than stuck on.
+    expect(padTop).toBeGreaterThan(soleY)
+    expect(padTop - soleY).toBeGreaterThan(0.004)
+    // Not so proud that it becomes a stilt the character stands on.
+    expect(SOLE_LIGHT.proud).toBeLessThan(0.01)
   })
 })
 
@@ -625,20 +643,43 @@ describe('the circular port on the back of the pack', () => {
   })
 
   /*
-    The ordering that decides whether this reads as a lit pip in a recess or as a
-    dark disc over a light. Every one of the three has to stand proud of the pack,
-    and the bezel has to be proudest with the core inside it and the well behind
-    the core - all three of which are a clean frame either way.
+    THE OTHER REGRESSION THIS STREAM COMMITTED AND THEN CAUGHT.
+
+    The first version put the bezel proudest with the well and core nested 0.002
+    behind it, which is what "a lit pip inside a recess" sounds like it wants. But
+    `cylinderGeometry` builds a SOLID disc, not a ring, so a 0.050 well and a 0.030
+    core both inside the bezel's radius and inside its z span were completely
+    enclosed by it: the whole port rendered as one plain copper disc. The test that
+    shipped with it asserted `bezelFront < coreFront < wellFront`, which is exactly
+    the nesting that hides them - the second test in this diff to pin a defect rather
+    than catch it, and the same mistake as the sole pad in a different axis.
+
+    Concentric rings out of solid discs come from stacking OUTWARD. Each disc is
+    smaller than the one behind it and stands slightly proud of it, so what stays
+    visible of each is the annulus its successor does not cover.
   */
-  it('stacks bezel in front of core in front of well, all proud of the pack', () => {
-    const bezelFront = port.bezelZ - port.bezelDepth / 2
-    const coreFront = port.coreZ - port.coreDepth / 2
-    const wellFront = port.wellZ - port.wellDepth / 2
-    expect(bezelFront).toBeLessThan(rearFace)
-    expect(coreFront).toBeLessThan(rearFace)
-    expect(wellFront).toBeLessThan(rearFace)
-    expect(bezelFront).toBeLessThan(coreFront)
-    expect(coreFront).toBeLessThan(wellFront)
+  it('stacks the three discs outward so each leaves an annulus visible', () => {
+    const front = (z: number, d: number) => z - d / 2
+    const back = (z: number, d: number) => z + d / 2
+    const bezelF = front(port.bezelZ, port.bezelDepth)
+    const wellF = front(port.wellZ, port.wellDepth)
+    const coreF = front(port.coreZ, port.coreDepth)
+
+    // Every ring breaks the pack's surface.
+    for (const f of [bezelF, wellF, coreF]) expect(f).toBeLessThan(rearFace)
+
+    // Each is strictly PROUD of the one behind it, or it is invisible.
+    expect(wellF).toBeLessThan(bezelF)
+    expect(coreF).toBeLessThan(wellF)
+    expect(bezelF - wellF).toBeGreaterThan(0.002)
+    expect(wellF - coreF).toBeGreaterThan(0.002)
+
+    // And each is still ANCHORED behind its predecessor's front face, so the stack
+    // reads as one moulded boss rather than as three floating coins.
+    expect(back(port.wellZ, port.wellDepth)).toBeGreaterThan(bezelF)
+    expect(back(port.coreZ, port.coreDepth)).toBeGreaterThan(wellF)
+    // The bezel itself is anchored in the pack.
+    expect(back(port.bezelZ, port.bezelDepth)).toBeGreaterThan(rearFace)
   })
 
   /*
@@ -655,7 +696,9 @@ describe('the circular port on the back of the pack', () => {
   */
   it('leaves the cape clear of it, since the cape hangs off this face', () => {
     const capeFront = CAPE_PANEL.z + CAPE_PANEL.thickness / 2
-    const portFront = port.bezelZ - port.bezelDepth / 2
+    // The CORE is the outermost ring now that the stack runs outward, so it is the
+    // one the cape has to clear rather than the bezel.
+    const portFront = port.coreZ - port.coreDepth / 2
     expect(capeFront).toBeLessThan(portFront)
     expect(portFront - capeFront).toBeGreaterThan(0.008)
     expect(capeFront).toBeLessThan(rearFace)
@@ -982,6 +1025,40 @@ describe('the cape ribbon', () => {
       (CAPE_PANEL.width / 2) * CAPE_RIBBON.flare - CAPE_PANEL.bevel,
       5,
     )
+  })
+
+  /*
+    The accumulation, asserted exactly rather than inferred from a position.
+
+    The hem cap's normal is the frame's own -Y at the end of the walk, so it is a
+    direct readout of the TOTAL rotation the skin accumulated. That total has to
+    equal the sum of the four spring angles to full precision, and it is the one
+    property the trapezoid frame advance could plausibly have broken: splitting
+    each step's rotation either side of the translation only preserves the total
+    because the two halves still sum to the step's own angle.
+
+    Deliberately driven with four DIFFERENT angles. Four equal ones would pass even
+    if the code read `bends[0]` for every segment, which is exactly the sort of
+    indexing slip that produces a cape bending by a quarter of what it should and
+    no error anywhere.
+  */
+  it('accumulates exactly the sum of the four spring angles', () => {
+    const r = build()
+    const bends = [
+      { rx: 0.11, rz: 0 },
+      { rx: 0.19, rz: 0 },
+      { rx: 0.27, rz: 0 },
+      { rx: 0.33, rz: 0 },
+    ]
+    skinCapeRibbon(r, bends)
+    const theta = bends.reduce((a, b) => a + b.rx, 0)
+    const n = nrm(r)
+    // Rx(theta) applied to (0, -1, 0) is (0, -cos, -sin).
+    expect(n.getX(r.capBottomFirst)).toBeCloseTo(0, 6)
+    expect(n.getY(r.capBottomFirst)).toBeCloseTo(-Math.cos(theta), 5)
+    expect(n.getZ(r.capBottomFirst)).toBeCloseTo(-Math.sin(theta), 5)
+    // And the socket end is still unrotated, so the cape leaves the pack straight.
+    expect(nrm(r).getY(r.capTopFirst)).toBeCloseTo(1, 6)
   })
 
   it('rolls toward -X for a negative rz, which is how the lateral trail reads', () => {
