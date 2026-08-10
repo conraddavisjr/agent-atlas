@@ -147,13 +147,29 @@ export function PostFX() {
           aoSamples={quality.aoSamples}
           denoiseSamples={quality.aoDenoiseSamples}
           /*
-            Half resolution at medium only, which is not a typo in the ladder.
-            It roughly quarters the AO pass's fragment count, and
-            `depthAwareUpsampling` - on by default, stated here because half
-            resolution is what makes it load-bearing - is what stops the
-            upsample bleeding across depth discontinuities and haloing every
-            silhouette. `high` pays full price for the edge quality; `low` has
-            AO off entirely so the flag never reaches a pass.
+            Half resolution at medium AND high now. `depthAwareUpsampling` - on
+            by default, stated here because half resolution is what makes it
+            load-bearing - is what stops the upsample bleeding across depth
+            discontinuities and haloing every silhouette. `low` has AO off
+            entirely so the flag never reaches a pass.
+
+            High used to pay full price "for the edge quality", and measurement
+            does not support the trade. This pass is the single most expensive
+            thing in the frame: at 1660x934, `hub-establishing`, high tier,
+            73.4 fps mean and 50.5 p95 with AO off against 46.3 and 17.9 with it
+            on full-resolution. Two thirds of the p95 frame time, for one
+            effect, against targets of 55 and 45.
+
+            Half resolution measures 48.5 and 31.4, and it is not a quality
+            sacrifice here: the crackle on the character's shell reads 4.98
+            standard deviation half-res against 5.26 full-res, because the
+            depth-aware upsample softens the very sampling pattern that is the
+            artefact. Cheaper and slightly better, so there is nothing to
+            weigh.
+
+            It still does not reach the targets. AO is affordable in this scene
+            only if something else about it changes, and that decision is not
+            this comment's to make.
           */
           halfRes={quality.aoHalfRes}
           depthAwareUpsampling

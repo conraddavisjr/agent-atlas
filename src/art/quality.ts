@@ -491,7 +491,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     chromaticAberration: false,
     colourGrade: true,
     bloomLevels: 8,
-    aoHalfRes: false,
+    aoHalfRes: true,
 
     // Materials and geometry.
     surfaceMapSize: 0,
