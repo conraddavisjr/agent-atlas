@@ -4,6 +4,8 @@ import { Box3, Vector3, type PerspectiveCamera } from 'three'
 import { cameraFrame } from '@/game/camera/cameraFrame'
 import { devBridge } from './devBridge'
 import { VALUE_BANDS, type ValueBand } from '@/art/palette'
+import { useGameStore } from '@/state/gameStore'
+import { LESSONS } from '@/state/lessons'
 import { VANTAGES, type Vantage } from './vantages'
 
 /**
@@ -345,8 +347,67 @@ export function DevHooks() {
         attempts,
         triangles,
         referenceTriangles,
+        /*
+          Reported, not assumed. See `progress()` below: this is the state a
+          vantage does NOT pin, it changes the frame, and it is invisible in
+          every local probe because the difference is confined to the totems and
+          the core node.
+        */
+        progress: progress(),
         ...stats,
       }
+    }
+
+    /**
+     * The progression state a capture was taken at, and a way to pin it.
+     *
+     * This is here because it caught a real error, and it is exactly the class
+     * of error the rest of this file exists to close.
+     *
+     * A vantage pins the camera, the player, the clock, the field of view and
+     * the drawing buffer, on the principle that two captures should differ only
+     * by what actually changed in the rendering. It did not pin PROGRESSION, and
+     * progression changes the frame: four lesson totems switch between `locked`
+     * at display luma 0.383 and `unlocked` at 0.804, and the Core node gains its
+     * completion rings. Those are among the brightest elements in
+     * `hub-establishing`.
+     *
+     * Worse, the state lives in `localStorage`, which is keyed by ORIGIN, so two
+     * dev servers on two ports are two different save files. A round-3 capture
+     * set taken from :5174 with five lessons complete and one from :5185 with
+     * none measured 0.6474 against 0.6368 of whole-frame mean luma and 1.59%
+     * against 2.45% of the frame below 0.20. That is larger than the effect the
+     * two sets were being compared to measure, and it was invisible in all five
+     * local probes used to check them, because the difference is confined to two
+     * objects near the centre of frame.
+     *
+     * **Written through zustand rather than through `localStorage` on purpose.**
+     * The persist middleware hydrates once, when the module is first evaluated,
+     * so setting `localStorage` on a page that has already loaded is silently
+     * overwritten by the next store write and changes nothing. That is exactly
+     * how the wrong state got into a capture set that had explicitly set it.
+     */
+    const progress = () => {
+      const state = useGameStore.getState()
+      return {
+        completedLessons: [...state.completedLessons],
+        of: LESSONS.length,
+        sceneId: state.currentSceneId,
+        spawnId: state.currentSpawnId,
+      }
+    }
+
+    const setProgress = (lessons: 'all' | 'none' | string[] = 'all') => {
+      const ids =
+        lessons === 'all' ? LESSONS.map((l) => l.id) : lessons === 'none' ? [] : [...lessons]
+      const unknown = ids.filter((id) => !LESSONS.some((l) => l.id === id))
+      if (unknown.length > 0) {
+        throw new Error(
+          `unknown lesson ids ${unknown.join(', ')}; have ${LESSONS.map((l) => l.id).join(', ')}`,
+        )
+      }
+      useGameStore.setState({ completedLessons: ids })
+      return progress()
     }
 
     const release = () => {
@@ -759,6 +820,8 @@ export function DevHooks() {
       framing,
       sample,
       pinDpr,
+      progress,
+      setProgress,
       /**
        * Where the camera actually ended up, as opposed to where a vantage asked
        * it to go. The two are not the same question, and only one of them can
