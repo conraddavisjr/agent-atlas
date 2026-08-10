@@ -879,7 +879,28 @@ describe('secondary motion', () => {
     expect(pose.root.sy).toBeGreaterThan(1.1)
   })
 
-  it('drapes the cape and blows it back when moving', () => {
+  /*
+    The fold, and the regression this test used to pin rather than catch.
+
+    It asserted `pose.cape[0].rx` was LESS than `CAPE.hang` at speed, which is
+    exactly the defect: `targetX = hang - localVelZ * drag` and a forward axis of
+    +Z meant a positive rx carried the cape toward -Z, behind, so subtracting a
+    forward velocity swung it FORWARD into the legs. At maxSpeed the chain settled
+    at -1.228 rad, 70.3 degrees in front of straight down, which puts the hem
+    above the feet and in front of the body`s centreline.
+
+    It also asserted that the tip`s LOCAL angle exceeded the root`s, under the
+    comment "the tip trails furthest". That was measuring the wrong quantity: the
+    tip trailing furthest is a statement about the ACCUMULATED angle, which is
+    larger at the tip for any positive chain whatever the locals do. What made the
+    locals grow was `inherit` compounding on top of a full base target, which is
+    the second half of the fold - it inherited the parent`s deflection twice, once
+    free through the transform hierarchy and once again numerically, and it is why
+    a bare sign flip overshoots to 2.296 rad.
+
+    See `CAPE` in `animTuning.ts` for the full derivation.
+  */
+  it('drapes the cape and blows it BACK when moving, not forward', () => {
     const rt = createAnimRuntime(1)
     const pose = createPose()
     const g = createGroundSample()
@@ -887,12 +908,52 @@ describe('secondary motion', () => {
     for (let i = 0; i < 200; i++) stepAnim(rt, still, g, DT, pose)
     // At rest it drapes rather than hanging flat against the back.
     expect(pose.cape[0].rx).toBeCloseTo(CAPE.hang, 2)
+    // And every segment drapes by the same amount, so the rest shape is an arc.
+    for (const seg of pose.cape) expect(seg.rx).toBeCloseTo(CAPE.hang, 2)
 
     const running = state({ grounded: true, speedNorm: 1, velZ: 6, facing: 0 })
-    for (let i = 0; i < 300; i++) stepAnim(rt, running, g, DT, pose)
-    // Each segment inherits from the one above, so the tip trails furthest.
-    expect(pose.cape[0].rx).toBeLessThan(CAPE.hang)
-    expect(Math.abs(pose.cape[3].rx)).toBeGreaterThan(Math.abs(pose.cape[0].rx))
+    for (let i = 0; i < 400; i++) stepAnim(rt, running, g, DT, pose)
+
+    // The sign. Positive rx is behind, so moving forward must INCREASE it.
+    expect(pose.cape[0].rx).toBeGreaterThan(CAPE.hang)
+    for (const seg of pose.cape) expect(seg.rx).toBeGreaterThan(0)
+
+    // The magnitude. 4 * (0.10 + 6.0 * 0.019) = 0.856 rad, 49.0 degrees, which is
+    // the angle the spec and the solver comment have both asked for since the
+    // beginning and which no build has produced.
+    const total = pose.cape.reduce((a, seg) => a + seg.rx, 0)
+    expect(total).toBeCloseTo(0.856, 2)
+    expect((total * 180) / Math.PI).toBeCloseTo(49, 0)
+
+    // Well short of horizontal, which is what a bare sign flip would have given:
+    // 0.430 / 0.581 / 0.633 / 0.652 summing to 2.296 rad, over the head.
+    expect(total).toBeLessThan(Math.PI / 2)
+
+    // `inherit` no longer compounds, so at steady state the four locals are equal
+    // and the chain is a constant-curvature arc.
+    for (const seg of pose.cape) expect(seg.rx).toBeCloseTo(pose.cape[0].rx, 3)
+  })
+
+  /*
+    What `inherit` is still for, now that it contributes nothing at steady state.
+
+    It is a pure error feedback: each segment is dragged by however far its parent
+    currently is from its own target. So a step in speed has to propagate DOWN the
+    chain rather than arrive at all four segments at once, and the tip has to still
+    be behind the root partway through. Without this the term could be deleted
+    outright and the transient would lose its wave.
+  */
+  it('propagates a gust down the chain rather than moving all four at once', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    const still = state({ grounded: true })
+    for (let i = 0; i < 200; i++) stepAnim(rt, still, g, DT, pose)
+
+    const running = state({ grounded: true, speedNorm: 1, velZ: 6, facing: 0 })
+    // Ten frames in: the root has moved further than the tip has.
+    for (let i = 0; i < 10; i++) stepAnim(rt, running, g, DT, pose)
+    expect(pose.cape[0].rx).toBeGreaterThan(pose.cape[3].rx)
   })
 })
 

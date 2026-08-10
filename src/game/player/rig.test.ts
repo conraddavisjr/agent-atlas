@@ -1,14 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import { Object3D, Vector2 } from 'three'
-import { applyPose, createRigRefs, writeVisorUniforms, type RigRefs } from './rig'
+import { applyPose, createCape, createRigRefs, writeVisorUniforms, type RigRefs } from './rig'
 import { createPose, JOINT_KEYS, REST, REST_ROTATION, type JointKey } from './robotPose'
 import { CAPE } from './animTuning'
+import { CAPE_RIBBON } from './robotGeometry'
 
-/** A rig with a real Object3D behind every node. */
+/** A rig with a real Object3D behind every node, and a real cape surface. */
 function fullRig(): RigRefs {
   const rig = createRigRefs()
   for (const key of JOINT_KEYS) rig[key] = new Object3D()
-  rig.cape = [new Object3D(), new Object3D(), new Object3D(), new Object3D()]
+  rig.cape = createCape()
   return rig
 }
 
@@ -69,13 +70,50 @@ describe('applyPose', () => {
     expect(rig.shoulderL!.position.x).toBeCloseTo(REST.shoulderL.x - 0.02, 12)
   })
 
-  it('hangs each cape segment a segment length below its parent', () => {
+  /*
+    The cape is one deforming surface rather than four nested nodes now, so what
+    `applyPose` does with `Pose.cape` is skin it rather than write four transforms.
+    The four springs and the fixed length of four are unchanged; see
+    `CAPE_RIBBON` in `robotGeometry.ts`.
+
+    Asserted through the hem rather than through a node position, because there
+    are no cape nodes left to have a position. The hem has to hang the full chain
+    length below the socket at rest, which is the same invariant the four
+    `-CAPE.segmentLength` offsets used to express.
+  */
+  it('hangs the cape its full chain length below the socket at rest', () => {
     const rig = fullRig()
     applyPose(createPose(), rig)
-    expect(rig.cape[0]!.position.y).toBe(0)
-    for (let i = 1; i < 4; i++) {
-      expect(rig.cape[i]!.position.y).toBeCloseTo(-CAPE.segmentLength, 12)
-    }
+    const p = rig.cape!.geometry.getAttribute('position')
+    // To 6 places and not 12: a position attribute is a Float32Array, so -0.72
+    // comes back as -0.7200000286. Every other assertion in this file is on an
+    // Object3D, where the numbers are doubles.
+    expect(p.getY(rig.cape!.capBottomFirst)).toBeCloseTo(
+      -CAPE.segmentLength * CAPE_RIBBON.segments,
+      6,
+    )
+    expect(p.getY(rig.cape!.capTopFirst)).toBeCloseTo(0, 6)
+  })
+
+  it('drives the cape surface from the pose rather than leaving it at rest', () => {
+    const rig = fullRig()
+    const pose = createPose()
+    applyPose(pose, rig)
+    const restZ = rig.cape!.geometry.getAttribute('position').getZ(rig.cape!.capBottomFirst)
+
+    for (const seg of pose.cape) seg.rx = 0.214
+    applyPose(pose, rig)
+    const bentZ = rig.cape!.geometry.getAttribute('position').getZ(rig.cape!.capBottomFirst)
+    // Behind, because a positive rx trails a hanging segment toward -Z.
+    expect(bentZ).toBeLessThan(restZ)
+  })
+
+  it('skips a missing cape without throwing, since the springs run regardless', () => {
+    const rig = createRigRefs()
+    expect(rig.cape).toBeNull()
+    const pose = createPose()
+    for (const seg of pose.cape) seg.rx = 0.5
+    expect(() => applyPose(pose, rig)).not.toThrow()
   })
 
   it('skips null nodes without throwing', () => {

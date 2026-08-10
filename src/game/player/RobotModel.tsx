@@ -1,11 +1,12 @@
-import { useRef, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { useQuality } from '@/art/useQuality'
+import type { QualitySettings } from '@/art/quality'
 import {
   AntennaLower,
   AntennaUpper,
   Backpack,
-  CapeSegment,
+  CapeSurface,
   ChestPanel,
   Diaper,
   EarPod,
@@ -13,8 +14,8 @@ import {
   Foot,
   Hand,
   HandProp,
+  HeadCap,
   HeadShell,
-  Helmet,
   Shin,
   Torso,
   UpperArm,
@@ -27,28 +28,39 @@ import {
   type Pose,
   type Vec3,
 } from './robotPose'
-import { CAPE } from './animTuning'
 import { RobotFace } from './RobotFace'
-import { applyPose, createRigRefs, type RigRefs } from './rig'
+import { applyPose, createCape, createRigRefs, type RigRefs } from './rig'
 import type { RobotAnimState } from './robotAnim'
 import type { SocketName } from '@/state/types'
 
 /**
  * The robot, built entirely from primitives.
  *
- * Design intent, and the reason it does not resemble Astro: a rounded boxy head
- * with a single horizontal cyan visor bar on a near-black plate, a warm amber
- * accent on an off-white shell, and an off-centre antenna. Specifically avoided
- * are the chrome sphere head, the two round blue eyes, and the blue-and-white
- * livery, all of which are the recognisable marks of that character.
+ * ## The identity goal has been reversed on purpose
  *
- * What we borrow is the principle rather than the design. A compact frame with
- * a low centre of gravity, and locomotion that reads as a toddler's waddle. The
- * proportions are the whole of it: 1.36 m over a 0.54 m head is 2.52
- * head-heights, and the head at 0.72 wide is 1.16 times the widest band below
- * the neck. A head wider than the torso at every height is what makes a shape
- * read as an infant rather than as a short adult, and it matters more than the
- * head-height ratio does.
+ * This comment used to open "Design intent, and the reason it does not resemble
+ * Astro", and list the chrome sphere head, the two round blue eyes and the
+ * blue-and-white livery as "specifically avoided". All three are now built
+ * deliberately, and the same reversal applies to `palette.ts`'s header, to
+ * `05-character-vfx.md` section 7 and to the long argument in `RobotFace.tsx`
+ * about why a bar carries more range than two panels.
+ *
+ * The decision on record is to clone the reference's look one-to-one. So: a blue
+ * helmet dome with a copper cap on the back of the head, two round cyan lenses on
+ * a near-black faceplate, an off-white body, blue bands on white limbs, a lit
+ * circle on the back and a lit oval under each sole.
+ *
+ * **The antenna is the one thing that is ours and it stays.** It is the only
+ * asymmetric feature on the model - off-centre at x 0.200 - and asymmetry is what
+ * separates a character from a product shot. It is also the most visible piece of
+ * secondary motion on the build.
+ *
+ * What was already borrowed and did not change: a compact frame with a low centre
+ * of gravity, and locomotion that reads as a toddler's waddle. The proportions are
+ * the whole of it: 1.36 m over a 0.54 m head is 2.52 head-heights, and the head at
+ * 0.72 wide is 1.16 times the widest band below the neck. A head wider than the
+ * torso at every height is what makes a shape read as an infant rather than as a
+ * short adult, and it matters more than the head-height ratio does.
  *
  * This component is the rig and nothing else: which node parents which, and
  * which ref goes where. What the parts are made of is `robotParts.tsx`, the
@@ -86,6 +98,46 @@ export function RobotModel({
   const rigRef = useRef<RigRefs | null>(null)
   if (rigRef.current === null) rigRef.current = createRigRefs()
 
+  /*
+    The cape's deformable surface, one instance per mounted character.
+
+    NOT a module constant, unlike every other generated geometry in
+    `robotParts.tsx`: `skinCapeRibbon` mutates its position and normal buffers
+    every frame, so two characters sharing one would fight over the same vertices.
+    Built here rather than inside the `Cape` part so it survives the cosmetic being
+    unequipped and re-equipped without a fresh GPU allocation, and so the part
+    stays a pure description of what the cape is made of.
+
+    `useMemo` with no dependencies rather than `useRef`, because it is a pure
+    construction and React may not call it twice for the same mount.
+
+    ## The StrictMode question, asked because this file's neighbours have all been
+    ## cut by it
+
+    `main.tsx` renders under `StrictMode`, which mounts effects, tears them down
+    and mounts them again. So the cleanup below DOES run once in dev while the
+    geometry is still mounted and still being rendered, and the obvious fear is a
+    disposed geometry on screen.
+
+    Checked against three's own source rather than assumed, because the answer
+    decides whether this needs a guard. `onGeometryDispose` at
+    `three.module.js:4223` removes the attribute buffers, deletes the geometry from
+    its registry, releases its VAO through
+    `bindingStates.releaseStatesOfGeometry`, and removes its own listener.
+    `WebGLGeometries.get` then re-registers the listener on the next frame, and
+    `WebGLAttributes.update` at line 242 re-creates any buffer whose map entry is
+    missing rather than throwing. Dispose followed by continued rendering is
+    therefore SELF-HEALING: it costs one 10 kB re-upload in dev and produces no
+    wrong frame.
+
+    So this stays a plain dispose with no guard. What it buys is the real case: a
+    scene transition unmounts the character for good, and without it three keeps
+    the GL buffers forever because a garbage-collected `BufferGeometry` does not
+    free them.
+  */
+  const cape = useMemo(() => createCape(), [])
+  useEffect(() => () => cape.geometry.dispose(), [cape])
+
   useFrame((_, delta) => {
     // Clamp delta so a background tab that resumes after a long pause does not
     // advance the walk cycle by a huge step and snap the limbs. Clamped here
@@ -111,12 +163,26 @@ export function RobotModel({
 
           {/* Back socket, for the cape. Coincident with the backpack, which is
               what the cape hangs off. */}
-          <group position={at(REST.capeRoot)}>{cosmetics.back === 'cape' && <Cape rigRef={rigRef} />}</group>
+          <group position={at(REST.capeRoot)}>
+            {cosmetics.back === 'cape' && (
+              <group
+                /*
+                  The ribbon is registered on the rig here rather than in the part,
+                  and it is nulled on unmount by the same callback. `applyPose`
+                  guards on it, so an unequipped cape is four springs still running
+                  into nothing rather than a crash.
+                */
+                ref={(o) => void (rigRef.current!.cape = o ? cape : null)}
+              >
+                <CapeSurface ribbon={cape} />
+              </group>
+            )}
+          </group>
 
-          <Arm side="L" rigRef={rigRef}>
+          <Arm side="L" rigRef={rigRef} quality={quality}>
             {cosmetics.hand_l ? <HandProp /> : <Hand quality={quality} />}
           </Arm>
-          <Arm side="R" rigRef={rigRef}>
+          <Arm side="R" rigRef={rigRef} quality={quality}>
             {cosmetics.hand_r ? <HandProp /> : <Hand quality={quality} />}
           </Arm>
 
@@ -125,6 +191,7 @@ export function RobotModel({
           <group ref={(o) => void (rigRef.current!.neck = o)} position={at(REST.neck)}>
             <group ref={(o) => void (rigRef.current!.head = o)} position={at(REST.head)}>
               <HeadShell quality={quality} />
+              <HeadCap />
               <Face pose={pose} detail={quality.visorDetail} />
 
               <EarPodNode side="L" rigRef={rigRef} />
@@ -137,13 +204,34 @@ export function RobotModel({
                 </group>
               </group>
 
-              {/* Head socket, for the helmet earned after the first zone.
+              {/* Head socket, deliberately empty. `Helmet` is deleted; see the
+                  block comment in `robotParts.tsx` for the three measurements that
+                  removed it and why nothing replaces it yet.
 
-                  Created unconditionally, and that is load-bearing: a socket group
-                  that only exists once its cosmetic is earned changes the child
-                  order of everything below it, so the pose would start landing in
-                  the wrong nodes at the exact moment a player unlocked something. */}
-              <group position={[0, 0.3, 0]}>{cosmetics.head === 'helmet' && <Helmet />}</group>
+                  ## The justification this comment used to carry is false
+
+                  It read: "Created unconditionally, and that is load-bearing: a
+                  socket group that only exists once its cosmetic is earned changes
+                  the child order of everything below it, so the pose would start
+                  landing in the wrong nodes at the exact moment a player unlocked
+                  something."
+
+                  That is not true of this rig and never was. Every ref is assigned
+                  by a per-element callback that names its field - `rigRef.current.head
+                  = o` - so child order is not read anywhere, and `applyPose` iterates
+                  `JOINT_KEYS` and writes named fields rather than walking children by
+                  index. A conditional socket group is therefore harmless here.
+
+                  Where the claim DOES come from is `05-character-vfx.md` lines
+                  219-220, which states it as a rule for the rig it was proposing.
+                  That rig presumably resolved nodes positionally. Ours does not, so
+                  the rule was inherited from a design that no longer exists.
+
+                  The group stays anyway, on a weaker but real justification: the
+                  socket's position is a contract the cosmetic system depends on, and
+                  keeping it in the tree unconditionally keeps that contract visible
+                  in one place instead of only existing while something is equipped. */}
+              <group position={[0, 0.3, 0]} />
             </group>
           </group>
         </group>
@@ -170,9 +258,12 @@ function at(v: Vec3): [number, number, number] {
  * glass, and it is the surface that carries more of this character's identity
  * than anything else on it.
  *
- * The bar sits 0.027 m below the plate's centre, which is 57% of the way down
+ * The lenses sit 0.027 m below the plate's centre, which is 57% of the way down
  * it. Low on the face is the infantile placement and it is not a detail: eyes
- * at the vertical centre read as an adult on any head shape.
+ * at the vertical centre read as an adult on any head shape. That number is the
+ * one thing about the face this pass did NOT change - the bar and the two lenses
+ * that replaced it are centred at exactly the same height, which is inside the
+ * reference brief's measured 55-60% either way.
  */
 function Face({
   pose,
@@ -206,10 +297,12 @@ function EarPodNode({ side, rigRef }: { side: 'L' | 'R'; rigRef: RefObject<RigRe
 function Arm({
   side,
   rigRef,
+  quality,
   children,
 }: {
   side: 'L' | 'R'
   rigRef: RefObject<RigRefs | null>
+  quality: QualitySettings
   children?: React.ReactNode
 }) {
   return (
@@ -217,7 +310,7 @@ function Arm({
       ref={(o) => void (side === 'L' ? (rigRef.current!.shoulderL = o) : (rigRef.current!.shoulderR = o))}
       position={at(side === 'L' ? REST.shoulderL : REST.shoulderR)}
     >
-      <UpperArm />
+      <UpperArm quality={quality} />
       <group
         ref={(o) => void (side === 'L' ? (rigRef.current!.handSocketL = o) : (rigRef.current!.handSocketR = o))}
         position={at(side === 'L' ? REST.handSocketL : REST.handSocketR)}
@@ -257,29 +350,3 @@ function Leg({ side, rigRef }: { side: 'L' | 'R'; rigRef: RefObject<RigRefs | nu
   )
 }
 
-/**
- * The cape, as a four-segment chain rather than one plane.
- *
- * A skinned cape would need weights, which would need authoring, which would
- * need a binary asset this project does not have. A chain of rigid quads each
- * driven by its own spring gives more controllable secondary motion for less
- * work, and it is the correct read anyway: this world replaces cloth with
- * vinyl, so visible joins between rigid panels are the point rather than a
- * compromise.
- */
-function Cape({ rigRef }: { rigRef: RefObject<RigRefs | null> }) {
-  return (
-    <group ref={(o) => void (rigRef.current!.cape[0] = o)}>
-      <CapeSegment length={CAPE.segmentLength} />
-      <group ref={(o) => void (rigRef.current!.cape[1] = o)}>
-        <CapeSegment length={CAPE.segmentLength} />
-        <group ref={(o) => void (rigRef.current!.cape[2] = o)}>
-          <CapeSegment length={CAPE.segmentLength} />
-          <group ref={(o) => void (rigRef.current!.cape[3] = o)}>
-            <CapeSegment length={CAPE.segmentLength} />
-          </group>
-        </group>
-      </group>
-    </group>
-  )
-}

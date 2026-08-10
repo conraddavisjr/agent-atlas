@@ -1103,22 +1103,42 @@ export function stepAnim(
   out.earPodR.rx = rt.springs.earPod[1].x
 
   /*
-    Cape, four segments, each inheriting some of its parent's deflection.
+    Cape, four segments, each dragged by however far its parent is from ITS own
+    target.
 
-    Gravity drapes it, the body's own motion in its local frame blows it back,
-    and each segment picks up a third of the one above. At full speed the drag
-    target is 0.33 rad on the first segment and accumulates to about 0.85 at the
-    tip, so it streams back at roughly 49 degrees.
+    Gravity drapes it and the body's own motion in its local frame blows it back.
+    At full speed every segment settles at 0.214 rad, accumulating to 0.856 at
+    the tip, so it streams back at 49.0 degrees. The full derivation, the fold
+    this replaces and why a bare sign flip overshoots to 131 degrees are all in
+    `CAPE`'s doc comment in `animTuning.ts`.
+
+    Two sign facts, because this line was wrong for both of them and the second
+    one is what makes the first look wrong:
+
+      - Forward at `rotation.y = 0` is +Z, and a positive `rx` carries a
+        downward-hanging segment toward -Z. So trailing behind forward motion is
+        `+ localVelZ`, and the `-` that shipped swung the cape into the legs.
+      - `targetZ` keeps its minus and that is correct, not inconsistent. A
+        positive `rz` carries the same segment toward +X, the opposite handedness
+        to the X case, so the two terms need opposite signs to express the same
+        "trail behind the motion".
+
+    `base` is computed once outside the loop rather than per segment, which is
+    what makes the inherit term a pure error feedback: subtracting `base` from the
+    parent's state leaves only its deviation, so the term vanishes at steady state
+    and the chain settles into a constant-curvature arc instead of compounding.
   */
   const cosF = Math.cos(-finite(s.facing))
   const sinF = Math.sin(-finite(s.facing))
   const localVelZ = finite(s.velX) * -sinF + finite(s.velZ) * cosF
   const localVelX = finite(s.velX) * cosF + finite(s.velZ) * sinF
+  const capeBaseX = CAPE.hang + localVelZ * CAPE.drag
+  const capeBaseZ = -localVelX * CAPE.drag * 0.6
   for (let i = 0; i < 4; i++) {
     const seg = rt.springs.cape[i]
-    const inherit = i === 0 ? 0 : rt.springs.cape[i - 1].x * CAPE.inherit
-    seg.targetX = CAPE.hang - localVelZ * CAPE.drag + inherit
-    seg.targetZ = -localVelX * CAPE.drag * 0.6
+    const inherit = i === 0 ? 0 : (rt.springs.cape[i - 1].x - capeBaseX) * CAPE.inherit
+    seg.targetX = capeBaseX + inherit
+    seg.targetZ = capeBaseZ
     const k = CAPE_SPRINGS[i]
     stepSpring2(seg, k.omega, k.zeta, step)
     out.cape[i].rx = seg.x

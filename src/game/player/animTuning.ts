@@ -227,16 +227,110 @@ export const EAR_POD = {
   landImpulse: 5,
 } as const
 
-/** The four-segment cape chain. */
+/**
+ * The four-segment cape chain.
+ *
+ * ## The fold, and the arithmetic that found it
+ *
+ * `robotPose.ts` used to compute `targetX = hang - localVelZ * drag + inherit`,
+ * and the minus sign was backwards. The forward axis at `rotation.y = 0` is +Z -
+ * `headingVector` returns `(sin f, cos f)`, the art bible's section 6 states it,
+ * and `05-character-vfx.md` line 108 states it again - and a positive `rx`
+ * carries a downward-hanging segment toward -Z, which is BEHIND. So subtracting
+ * a forward velocity swung the cape FORWARD, into the character's own legs.
+ *
+ * At `MOVEMENT.maxSpeed` of 6.0 the old chain settled at local angles
+ * -0.230 / -0.311 / -0.339 / -0.349 rad, a total sweep of **-1.228 rad, 70.3
+ * degrees in front of straight down**. Integrating that as a polyline of four
+ * 0.18 links puts the hem at chest-local (0, -0.505, +0.442), which after the
+ * socket's own offset is world (0, 0.295, +0.057): directly above the feet and
+ * in front of the body's centreline. The cape was not brushing the legs, it was
+ * hanging through the diaper and out the front.
+ *
+ * Three independent things say this was a bug rather than a choice. The roll term
+ * on the very next line uses the OPPOSITE convention and is correct, because a
+ * rotation about Z carries the same segment toward +X while a rotation about X
+ * carries it toward -Z - both are "trail behind the motion" and the signs
+ * therefore differ. The doc comment above the loop describes the intended first
+ * segment as **positive** 0.33. And the design spec ships the same defect twice
+ * over: its pseudocode comments its own `gravityTarget` as "expressed as a
+ * positive rx" and then writes `dragTarget = -localVel.z * CAPE.drag` under the
+ * comment "blows back when moving forward", which cannot both be true.
+ *
+ * ## Why a bare sign flip is not the fix
+ *
+ * Flipping the sign and changing nothing else gives 0.430 / 0.581 / 0.633 / 0.652
+ * for a total of **2.296 rad, 131.6 degrees** - past horizontal, over the
+ * character's own head. The old `drag` was never sized against a correct sign.
+ *
+ * Both halves are fixed. `inherit` stops compounding (see below), so the four
+ * local angles become equal and the total is `4 * (hang + v * drag)`. Solving for
+ * the 0.85 rad the doc comment has always asked for:
+ *
+ *     4 * (0.10 + 6.0 * drag) = 0.85  ->  drag = 0.01875
+ *
+ * `0.019` is taken rather than `0.01875`, giving a total of **0.856 rad, 49.0
+ * degrees**, which is the "roughly 49 degrees" that has been written down since
+ * the spec and never once produced.
+ *
+ * Steady-state local angles, at rest and at full speed:
+ *
+ *     rest   0.100 each, accumulating 0.100 / 0.200 / 0.300 / 0.400  (22.9 deg)
+ *     6 m/s  0.214 each, accumulating 0.214 / 0.428 / 0.642 / 0.856  (49.0 deg)
+ *
+ * so the speed-driven travel is 0.456 rad, 26.1 degrees. That is the steady state
+ * only: `zeta` is 0.30 to 0.34, so a step of that size overshoots by about a
+ * third, and `landImpulse` injects 3 rad/s on top.
+ */
 export const CAPE = {
-  /** Rest droop, so it drapes rather than hanging flat against the back. */
+  /** Rest droop per segment, so it drapes rather than hanging flat against the back. */
   hang: 0.1,
-  /** Drag against the body's own motion, s/m. At 6 m/s the tip streams back about 49 degrees. */
-  drag: 0.055,
-  /** How much of its parent's deflection each segment inherits. */
+  /**
+   * Drag against the body's own motion, s/m.
+   *
+   * 0.019 and not the 0.055 that shipped. See the block comment: 0.055 was
+   * chosen against a sign that swung the cape forwards, so it had never been
+   * sized against the angle it was supposed to produce.
+   */
+  drag: 0.019,
+  /**
+   * How much of its parent's ERROR each segment inherits.
+   *
+   * The distinction is the second half of the fold fix. This used to be
+   * `parent.x * inherit` added on top of a full base target, which inherits the
+   * parent's deflection TWICE: once for free, because each segment is a child of
+   * the one above it and the transform hierarchy already carries the parent's
+   * rotation, and once again numerically. The steady state compounded to
+   * `base * (1 + k + k^2 + k^3)` per segment and `5.338 * base` in total, which
+   * is what made a correct sign overshoot to 131 degrees.
+   *
+   * It is now `(parent.x - base) * inherit`, the parent's deviation from where it
+   * is heading. At steady state that term is exactly zero, so the four local
+   * angles are equal and the cape settles into a constant-curvature arc - which
+   * is what a cape streaming behind a runner actually is, and what the old
+   * compounding form could not produce: increasing local angles down the chain
+   * curl it into a scroll.
+   *
+   * During a transient it is not zero, and that is the whole reason to keep it:
+   * each segment is dragged by however far its parent currently is from its own
+   * target, so a gust or a landing propagates down the chain as a wave instead of
+   * arriving at all four segments at once. The value is unchanged because what it
+   * means in a transient is unchanged.
+   */
   inherit: 0.35,
   /** Length of one segment, metres. */
   segmentLength: 0.18,
+  /**
+   * Landing kick, rad/s into each segment's velocity.
+   *
+   * Negative, and it stays negative now that the drag sign is fixed, which is
+   * worth stating because the two now point opposite ways on purpose. Drag pushes
+   * the cape back; this pulls it toward flat and past. On impact the body stops
+   * and the cape's own downward momentum carries it on down, so it slaps in
+   * toward the legs and springs back out. At omega 9.5 that peaks near 0.32 rad
+   * of local swing, taking the first segment from 0.100 to about -0.2, so the hem
+   * moves 0.14 m forward and stops 0.157 clear of the back of the shin.
+   */
   landImpulse: -3,
 } as const
 

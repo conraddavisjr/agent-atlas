@@ -13,6 +13,7 @@ import {
   monolithArc,
   orthoTrace,
   pathLength,
+  pathVerticalRuns,
   spurTraceCorners,
   traceSegments,
   trunkTraceCorners,
@@ -168,6 +169,62 @@ describe('the trace routes', () => {
     const trunk = orthoTrace(trunkTraceCorners())
     const segments = traceSegments(pathLength(trunk), 64)
     expect(pathLength(trunk) / segments).toBeLessThan(TRACE.chamfer)
+  })
+
+  /*
+    The routes are now watercourses, and water only runs one way.
+
+    `waterMaterial.ts` advects its wave field toward decreasing `uv.x`, and `uv.x`
+    runs from the first authored corner to the last, so that is downhill only
+    while every route climbs monotonically as authored. It does today: a spur
+    climbs from its totem plinth at y 0.44 to the junction at 1.24, and the trunk
+    climbs from the junction at 1.24 to the threshold pad at 2.84. One sign
+    therefore serves the whole network - the arch is the single spring, the four
+    totems are the outfalls, and the junction pad is a basin mid-slope.
+
+    A reroute that dropped one corner below the one before it would leave water
+    visibly running uphill along part of that route, with nothing in the shader,
+    the material or the geometry to blame. Checked here rather than read.
+  */
+  it('climbs monotonically on both routes, so one flow direction is downhill on all of them', () => {
+    const trunk = pathVerticalRuns(trunkTraceCorners())
+    expect(trunk.down).toBe(0)
+    // Four risers of 0.40 from the junction pad to the threshold pad.
+    expect(trunk.up).toBeCloseTo(1.6, 9)
+
+    const spur = pathVerticalRuns(spurTraceCorners())
+    expect(spur.down).toBe(0)
+    // Two risers of 0.40, from the totem plinth up to the junction.
+    expect(spur.up).toBeCloseTo(0.8, 9)
+  })
+
+  /*
+    And it survives mitring and densifying, which is what the shader actually
+    sees. `chamferCorners` cuts each corner back along both neighbours, so a
+    vertical leg shorter than twice the chamfer could in principle be cut into a
+    descent; the clamp to 45% of the shorter neighbour is what prevents it, and
+    this is the assertion that the clamp is doing that job on these two routes.
+  */
+  it('still climbs monotonically after mitring and densifying', () => {
+    expect(pathVerticalRuns(orthoTrace(trunkTraceCorners())).down).toBeLessThan(1e-12)
+    expect(pathVerticalRuns(orthoTrace(spurTraceCorners())).down).toBeLessThan(1e-12)
+  })
+})
+
+describe('pathVerticalRuns', () => {
+  it('separates climb from fall rather than reporting net rise', () => {
+    const zigzag: Point3[] = [
+      [0, 0, 0],
+      [0, 1, 0],
+      [0, 0.25, 0],
+      [0, 1.5, 0],
+    ]
+    expect(pathVerticalRuns(zigzag)).toEqual({ up: 2.25, down: 0.75 })
+  })
+
+  it('reports nothing for a flat path or a path of one point', () => {
+    expect(pathVerticalRuns([[0, 2, 0], [5, 2, 0]])).toEqual({ up: 0, down: 0 })
+    expect(pathVerticalRuns([[0, 2, 0]])).toEqual({ up: 0, down: 0 })
   })
 })
 

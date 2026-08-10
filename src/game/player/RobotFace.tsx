@@ -8,41 +8,76 @@ import { writeVisorUniforms } from './rig'
 import type { Pose } from './robotPose'
 
 /**
- * The visor: one continuous horizontal cyan slot with two hotter cores inside
- * it, drawn as a signed distance field.
+ * The face: two round cyan lenses on the dark plate, drawn as a signed distance
+ * field.
  *
- * The identity problem this solves is worth stating, because the obvious answer
- * is the one this project has committed in writing to avoiding. The reference
- * brief describes two rounded-rect LED panels one eye-width apart, which is
- * exactly the mark of the character `palette.ts` and `RobotModel.tsx` both say
- * we do not copy. The resolution is not to make the eyes worse, it is to carry
- * the same expressive range on a different form.
+ * ## This file used to argue the opposite, at length, and the argument is kept
  *
- * So the bar is always present and never goes dark. Expression lives in the
- * intensity profile along the slot rather than in two isolated glyphs: the
- * cores change shape, arch and width, and the bar between and around them
- * stays lit. Close this character's eyes and there is still a cyan line. The
- * reference's character loses its eyes on a blink and this one does not, and
- * that difference is the whole point.
+ * What was here was one continuous horizontal stadium with two hotter cores
+ * inside it, and the reasoning was not lazy - it was the project's stated
+ * identity constraint, written down in four places: `palette.ts`'s header,
+ * `RobotModel.tsx`'s opening comment, `05-character-vfx.md` section 7, and a
+ * test in `robotGeometry.test.ts` called "keeps the bar lit through a full blink".
+ * The argument ran:
  *
- * It also gives MORE range than two panels rather than less, because the bar
- * itself is a channel: its thickness, its arc and the gradient along it are all
- * expressive, and none of that is available to a design made of two shapes.
+ * > The reference brief describes two rounded-rect LED panels one eye-width
+ * > apart, which is exactly the mark of the character we do not copy. The
+ * > resolution is not to make the eyes worse, it is to carry the same expressive
+ * > range on a different form. So the bar is always present and never goes dark.
+ * > Close this character's eyes and there is still a cyan line. The reference's
+ * > character loses its eyes on a blink and this one does not, and that
+ * > difference is the whole point.
+ *
+ * **The decision on record is now to clone the reference one-to-one**, so the bar
+ * is gone and its consequence is accepted rather than mitigated: at `openL` 0.06
+ * the lens collapses to 0.129 m by 0.004 m and the face does effectively go dark
+ * through a blink. That is what the reference does.
+ *
+ * One claim from the old argument is worth keeping because it was true and is now
+ * a cost rather than a benefit: a bar has channels two shapes do not - its
+ * thickness, its arc and the gradient along it are all expressive. Two lenses
+ * have `open`, `arch`, `width`, gaze and brightness, which is the whole of the
+ * six-expression table in `05-character-vfx.md` and every one of them still
+ * drives something here, so nothing in `solveFace` is orphaned. But the range is
+ * narrower and that is a real trade, not a wash.
+ *
+ * ## The core is a falloff, not a second shape
+ *
+ * The reference's LEDs are always a bright core inside a darker housing, and the
+ * art bible's section 1 is emphatic that a single flat emissive surface reads as
+ * bright plastic rather than as a light. The bar version paid for that with a
+ * second SDF per eye plus a clip.
+ *
+ * Here the core is a radial ramp about the gaze point, normalised by the lens's
+ * own half-extents, so it costs one `length` instead of one `sdRoundBox` and it
+ * squashes WITH the lens on a blink rather than staying a round hotspot inside a
+ * slit. Normalising also makes the containment structural: the lens is the unit
+ * disc in that space, the core reaches 0.874 of it at full gaze, so it cannot
+ * escape at any open, width or arch. The clip that used to be load-bearing is now
+ * one multiply of plain defence.
+ *
+ * **This shader is not smaller than the one it replaces, which the brief for this
+ * work expected it to be.** Two lenses each need a shape and a core, so the ALU
+ * count is 2 `sdRoundBox` plus 2 `length` plus 4 `smoothstep` against the bar's 3
+ * `sdRoundBox` plus 3 `smoothstep`. It is marginally cheaper because a `length`
+ * is cheaper than an `sdRoundBox`, and it is shorter in source because the bar
+ * and its clip are gone, but "two shapes instead of three" was never going to be
+ * a saving when each of the two carries its own core.
  *
  * ## Why a raw ShaderMaterial
  *
- * The art bible's section 4 exists because this codebase has been cut four
- * times by silent shader failures, three of them in `onBeforeCompile`, most
- * recently `vColor *= iColor` taking down a 1.43M-triangle grass field while
- * reporting every instance present and visible. `onBeforeCompile` also receives
- * shaders with `#include` directives UNRESOLVED, so any patch searching for the
- * body of a chunk matches nothing and silently does nothing.
+ * The art bible's section 4 exists because this codebase has been cut four times
+ * by silent shader failures, three of them in `onBeforeCompile`, most recently
+ * `vColor *= iColor` taking down a 1.43M-triangle grass field while reporting
+ * every instance present and visible. `onBeforeCompile` also receives shaders
+ * with `#include` directives UNRESOLVED, so any patch searching for the body of a
+ * chunk matches nothing and silently does nothing.
  *
  * Nothing here patches a three built-in. This is a standalone material with
- * hand-written stages, which `PortalShimmer.tsx` established and which has
- * never broken. The cost is that it receives no lights, fog or shadows, and for
- * a glyph that is not a cost at all: it does not want to be lit. The plate
- * underneath, which does want the environment reflection, stays an unpatched
+ * hand-written stages, which `PortalShimmer.tsx` established and which has never
+ * broken. The cost is that it receives no lights, fog or shadows, and for a glyph
+ * that is not a cost at all: it does not want to be lit. The plate underneath,
+ * which does want the environment reflection, stays an unpatched
  * `meshPhysicalMaterial`.
  */
 
@@ -51,17 +86,23 @@ import type { Pose } from './robotPose'
 
   The design spec gives 1.6 for the bar and 3.4 for the cores, computed by hand
   against a bloom threshold of 1.75. Deriving them through `emissiveIntensityFor`
-  instead means they are expressed in threshold multiples, so when Stream 0's
-  `?threshold` measurement lowers BLOOM_THRESHOLD - and the art bible says it is
-  expected to fall to somewhere between 1.2 and 1.6 - the visor follows it
-  automatically instead of quietly becoming a floodlight.
+  instead means they are expressed in threshold multiples, so now that Stream 0
+  has MEASURED BLOOM_THRESHOLD at 1.45 the face followed it automatically instead
+  of quietly becoming a floodlight.
 
   GLOW.source is 66% of threshold and GLOW.bloom is 125% of it, which lands the
-  bar at luminance 1.16 and the cores at 2.19 against a 1.75 line. That is the
-  read the high threshold exists to enable: a cyan line with two glowing nodes,
-  rather than a uniformly hazing bar.
+  lens body at luminance 0.957 and the core at 1.813 against the measured 1.45
+  line. That is the read the whole budget exists to enable: a cyan lens that is
+  plainly a light, with a core that blooms, on a character whose white plastic
+  does not.
+
+  The eyes are the identity of this character and they are the tier A set the art
+  bible keeps deliberately tiny. Everything else added to the model in this pass -
+  the port on the back, the ovals under the soles - is GLOW.source and stays under
+  the line, so the only thing on the robot that haloes is the two things a player
+  looks at.
 */
-const BAR_LEVEL = emissiveIntensityFor(palette.visor, GLOW.source)
+const LENS_LEVEL = emissiveIntensityFor(palette.visor, GLOW.source)
 const CORE_LEVEL = emissiveIntensityFor(palette.visor, GLOW.bloom)
 
 const VISOR_VERT = /* glsl */ `
@@ -88,15 +129,45 @@ uniform float uScan;
 uniform float uGlitch;
 uniform vec3  uColor;
 uniform vec3  uCoolColor;
-uniform float uBarLevel;
+uniform float uLensLevel;
 uniform float uCoreLevel;
 
 varying vec2 vUv;
 
-const float ASPECT  = ${VISOR.aspect.toFixed(6)};
-const float VISOR_Y = ${VISOR.y.toFixed(6)};
-const float AA      = ${VISOR.aa.toFixed(6)};
-const float PIXEL   = 48.0;
+const float ASPECT    = ${VISOR.aspect.toFixed(6)};
+const float VISOR_Y   = ${VISOR.y.toFixed(6)};
+const float AA        = ${VISOR.aa.toFixed(6)};
+const float OFFSET    = ${VISOR.lensOffset.toFixed(6)};
+const float LENS_HW   = ${VISOR.lensHalfW.toFixed(6)};
+const float LENS_HH   = ${VISOR.lensHalfH.toFixed(6)};
+const float CORE_IN   = ${VISOR.coreInner.toFixed(6)};
+const float CORE_OUT  = ${VISOR.coreOuter.toFixed(6)};
+
+/*
+  Gaze travel in units of the lens's own half-extents, so the core's offset is
+  the same fraction of its housing whatever the housing is currently doing. Fixed
+  at construction rather than computed per fragment, which also documents the
+  containment: 0.55 of core plus 0.324 of gaze is 0.874, inside the lens.
+*/
+const vec2 GAZE_NORM = vec2(
+  ${(VISOR.gazeX / VISOR.lensHalfW).toFixed(6)},
+  ${(VISOR.gazeY / VISOR.lensHalfH).toFixed(6)}
+);
+
+/*
+  LED matrix pitch, in cells per unit of plate space.
+
+  12.0 and not the 48.0 the bar used, and the change is forced rather than a
+  taste: the bar was 0.126 tall in plate space and this lens is 0.340, so at the
+  old pitch there would be 24 scanlines across one eye. That is moire at any
+  playing distance. 12.0 puts roughly four cells across a lens, which is a chunky
+  LED rather than a CRT, and it is what the reference's faceplates look like.
+
+  Rows and columns share the pitch here where the bar gave columns a third of the
+  rows'. A lens is square, so a square cell is the one that does not read as
+  stretched.
+*/
+const float CELL = 12.0;
 
 /** Signed distance to a rounded box. The standard iq form. */
 float sdRoundBox(vec2 p, vec2 b, float r) {
@@ -105,21 +176,40 @@ float sdRoundBox(vec2 p, vec2 b, float r) {
 }
 
 /**
- * One eye core, with arch and gaze applied.
+ * One eye lens. Returns coverage in x and core heat in y, both already clipped
+ * to the lens.
  *
- * 'arch' bends the core into a smile or a frown by displacing y as a function
- * of horizontal distance from the core's own centre. The (1 - t*t) profile is a
- * parabola, which is what an arc of an eye actually looks like; a linear shear
- * reads as a tilt instead.
+ * 'arch' bends the lens into a smile or a frown by displacing y as a function of
+ * horizontal distance from its own centre. The (1 - t*t) profile is a parabola,
+ * which is what an arc of an eye actually looks like; a linear shear reads as a
+ * tilt instead.
+ *
+ * With 'open' and 'width' at 1 the half-extents are equal and the corner radius
+ * equals them both, at which point sdRoundBox degenerates to 'length(q) - r'
+ * exactly - so this is a true circle rather than a square with generous corners.
+ * A blink drives 'open' down and the circle becomes a stadium of the same width
+ * with fully rounded ends, which is the reference's blink: the eye squashes
+ * rather than shrinking.
  */
-float eyeCore(vec2 p, float cx, float open, float arch, float width) {
-  vec2 q = p - vec2(cx + uGaze.x * ${VISOR.gazeX.toFixed(4)}, VISOR_Y + uGaze.y * ${VISOR.gazeY.toFixed(4)});
-  float halfW = ${VISOR.coreHalfW.toFixed(4)} * width;
-  float halfH = ${VISOR.coreHalfH.toFixed(4)} * open;
-  float t = clamp(q.x / halfW, -1.0, 1.0);
+vec2 eyeLens(vec2 p, float cx, float open, float arch, float width) {
+  vec2 q = p - vec2(cx, VISOR_Y);
+  float hw = LENS_HW * width;
+  float hh = LENS_HH * open;
+  float t = clamp(q.x / hw, -1.0, 1.0);
   q.y -= arch * (1.0 - t * t) * 0.048;
-  float r = min(halfH, halfW) * 0.92;
-  return sdRoundBox(q, vec2(halfW, halfH), r);
+
+  float cover = 1.0 - smoothstep(-AA, AA, sdRoundBox(q, vec2(hw, hh), min(hw, hh)));
+
+  /*
+    The core. 'q' is normalised by the CURRENT half-extents so the lens is the
+    unit disc, while the gaze offset is already expressed in those same units and
+    is therefore NOT divided again - which is the whole reason it survives a
+    blink. Dividing the gaze by 'hh' as well would multiply the vertical offset
+    by 17 as the lens closes and throw the core out through the top of a slit.
+  */
+  vec2 g = q / vec2(hw, hh) - GAZE_NORM * uGaze;
+  float hot = 1.0 - smoothstep(CORE_IN, CORE_OUT, length(g));
+  return vec2(cover, hot * cover);
 }
 
 void main() {
@@ -139,70 +229,28 @@ void main() {
   p.x += jitter * uGlitch * 0.09;
 #endif
 
-  /*
-    The body of the bar: a stadium 0.490 wide and 0.060 tall in plate space,
-    which is 0.274 m across a 0.56 m plate, or 77% of its width.
-
-    Sized in robotGeometry.ts, where a test can reach it, and NOT from the
-    design spec's half-extents. Two things are wrong with those.
-
-    First, the spec mixes two conventions of sdRoundBox in one block. Its
-    function body is the iq form 'abs(p) - b + r', where b is the shape's full
-    half-extent, which is the convention its own eyeCore is written against. Its
-    bar arguments are the other convention, where the shape is a b-box dilated
-    by r. Fed to the body it actually ships, its (0.215, 0.0) describes a
-    stadium of ZERO HEIGHT: the field evaluates to exactly 0.0 at the centre of
-    the bar, barMask peaks at 0.5, the alpha it multiplies collapses, and the
-    visor is invisible against a black plate. Observed in the browser, which is
-    the only place it shows, because the arithmetic is perfectly well-formed and
-    nothing errors.
-
-    Second, its stated world sizes do not follow from its own plate space. The
-    fragment multiplies x by the aspect, which puts both axes at the same
-    0.38 m per unit, so 0.215 is 0.163 m and not the 0.274 m the spec reads off
-    it, and 0.274 over a 0.56 m plate is 49% rather than the 77% it also claims.
-  */
-  float bar = sdRoundBox(
-    p - vec2(0.0, VISOR_Y),
-    vec2(${VISOR.barHalfW.toFixed(4)}, ${VISOR.barHalfH.toFixed(4)}),
-    ${VISOR.barRadius.toFixed(4)}
-  );
+  vec2 eL = eyeLens(p, -OFFSET, uOpenL, uArchL, uWidthL);
+  vec2 eR = eyeLens(p,  OFFSET, uOpenR, uArchR, uWidthR);
 
   /*
-    A fixed-width antialias in plate space, roughly 1.3 px at the on-screen face
-    height this character is normally seen at. fwidth would be more correct at
-    extreme distance and is not worth the derivative instructions: the camera
-    never gets far from this face.
+    Summed and clamped rather than min'd. The two lenses are 0.34 apart and 0.34
+    across, so at neutral they never overlap - but 'width' reaches 1.4, which puts
+    each inner edge at 0.34 - 0.238 = 0.102 and leaves a 0.204 gap that a
+    surprised expression narrows without closing. Clamping is what keeps the sum
+    honest if that ever stops being true.
   */
-  float barMask = 1.0 - smoothstep(-AA, AA, bar);
+  float cover = clamp(eL.x + eR.x, 0.0, 1.0);
+  float hot = clamp(eL.y + eR.y, 0.0, 1.0);
 
-  float coreL = eyeCore(p, -${VISOR.coreOffset.toFixed(4)}, uOpenL, uArchL, uWidthL);
-  float coreR = eyeCore(p,  ${VISOR.coreOffset.toFixed(4)}, uOpenR, uArchR, uWidthR);
-  float coreMask = (1.0 - smoothstep(-AA, AA, coreL))
-                 + (1.0 - smoothstep(-AA, AA, coreR));
-  coreMask = clamp(coreMask, 0.0, 1.0);
-
-  /*
-    The cores are clipped to the bar, and this is load-bearing rather than
-    defensive. At full gaze and full width a core reaches 0.360 against the
-    slot's 0.245, so without the clip a surprised glance would put a glowing
-    blob outside the housing, which destroys the read of a recessed display
-    instantly. Clipped, it flattens against the end of the slot instead, which
-    reads correctly as an eye pressed into the corner of its socket.
-  */
-  coreMask *= barMask;
-
-  float energy = barMask * uBarLevel + coreMask * (uCoreLevel * uBright - uBarLevel);
+  float energy = cover * uLensLevel + hot * (uCoreLevel * uBright - uLensLevel);
 
   float scanline = 1.0;
 #ifdef VISOR_FULL
-  // Horizontal scanlines. The bar is 0.060 tall in plate space, so at 48 cells
-  // this puts roughly three lines across it. More turns into moire at playing
-  // distance.
-  float rows = 0.86 + 0.14 * step(0.5, fract(p.y * PIXEL * 1.5 + uTime * 0.35));
-  // A vertical cell grid at the same pitch, so it reads as a matrix rather than
-  // as CRT lines. Deliberately much weaker than the rows.
-  float cols = 0.94 + 0.06 * step(0.28, fract(p.x * PIXEL * 0.5));
+  // Roughly four cells across a lens. See CELL.
+  float rows = 0.86 + 0.14 * step(0.5, fract(p.y * CELL + uTime * 0.35));
+  // A vertical grid at the same pitch, so it reads as a matrix rather than as
+  // CRT lines. Deliberately much weaker than the rows.
+  float cols = 0.94 + 0.06 * step(0.28, fract(p.x * CELL));
   // A slow bright sweep left to right. Period 8.3 s, so it is barely noticed
   // and definitely felt: this is the "powered and thinking" cue.
   float sx = fract(uTime * 0.12) * 2.2 - 1.1;
@@ -210,7 +258,13 @@ void main() {
   scanline = mix(1.0, rows * cols, uScan) * sweep;
 #endif
 
-  vec3 col = mix(uCoolColor, uColor, clamp(barMask * 0.35 + coreMask, 0.0, 1.0)) * energy;
+  /*
+    The lens rim takes 35% of the way toward the saturated cyan and the core
+    takes all of it, so the lens has a cool dark edge and a hot centre. That
+    gradient is doing the same job the plate's clearcoat highlight does: it says
+    the surface is glass over a light rather than a painted disc.
+  */
+  vec3 col = mix(uCoolColor, uColor, clamp(cover * 0.35 + hot, 0.0, 1.0)) * energy;
 
   /*
     NormalBlending with the coverage in alpha, not additive, and this is
@@ -220,9 +274,9 @@ void main() {
     surface the player looks at for hours, and the moment anyone adds a second
     overlay - a damage flash, a status icon - additive starts stacking. Normal
     blending gives 'out = rgb * a + dst * (1 - a)', which is bounded by rgb no
-    matter how many layers composite, so the bar cannot blow out by accident.
+    matter how many layers composite, so the eyes cannot blow out by accident.
   */
-  float alpha = clamp(barMask * 0.94 + coreMask * 0.06, 0.0, 1.0);
+  float alpha = clamp(cover * 0.94 + hot * 0.06, 0.0, 1.0);
   gl_FragColor = vec4(col * scanline, alpha);
 }
 `
@@ -274,6 +328,13 @@ export function RobotFace({
 /**
  * The glyph plane, 0.020 m in front of the plate's face.
  *
+ * Still the full 0.56 x 0.38 of the plate even though the two lenses now occupy
+ * far less of it than the bar did, and that is deliberate rather than waste: plate
+ * space is defined as this quad's own UV space, so shrinking the quad would
+ * rescale every half-extent in `VISOR` and the aspect multiply with it. A quad
+ * costs two triangles and the fragments outside the lenses discard on an alpha of
+ * zero.
+ *
  * Far enough that the depth test never fights at any camera angle inside
  * `CAMERA.minDistance`, and near enough that the parallax between plate and
  * glyph stays under a pixel. Not `polygonOffset`: a real offset in Z is more
@@ -300,7 +361,7 @@ function createVisorMaterial(detail: 'simple' | 'full'): ShaderMaterial {
       uGlitch: { value: 0 },
       uColor: { value: new Color(palette.visor) },
       uCoolColor: { value: new Color(palette.visorDim) },
-      uBarLevel: { value: BAR_LEVEL },
+      uLensLevel: { value: LENS_LEVEL },
       uCoreLevel: { value: CORE_LEVEL },
     },
     vertexShader: VISOR_VERT,

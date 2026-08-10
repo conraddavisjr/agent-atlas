@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import {
   DECAL_KINDS,
+  DECK_LIT_LUMA,
+  PANEL_FILL_CELL,
+  PANEL_FILL_SPAN,
+  PANEL_TONE_DROPS,
   ROUGHNESS_MID,
   ROUGHNESS_MID_BYTE,
+  albedoByte,
+  albedoDrop,
   decalMarks,
   normalFromHeight,
   ormFromHeight,
   panelLines,
+  panelRegions,
+  panelToneBytes,
   roughnessBias,
   roughnessByte,
   screwHeads,
@@ -407,5 +415,231 @@ describe('decalMarks', () => {
     for (let i = 1; i < sorted.length; i++) {
       expect(DECAL_KINDS[sorted[i]].panelPitch).toBeGreaterThanOrEqual(DECAL_KINDS[sorted[i - 1]].panelPitch)
     }
+  })
+})
+
+/*
+  The printed albedo, and this is the block that matters most in the file.
+
+  The relief half of this module has thirty tests and provably no effect on a
+  floor. The albedo half has an effect and a hard constraint - the art bible's
+  section 8.2 permits pattern only while the pattern's own p5-p95 stays inside
+  the surface's value band - so the arithmetic that keeps it there is the thing
+  worth pinning. Every number below is computed from the byte values the
+  generator will actually write rather than from the drops that were requested,
+  because a byte is 8 bits and the difference between the two is exactly where a
+  band assertion stops being a check.
+*/
+
+describe('the albedo ladder', () => {
+  it('is neutral at 255, because the map multiplies a vertex colour', () => {
+    /*
+      The deck material is mattePlastic('#ffffff', { vertexColors: true }) and the
+      band values ride on the vertex colour, so an albedo map multiplies them.
+      A map centred on mid grey would halve the albedo of every walkable surface
+      in the game. 255 is the only neutral byte there is.
+    */
+    expect(albedoByte(0)).toBe(255)
+    expect(albedoDrop(255)).toBeCloseTo(0, 12)
+    expect(panelToneBytes()[0]).toBe(255)
+  })
+
+  it('cannot brighten, which is what the gameplay band has room for', () => {
+    // A lit deck renders at 0.687 against a band ceiling of 0.74, so there is
+    // 0.053 up and 0.127 down. A two-sided plus-or-minus 0.06 swing would put
+    // the light panels at 0.747, inside the deliberate 0.74-0.76 gap. The map
+    // clamping at 255 is therefore the correct behaviour rather than a limit.
+    expect(albedoByte(-0.06)).toBe(255)
+    expect(DECK_LIT_LUMA + 0.06).toBeGreaterThan(0.74)
+    expect(DECK_LIT_LUMA - 0.06).toBeGreaterThan(0.56)
+  })
+
+  it('delivers the drop it was asked for, after quantisation', () => {
+    for (const drop of PANEL_TONE_DROPS) {
+      const byte = albedoByte(drop)
+      // Half a byte at this end of the curve is about 0.0013 of display luma.
+      expect(albedoDrop(byte), `drop ${drop} via byte ${byte}`).toBeCloseTo(drop, 2)
+    }
+  })
+
+  it('keeps the whole ladder inside the gameplay band on a real deck', () => {
+    /*
+      The acceptance row, stated as arithmetic. p5 to p95 of the printed deck is
+      the lightest tone to the darkest tone, since the fills are flat regions
+      rather than a distribution with tails.
+    */
+    const bytes = panelToneBytes()
+    const values = bytes.map((byte) => DECK_LIT_LUMA - albedoDrop(byte))
+    const p95 = Math.max(...values)
+    const p5 = Math.min(...values)
+
+    expect(p95).toBeLessThanOrEqual(0.74)
+    expect(p5).toBeGreaterThanOrEqual(0.56)
+    // And the spread has to fit with room, because the surface also carries the
+    // 0.039 the lighting already puts on it and a cast shadow on top of that.
+    expect(p95 - p5).toBeLessThan(0.18)
+    expect(p95 - p5).toBeCloseTo(0.06, 2)
+  })
+
+  it('under-delivers rather than over-delivers on a darker surface', () => {
+    /*
+      One ladder is used everywhere, so the safety of that has to be a property
+      rather than a coincidence. The sRGB curve is steeper at the bottom, so the
+      same multiplier costs a dark surface LESS display luma than a light one -
+      which means a ladder sized against the deck can only ever be gentler on
+      band 2, never harsher. Byte 233 is -0.060 on the deck and about -0.033 on
+      a kerb at palette.bandTrim's 0.330.
+    */
+    const byte = albedoByte(0.06)
+    const onKerb = albedoDrop(byte, 0.33)
+    expect(onKerb).toBeLessThan(0.06)
+    expect(onKerb).toBeCloseTo(0.033, 2)
+    expect(0.33 - onKerb).toBeGreaterThan(0.2)
+  })
+
+  it('refuses a drop that would take a surface to black', () => {
+    // Silently clamping to byte 0 would put a printed mark in the anchor band
+    // with no error, which is the class of failure this project keeps paying for.
+    expect(() => albedoByte(0.7)).toThrow(/to or below black/)
+    expect(() => albedoByte(0.1, 0)).toThrow(/renderedLuma/)
+  })
+
+  it('steps by more than one byte, so the ladder survives quantisation', () => {
+    const bytes = panelToneBytes()
+    for (let i = 1; i < bytes.length; i++) {
+      expect(bytes[i - 1] - bytes[i], `step ${i}`).toBeGreaterThanOrEqual(4)
+    }
+  })
+})
+
+describe('panel fills', () => {
+  const CELLS = Math.round(PANEL_FILL_SPAN / PANEL_FILL_CELL)
+
+  it('tiles the grid exactly, with no gap and no overlap', () => {
+    /*
+      The one property a fill has to have. A gap rasterises as a base-tone hairline
+      running through the middle of a deck and an overlap silently reassigns a
+      panel's tone, and both look enough like a design decision to survive a
+      screenshot. Asserted on integers, which is why panelRegions returns cells
+      rather than the 0-to-1 tile units the Mark primitives use.
+    */
+    const cells = 16
+    const seen = new Int32Array(cells * cells)
+    for (const region of panelRegions({ cells })) {
+      for (let j = 0; j < region.h; j++) {
+        for (let i = 0; i < region.w; i++) seen[(region.y + j) * cells + (region.x + i)]++
+      }
+    }
+    expect([...seen].every((n) => n === 1)).toBe(true)
+  })
+
+  it('never puts two panels of the same tone side by side', () => {
+    /*
+      This is the mark, not a refinement of it. Two identical panels sharing an
+      edge read as one large panel with a scratch across it, which is exactly the
+      state the deck is in today with panel lines and no fills.
+
+      Swept over grid sizes and seeds rather than checked once, because the first
+      version of the generator passed a single-grid check and still produced a
+      matching pair about once per 24-square grid: it banned the tones to the left
+      and above on the assumption that scan order made those the only decided
+      neighbours, and a tall panel from an earlier row sits to the RIGHT of a
+      panel placed later in the row below. The wrap is included, since the map's
+      span is finite and anything past it repeats.
+    */
+    for (const cells of [8, 16, 24, 40, 80]) {
+      for (const seed of [20260810, 1, 99, 424242]) {
+        const regions = panelRegions({ cells, seed })
+        const tone = new Int32Array(cells * cells).fill(-1)
+        const owner = new Int32Array(cells * cells).fill(-1)
+        regions.forEach((region, index) => {
+          for (let j = 0; j < region.h; j++) {
+            for (let i = 0; i < region.w; i++) {
+              tone[(region.y + j) * cells + (region.x + i)] = region.tone
+              owner[(region.y + j) * cells + (region.x + i)] = index
+            }
+          }
+        })
+        const wrap = (v: number) => ((v % cells) + cells) % cells
+        const idx = (x: number, y: number) => wrap(y) * cells + wrap(x)
+
+        for (let y = 0; y < cells; y++) {
+          for (let x = 0; x < cells; x++) {
+            for (const [dx, dy] of [
+              [1, 0],
+              [0, 1],
+            ]) {
+              const here = idx(x, y)
+              const there = idx(x + dx, y + dy)
+              // Two cells of ONE panel share a tone by definition, so only
+              // boundaries between different panels are the claim.
+              if (owner[here] === owner[there]) continue
+              expect(
+                tone[here],
+                `cells ${cells} seed ${seed}: boundary at ${x},${y} toward ${dx},${dy}`,
+              ).not.toBe(tone[there])
+            }
+          }
+        }
+      }
+    }
+  })
+
+  it('is seeded, so the island is the same island every session', () => {
+    expect(panelRegions({ cells: 12 })).toEqual(panelRegions({ cells: 12 }))
+    expect(panelRegions({ cells: 12, seed: 7 })).not.toEqual(panelRegions({ cells: 12 }))
+  })
+
+  it('produces panels at the scale the reference uses, not at tile scale', () => {
+    /*
+      The whole reason this is a 40 m map rather than a channel in the 2 m tiling
+      set. "Large flat panels separated by seams" means metres, and a 2 m tile can
+      hold at most three panel positions before it repeats. At 0.5 m cells and up
+      to 6 cells a side, panels run 0.5 m to 3.0 m.
+    */
+    const regions = panelRegions({ cells: CELLS })
+    const areas = regions.map((r) => r.w * r.h * PANEL_FILL_CELL * PANEL_FILL_CELL)
+    const mean = areas.reduce((a, c) => a + c, 0) / areas.length
+    expect(Math.max(...regions.map((r) => Math.max(r.w, r.h))) * PANEL_FILL_CELL).toBeLessThanOrEqual(3)
+    // A mean panel over a quarter of a square metre, against a 2 m tile's 4.
+    expect(mean).toBeGreaterThan(0.25)
+    // And enough panels that a twelve-metre deck is not one flat tone.
+    expect(regions.length).toBeGreaterThan(200)
+  })
+
+  it('keeps the perforated panels a minority, per the restraint rule', () => {
+    // A perforation grid is one KIND of panel rather than a second mark laid over
+    // the panels, which is what keeps the deck's top face at one mark type under
+    // section 7.7. That argument only holds while most panels are plain.
+    const regions = panelRegions({ cells: CELLS })
+    const share = regions.filter((r) => r.perforated).length / regions.length
+    expect(share).toBeGreaterThan(0.03)
+    expect(share).toBeLessThan(0.25)
+    expect(panelRegions({ cells: CELLS, perforatedShare: 0 }).some((r) => r.perforated)).toBe(false)
+  })
+
+  it('spans the whole walkable island in one copy', () => {
+    /*
+      The plateau is radius 16 and T3's corners sit at 15.52, so the span has to
+      clear 15.52 on every side or a wrap seam runs through the portal deck and
+      puts two differently toned panels against each other with no seam between
+      them. It also has to divide into whole cells.
+    */
+    expect(PANEL_FILL_SPAN / 2).toBeGreaterThan(15.52)
+    expect(PANEL_FILL_SPAN / PANEL_FILL_CELL).toBe(CELLS)
+    // And the cell shares a grid with the deck's panel lines, so a tone step can
+    // land on a groove rather than in the middle of a flat face.
+    expect(PANEL_FILL_CELL).toBe(DECAL_KINDS.deck.panelPitch)
+  })
+
+  it('gives the deck a panel pitch that divides its tile', () => {
+    /*
+      At 0.6 m on a 2 m tile the lines land at 0.6, 1.2, 1.8 and then the tile
+      repeats, so the gap sequence is 0.6, 0.6, 0.6, 0.8 forever: a periodic
+      irregularity every 2 m on the largest surface in the game, which is the
+      tiling the suppression pass exists to hide announcing itself.
+    */
+    const spec = DECAL_KINDS.deck
+    expect(spec.metresPerTile / spec.panelPitch).toBe(Math.round(spec.metresPerTile / spec.panelPitch))
   })
 })

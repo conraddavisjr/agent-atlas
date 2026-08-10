@@ -30,6 +30,40 @@ function read(png) {
 
 const lumaAt = ({ buf }, i) => (0.2126 * buf[i] + 0.7152 * buf[i + 1] + 0.0722 * buf[i + 2]) / 255
 
+/**
+ * Coordinate arguments, or a loud failure.
+ *
+ * This exists because the tool used to return an empty array for a malformed
+ * box, and an empty array read as "measured, nothing there" rather than as "you
+ * asked me wrong". Two separate sessions lost time to it, one of them mine:
+ * `set -- $box` inside a shell loop looks like it splits into four arguments and
+ * in zsh it does not, because zsh does not word-split unquoted parameter
+ * expansions. So `x` arrived as the string "1080 490 26 26", every coordinate
+ * came out NaN, the loop bound was never satisfied, and the answer was `[]`.
+ *
+ * A measurement tool that answers a malformed question with silence is the same
+ * class of defect as everything else in this directory's README. It now refuses.
+ */
+function coords(values, names) {
+  const out = values.map(Number)
+  out.forEach((v, i) => {
+    if (!Number.isFinite(v)) {
+      throw new Error(
+        `frame.mjs: ${names[i]} is not a number, got "${values[i]}". ` +
+          `Expected ${names.length} numeric arguments (${names.join(' ')}). ` +
+          `In zsh, pass them literally or quote-split with \${=var} - "set -- $var" ` +
+          `does NOT split into separate arguments.`,
+      )
+    }
+  })
+  if (out.length !== names.length) {
+    throw new Error(
+      `frame.mjs: expected ${names.length} arguments (${names.join(' ')}), got ${out.length}`,
+    )
+  }
+  return out
+}
+
 function boxStats(img, x, y, w, h) {
   let r = 0, g = 0, b = 0, n = 0, lo = 1, hi = 0
   for (let yy = y; yy < Math.min(y + h, img.h); yy++) {
@@ -88,9 +122,15 @@ if (cmd === 'bands') {
   }))
 } else if (cmd === 'box') {
   const img = read(file)
+  if (rest.length === 0 || rest.length % 4 !== 0) {
+    throw new Error(
+      `frame.mjs box: needs a multiple of four arguments (x y w h), got ${rest.length}: ` +
+        `${JSON.stringify(rest)}. See coords() for the zsh word-splitting trap.`,
+    )
+  }
   const out = []
-  for (let i = 0; i + 3 < rest.length + 1; i += 4) {
-    const [x, y, w, h] = rest.slice(i, i + 4).map(Number)
+  for (let i = 0; i < rest.length; i += 4) {
+    const [x, y, w, h] = coords(rest.slice(i, i + 4), ['x', 'y', 'w', 'h'])
     out.push({ box: [x, y, w, h], ...boxStats(img, x, y, w, h) })
   }
   console.log(JSON.stringify(out, null, 1))
@@ -111,7 +151,7 @@ if (cmd === 'bands') {
   // gradients, so it isolates high-frequency noise: round 2's metric for the
   // grass-shadow crackle.
   const img = read(file)
-  const [x, y, w, h] = rest.map(Number)
+  const [x, y, w, h] = coords(rest, ['x', 'y', 'w', 'h'])
   let acc = 0, n = 0
   for (let yy = y + 2; yy < y + h - 2; yy++) {
     for (let xx = x + 2; xx < x + w - 2; xx++) {
@@ -152,7 +192,7 @@ if (cmd === 'bands') {
   // separately and expect the pair to straddle bands, because that is what a
   // cast shadow is for.
   const img = read(file)
-  const [x, y, w, h] = rest.map(Number)
+  const [x, y, w, h] = coords(rest, ['x', 'y', 'w', 'h'])
   const lumas = []
   for (let yy = y; yy < Math.min(y + h, img.h); yy++) {
     for (let xx = x; xx < Math.min(x + w, img.w); xx++) {

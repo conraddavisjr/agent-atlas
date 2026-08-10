@@ -194,6 +194,43 @@ export function pathLength(points: Point3[]): number {
 }
 
 /**
+ * How much a polyline climbs and how much it falls, in metres.
+ *
+ * This exists because the traces are being reclassified as water, and water has
+ * a property a circuit trace does not: it only runs one way.
+ *
+ * `waterMaterial.ts` advects its wave field toward DECREASING `uv.x`, and `uv.x`
+ * runs from the first authored corner to the last. That is only downhill if
+ * every route in the network climbs monotonically as it is authored, and today
+ * both of them do - a spur climbs from its totem plinth at y 0.44 to the
+ * junction at 1.24, and the trunk climbs from the junction at 1.24 to the
+ * threshold pad at 2.84. So one sign serves the whole network: the arch is the
+ * single high point, the four totems are the outfalls, and the junction pad is a
+ * basin mid-slope.
+ *
+ * That is a property of the layout rather than of the shader, so it is checkable
+ * here, and it is worth checking rather than reading. A reroute that put one
+ * corner of one spur half a step lower than the corner before it would leave
+ * water visibly running uphill along a metre of that spur, with nothing in the
+ * shader, the material or the geometry to blame - the kind of defect that gets
+ * argued about for an afternoon. `hubLayout.test.ts` asserts `down` is zero for
+ * both routes.
+ *
+ * Returns both totals rather than a boolean so a failure says how much and in
+ * which direction instead of only that something is wrong.
+ */
+export function pathVerticalRuns(points: Point3[]): { up: number; down: number } {
+  let up = 0
+  let down = 0
+  for (let i = 1; i < points.length; i++) {
+    const rise = points[i][1] - points[i - 1][1]
+    if (rise > 0) up += rise
+    else down -= rise
+  }
+  return { up, down }
+}
+
+/**
  * Tubular segments for a path of a given length at a given tier.
  *
  * A fixed count is wrong for two paths that differ by a factor of three in

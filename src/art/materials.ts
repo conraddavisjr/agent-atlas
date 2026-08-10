@@ -184,6 +184,28 @@ export function srgbToLinear(channel: number): number {
   return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4)
 }
 
+/**
+ * The inverse: linear 0..1 to a gamma-encoded sRGB 0..1. The DISPLAY space.
+ *
+ * This is the space the whole value-band system is measured in and the space it
+ * was missing a function for. `00-art-bible.md` section 8 states it outright:
+ * the band test is run on gamma-encoded bytes, the same numbers an eyedropper
+ * on a screenshot returns, while the bloom budget above is linear because that
+ * is what the threshold compares. The same hex sits at two very different
+ * numbers in the two spaces and checking one against the other "produces
+ * confident nonsense in both directions".
+ *
+ * Anything that reasons about a band therefore needs BOTH directions, and until
+ * now only the decode existed - so every piece of band arithmetic in the project
+ * has been done by hand in a comment. `albedoByte` in `decalTextures.ts` is the
+ * first caller: it has to convert a wanted DISPLAY-luma drop into a linear
+ * albedo multiplier and then back into a texture byte, which is three trips
+ * across this boundary in one expression.
+ */
+export function linearToSrgb(channel: number): number {
+  return channel <= 0.0031308 ? channel * 12.92 : 1.055 * Math.pow(channel, 1 / 2.4) - 0.055
+}
+
 /** Rec.709 relative luminance of a LINEAR rgb triple. */
 export function luma709(r: number, g: number, b: number): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
@@ -389,13 +411,38 @@ export function rubber(color: string, overrides: MeshPhysicalMaterialProps = {})
   }
 }
 
-/** Brushed metal for joints and hardware. Kept low-key so it never steals focus. */
+/**
+ * Brushed metal for joints and hardware. Kept low-key so it never steals focus.
+ *
+ * **One correction, and it is a bug rather than a tuning change.** This preset
+ * set `clearcoat: 0.3` and never set `clearcoatRoughness`, so it inherited
+ * three's default of ZERO: a perfect mirror coat over brushed metal, on the
+ * robot's shoulder and hip joints, which are curved. The bible's section 8.4
+ * floors clearcoat roughness at 0.10 on curved surfaces for a stated reason -
+ * "the highlight has to spread across several pixels so it reads as a highlight
+ * rather than as a firefly" - and a delta light on a mirror coat produces
+ * exactly the sub-pixel pinpoint that floor exists to prevent, which pops in and
+ * out between frames as the character walks.
+ *
+ * It survived the two-lobe sweep in `materials.test.ts` because that test read
+ * a missing `clearcoatRoughness` as 0 and `lobeRatio(0.4, 0)` is Infinity, so
+ * the rule passed vacuously on the one preset that was breaking it. The test now
+ * requires any preset with a coat to declare the coat's roughness.
+ *
+ * 0.10 rather than `anodised()`'s full rebuild, because this preset's four call
+ * sites are in `Portal.tsx` and `robotParts.tsx` and belong to other hands this
+ * pass. Removing a firefly is a correction in one direction only; changing the
+ * body roughness and metalness with it would be a look change made on their
+ * behalf. See `anodised()` for the preset the spec wants these call sites moved
+ * to.
+ */
 export function metal(color: string, overrides: MeshPhysicalMaterialProps = {}): MeshPhysicalMaterialProps {
   return {
     color,
     roughness: 0.4,
     metalness: 0.9,
     clearcoat: 0.3,
+    clearcoatRoughness: 0.1,
     ...overrides,
   }
 }
@@ -720,6 +767,88 @@ export function chrome(overrides: MeshPhysicalMaterialProps = {}): MeshPhysicalM
     roughness: 0.06,
     metalness: 1,
     clearcoat: 0,
+    envMapIntensity: 1,
+    ...overrides,
+  }
+}
+
+/**
+ * Anodised aluminium hardware, and the missing half of the metal vocabulary.
+ *
+ * Specified in `02-materials.md` section 1.2 at `0.30 / metal 0.95 / cc 0.15 /
+ * ccR 0.10`, ratio 9.0, and it did not exist. `metal()` above is the preset it
+ * is meant to REPLACE - section 2 says "renamed from `metal()`, with `metal`
+ * kept as a deprecated alias for one release" - and the rename is deliberately
+ * not done here, because `metal()`'s four call sites are in `Portal.tsx` and
+ * `robotParts.tsx`, both owned by other hands this pass. Changing `0.4 / 0.9 /
+ * cc 0.3` into `0.30 / 0.95 / cc 0.15` under them would be a look change to the
+ * robot's joints arriving in a commit about deck surfacing.
+ *
+ * The coat is the interesting part and it is physical rather than stylistic.
+ * `metal()`'s `clearcoat: 0.3` over `roughness: 0.4` is a lobe ratio of 1.8:
+ * two broad highlights on top of each other, which is the same defect
+ * `plastic()` was rebuilt to fix. Anodising is an oxide film grown on the metal
+ * and usually lacquered over, so the correct read is a thin hard skin over a
+ * satin body - a 0.15 coat at 0.10 roughness, ratio 9.0.
+ *
+ * **THE FINDING, and it is why this preset ships with no call site.**
+ *
+ * A metal cannot carry a value band, so no broad surface in this world can be
+ * metal, and that is arithmetic rather than taste.
+ *
+ * A metal has no diffuse term. Its rendered value is `F(theta) x environment`,
+ * and Schlick's Fresnel runs `F = F0 + (1 - F0)(1 - cos theta)^5` with `F0` the
+ * albedo. So one flat metal face sweeps its own value as the camera turns, from
+ * `F0 x env` at normal incidence to `env` at the silhouette. Worked for a kerb
+ * at `palette.bandTrim`, whose linear luminance is 0.089:
+ *
+ *   view angle from the face normal   F        rendered display luma
+ *   0 degrees                         0.089    ~0.20
+ *   65 degrees, the camera's usual    0.149    ~0.30
+ *   80 degrees                        0.44     ~0.55
+ *   85 degrees                        0.66     ~0.68
+ *
+ * That is a p5-to-p95 near 0.5 on one object in one lighting condition, in a
+ * band 0.18 wide, and `00-art-bible.md` section 8.1 rules it out in as many
+ * words: band membership is judged on the spread, and a surface whose spread
+ * crosses bands is illegible. Turning `metalness` up on the kerbs - the only
+ * broad surface this stream owns the material binding for - would have taken
+ * the single strongest readability device in the level, the dark line that
+ * outlines every platform, and made its value a function of camera yaw.
+ *
+ * So `chrome()` having zero call sites after two rounds is not an oversight,
+ * it is a consequence, and the same consequence applies here. The correct call
+ * sites are elements too small to be measured as a surface at all, where a
+ * sweeping glint is the entire point and no band claim is being made: a collar
+ * ring or a visor bezel on the robot, a pylon cap disc, or a narrow reveal
+ * inset into a deck edge. All of those are geometry in another stream's files.
+ *
+ * `anisotropy` is off by default and gated, per section 10: it adds
+ * `USE_ANISOTROPY` and a real block of fragment work for an effect only visible
+ * on parts smaller than the robot's antenna, and `quality.anisotropy` is false
+ * at every tier today. Pass `{ anisotropy: ANODISED_ANISOTROPY }` at a high
+ * tier. It must be passed at CONSTRUCTION, never assigned afterwards: three
+ * bumps the material version when `anisotropy` crosses zero and that forces a
+ * recompile mid-frame.
+ *
+ * `envMapIntensity` 1.00 passes the specular budget with room. The brightest
+ * `Lightformer` in the hub rig is the highlight strip at 1.5543 and
+ * `HUB_ENV.intensity` scales the whole map by 0.7, so the radiance this material
+ * can actually see is `1.5543 x 0.7 x 1.00 = 1.088`, against a budget of 1.60
+ * and a bloom threshold of 1.45. Note that the budget as written in the bible
+ * omits `environmentIntensity`, which makes every figure computed from it 30 per
+ * cent pessimistic.
+ */
+export const ANODISED_ANISOTROPY = 0.45
+
+export function anodised(color: string, overrides: MeshPhysicalMaterialProps = {}): MeshPhysicalMaterialProps {
+  return {
+    color,
+    roughness: 0.3,
+    metalness: 0.95,
+    clearcoat: 0.15,
+    // 0.30^2 / 0.10^2 = 9.0, past the ratio of 8.
+    clearcoatRoughness: 0.1,
     envMapIntensity: 1,
     ...overrides,
   }

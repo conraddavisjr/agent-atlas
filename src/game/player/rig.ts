@@ -24,34 +24,50 @@ import {
   type Vec3,
 } from './robotPose'
 import { CAPE } from './animTuning'
+import { createCapeRibbon, skinCapeRibbon, type CapeRibbon } from './robotGeometry'
 
 /**
- * One `Object3D` per animated node, by the same names the `Pose` uses.
+ * One `Object3D` per animated node, by the same names the `Pose` uses, plus the
+ * cape's deformable surface.
  *
  * A mapped type rather than a hand-written list, so a joint added to the pose
  * cannot be silently forgotten here. Every field is nullable because refs are
  * null until the first commit, and because a tier that does not build the cape
  * legitimately has none.
+ *
+ * `cape` is a single `CapeRibbon` and not the four `Object3D`s it used to be.
+ * The four springs are unchanged and `Pose.cape` is still a fixed-length four;
+ * what changed is where their angles land. They used to be written onto four
+ * nested `Group`s carrying one rigid slab each, and they are now skinned onto one
+ * continuous surface - see `CAPE_RIBBON` in `robotGeometry.ts` for why that is
+ * done on the CPU rather than in a vertex shader, which comes down to
+ * `onBeforeCompile` not reaching the shadow depth material.
+ *
+ * It belongs on this side of the pose boundary for the same reason `applyPose`
+ * does: it is a write of already-decided numbers onto a graphics object, it makes
+ * no decisions, and a `BufferGeometry` is a typed array with no GL context behind
+ * it, so it is covered by a node test exactly as the `Object3D` writes are.
  */
 export type RigRefs = { [K in JointKey]: Object3D | null } & {
-  cape: [Object3D | null, Object3D | null, Object3D | null, Object3D | null]
+  cape: CapeRibbon | null
 }
 
 /** An empty rig, for the `useRef` in `RobotModel` and for tests. */
 export function createRigRefs(): RigRefs {
-  const rig = { cape: [null, null, null, null] } as RigRefs
+  const rig = { cape: null } as RigRefs
   for (const key of JOINT_KEYS) rig[key] = null
   return rig
 }
 
 /**
- * Cape segment rest offsets.
+ * Builds the cape's surface.
  *
- * The first segment sits at its socket and every one after it hangs a segment
- * length below its parent, so the chain builds itself out of one number.
+ * Here rather than in `robotParts.tsx` so the segment length is read in exactly
+ * one place, and so a test can build the real ribbon without React.
  */
-const CAPE_REST_HEAD: Vec3 = { x: 0, y: 0, z: 0 }
-const CAPE_REST_LINK: Vec3 = { x: 0, y: -CAPE.segmentLength, z: 0 }
+export function createCape(): CapeRibbon {
+  return createCapeRibbon(CAPE.segmentLength)
+}
 
 function writeJoint(o: Object3D | null, j: JointPose, rest: Vec3, restRot: Vec3 | undefined): void {
   if (!o) return
@@ -73,9 +89,9 @@ export function applyPose(p: Pose, rig: RigRefs): void {
   for (const key of JOINT_KEYS) {
     writeJoint(rig[key], p[key], REST[key], REST_ROTATION[key])
   }
-  for (let i = 0; i < 4; i++) {
-    writeJoint(rig.cape[i], p.cape[i], i === 0 ? CAPE_REST_HEAD : CAPE_REST_LINK, undefined)
-  }
+  // Guarded, because a tier or a cosmetic state without a cape legitimately has
+  // no ribbon and the four springs keep running regardless.
+  if (rig.cape) skinCapeRibbon(rig.cape, p.cape)
 }
 
 /**

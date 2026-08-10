@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  ANODISED_ANISOTROPY,
   BLOOM_INTENSITY,
   BLOOM_RADIUS,
   BLOOM_THRESHOLD,
@@ -7,6 +8,7 @@ import {
   LOW_LUMA_FLOOR,
   MAX_CLEARCOAT,
   TWO_LOBE_MIN_RATIO,
+  anodised,
   bloomFarFieldWeight,
   bloomMipWeights,
   chrome,
@@ -18,6 +20,7 @@ import {
   gel,
   ground,
   linearLuma,
+  linearToSrgb,
   linearise,
   lobeRatio,
   luma709,
@@ -335,6 +338,7 @@ describe('the two-lobe and clearcoat rules, across every preset', () => {
     mattePlastic: mattePlastic('#ffffff'),
     rubber: rubber('#ffffff'),
     metal: metal('#ffffff'),
+    anodised: anodised('#ffffff'),
     emissive: emissive(palette.visor),
     emissiveRaw: emissiveRaw(palette.visor, 2),
     stone: stone('#ffffff', maps),
@@ -374,6 +378,22 @@ describe('the two-lobe and clearcoat rules, across every preset', () => {
       expect(coat ?? 0).toBeLessThanOrEqual(MAX_CLEARCOAT)
     })
 
+    it(`${name}: declares its coat roughness if it has a coat`, () => {
+      /*
+        The hole this sweep had, and it hid a real defect for two rounds.
+
+        `?? 0` above reads a missing `clearcoatRoughness` as zero, and
+        `lobeRatio(base, 0)` is Infinity, so the two-lobe rule passed VACUOUSLY on
+        any preset that forgot to set one - which `metal()` did, giving the robot's
+        curved joints a perfect mirror coat and the sub-pixel pinpoint the bible's
+        0.10 floor exists to prevent. A test whose only failure mode is
+        unreachable is worse than no test.
+      */
+      if (!coat) return
+      expect(preset.clearcoatRoughness, `${name} sets clearcoat ${coat}`).toBeTypeOf('number')
+      expect(preset.clearcoatRoughness as number).toBeGreaterThan(0)
+    })
+
     it(`${name}: resolves as two lobes${exemptFromTwoLobe[name] ? ' (exempt)' : ''}`, () => {
       if (!coat) return // no coat, no second lobe to separate
       if (exemptFromTwoLobe[name]) {
@@ -401,5 +421,99 @@ describe('the two-lobe and clearcoat rules, across every preset', () => {
 
   it('treats a mirror coat as infinitely separated rather than dividing by zero', () => {
     expect(lobeRatio(0.4, 0)).toBe(Infinity)
+  })
+})
+
+describe('linearToSrgb, the display space the band rule is measured in', () => {
+  it('round trips against srgbToLinear', () => {
+    /*
+      The band system has been doing this conversion by hand in comments for three
+      rounds, in both directions, and the art bible warns in as many words that
+      checking a display number against a linear one "produces confident nonsense
+      in both directions". A round trip over every byte is the cheapest possible
+      guard against a transposed constant.
+    */
+    for (let i = 0; i <= 255; i++) {
+      const display = i / 255
+      expect(linearToSrgb(srgbToLinear(display))).toBeCloseTo(display, 10)
+    }
+  })
+
+  it('pins the ends and the knee', () => {
+    expect(linearToSrgb(0)).toBe(0)
+    expect(linearToSrgb(1)).toBeCloseTo(1, 12)
+    // Below 0.0031308 the encode is the straight 12.92 segment, which is the
+    // mirror of the decode's knee and the only part easy to get wrong.
+    expect(linearToSrgb(0.003)).toBeCloseTo(0.003 * 12.92, 12)
+  })
+
+  it('brightens the midpoint, which is why a linear 0.2140 reads as 0.5', () => {
+    expect(linearToSrgb(0.2140)).toBeCloseTo(0.5, 3)
+  })
+})
+
+describe('anodised', () => {
+  it('matches the materials spec table exactly', () => {
+    // docs/design/02-materials.md section 1.2: 0.30 / metal 0.95 / cc 0.15 /
+    // ccR 0.10 / envMapIntensity 1.00. The preset was specified and never built.
+    const preset = anodised('#ffffff')
+    expect(preset.roughness).toBe(0.3)
+    expect(preset.metalness).toBe(0.95)
+    expect(preset.clearcoat).toBe(0.15)
+    expect(preset.clearcoatRoughness).toBe(0.1)
+    expect(preset.envMapIntensity).toBe(1)
+    expect(lobeRatio(0.3, 0.1)).toBeCloseTo(9, 6)
+  })
+
+  it('separates its lobes where metal() only just does', () => {
+    /*
+      The reason for the rename in the spec. metal()'s coat now declares a 0.10
+      roughness rather than inheriting three's mirror default, which puts it at a
+      ratio of 16 - so it passes the rule, but on a 0.4 body where the spec wants
+      0.30, because anodising is an oxide film usually lacquered over and the read
+      is a thin hard skin over a SATIN body rather than over a brushed one.
+    */
+    expect(lobeRatio(anodised('#fff').roughness as number, anodised('#fff').clearcoatRoughness as number))
+      .toBeCloseTo(9, 6)
+    expect(anodised('#fff').roughness as number).toBeLessThan(metal('#fff').roughness as number)
+    expect(anodised('#fff').metalness as number).toBeGreaterThan(metal('#fff').metalness as number)
+  })
+
+  it('leaves metal()\'s body alone, because its call sites belong to other streams', () => {
+    // The spec asks for metal() to become a deprecated alias. Four call sites in
+    // Portal.tsx and robotParts.tsx would change look, so the rename is a
+    // cross-stream refactor rather than part of this change. The only thing that
+    // moved is the missing coat roughness, which removes a firefly and cannot
+    // make anything brighter.
+    expect(metal('#fff').roughness).toBe(0.4)
+    expect(metal('#fff').metalness).toBe(0.9)
+    expect(metal('#fff').clearcoatRoughness).toBe(0.1)
+  })
+
+  it('ships anisotropy off, because no tier enables it', () => {
+    /*
+      section 10 gates anisotropy to high and quality.anisotropy is false at every
+      tier today. It also has to be passed at CONSTRUCTION rather than assigned:
+      three bumps the material version when anisotropy crosses zero and that
+      forces a shader recompile, which as a response to a quality-selector click
+      is a visible freeze at the worst possible moment.
+    */
+    expect(anodised('#fff').anisotropy).toBeUndefined()
+    expect(anodised('#fff', { anisotropy: ANODISED_ANISOTROPY }).anisotropy).toBe(0.45)
+  })
+
+  it('stays inside the specular budget on the hub rig', () => {
+    /*
+      The brightest Lightformer in the hub is the highlight strip at 1.5543 and
+      HUB_ENV.intensity scales the whole map by 0.7, so the radiance this material
+      can see is 1.5543 * 0.7 * envMapIntensity. Against the bible's 1.60 budget
+      and the measured 1.45 bloom threshold, 1.088 clears both - so an anodised
+      surface cannot bloom off the environment, only off a punctual highlight,
+      which the bible permits by name.
+    */
+    const radiance = 1.5543 * 0.7 * (anodised('#fff').envMapIntensity as number)
+    expect(radiance).toBeCloseTo(1.088, 3)
+    expect(radiance).toBeLessThan(BLOOM_THRESHOLD)
+    expect(radiance).toBeLessThanOrEqual(1.6)
   })
 })

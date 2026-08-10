@@ -9,7 +9,7 @@ import {
   type Group,
 } from 'three'
 import { band, palette } from '@/art/palette'
-import { GLOW, crystal, emissive, mattePlastic, plastic } from '@/art/materials'
+import { GLOW, emissive, mattePlastic, plastic } from '@/art/materials'
 import {
   boxProjectUV,
   kerb,
@@ -25,10 +25,12 @@ import {
   tubeFromCurve,
   type PropPart,
 } from '@/art/geometry'
-import { DECAL_KINDS, createDecalMaps } from '@/art/decalTextures'
+import { DECAL_KINDS, createDecalMaps, createPanelFillMap } from '@/art/decalTextures'
 import { mulberry32, type Exclusion } from '@/art/placement'
 import { useQuality } from '@/art/useQuality'
 import { Grass } from '@/art/Grass'
+import { WaterTrace } from '@/art/WaterTrace'
+import { glassShard } from '@/art/glassShard'
 import { Flowers } from '@/art/Flowers'
 import { BOULDER, Scatter, boulderPlacements } from '@/art/Scatter'
 import {
@@ -395,10 +397,16 @@ const ARCS = [
  * Shards splaying outward from a common root read as something that grew, where
  * the same shards standing vertical read as a fence.
  *
- * Crystals are emissive and therefore sit outside the value band system on
- * purpose - they are the reward palette, the way a coin is. What keeps that
- * from wrecking the greyscale test is area rather than value: total shard
- * silhouette stays under 2% of the frame from the spawn view.
+ * The shards used to be emissive and to sit outside the value band system on
+ * purpose, as the reward palette. They no longer are: they are pale glass, they
+ * carry no glow at all, and they sit UNDER the lawn they stand on. See
+ * `glassShard.ts` for why the reward reading was never real - a shard has no
+ * collider and no interaction, and `Colliders()` names them first in its list
+ * of things that deliberately get none - and for the pale-core geometry the art
+ * bible specifies if a reward cue is ever wanted here.
+ *
+ * The area rule still holds and still matters: total shard silhouette stays
+ * under 2% of the frame from the spawn view.
  */
 const GROVES = [
   { x: -3.2, z: 9.4, shards: 7, radius: 1.4 },
@@ -827,6 +835,35 @@ export function HubIsland() {
   )
   const trimMaps = useMemo(
     () => (quality.surfaceMapSize ? createDecalMaps('trim', quality.surfaceMapSize) : null),
+    [quality.surfaceMapSize],
+  )
+
+  /**
+   * The deck's PRINTED value, which is a second texture at a second scale and is
+   * the change the null result above asks for.
+   *
+   * The maps switched on in `deckMaps` measure a p5-p95 of 0.039 against 0.0387
+   * with them off: relief does nothing on an up-facing surface under a key 42.7
+   * degrees overhead, because perturbing a normal that already points at the
+   * light barely moves `N.L`. Printed value has no such dependence - an albedo
+   * multiplier is a multiply, and it lands whatever the geometry is doing - so
+   * this is the one channel that can put structure on a floor here.
+   *
+   * It is a separate texture from `deckMaps` because it is a separate SCALE, and
+   * that is the whole reason it exists as its own function. `deckMaps` tiles
+   * every 2 m; the reference's platforms are large flat panels several metres
+   * across, each a slightly different tone, so a 2 m tile would show the same
+   * three panels six times across T1's twelve metres. This one covers 40 m in a
+   * single copy, centred on the origin, and carries its own `repeat` and
+   * `offset`. See `createPanelFillMap`.
+   *
+   * Sized against a MEASURED deck, not against `palette.bandDeckTop`: a lit deck
+   * renders at 0.687 of display luma, so the ladder spends 0.06 downward and
+   * lands the darkest panel at 0.627, with the whole distribution inside the
+   * 0.56-0.74 gameplay band and off the ceiling it had been resting on.
+   */
+  const deckAlbedo = useMemo(
+    () => (quality.surfaceMapSize ? createPanelFillMap({ size: quality.surfaceMapSize }) : null),
     [quality.surfaceMapSize],
   )
 
@@ -1263,6 +1300,13 @@ export function HubIsland() {
                 roughness: deckMaps.roughness,
               }
             : {})}
+          {...(/*
+            `map` multiplies the vertex colour, which is what carries the two band
+            values here, so the panel map has to be centred on WHITE with its
+            pattern below it. A map centred on mid grey would halve the albedo of
+            every walkable surface in the game and take band 1 with it.
+          */
+          deckAlbedo ? { map: deckAlbedo } : {})}
         />
       </mesh>
 
@@ -1332,63 +1376,40 @@ export function HubIsland() {
       )}
 
       {/*
-        The traces, whose brightness is the hub's second reading of progress, on
-        a surface the player is already walking along.
+        The traces, now water, and still the hub's second reading of progress.
 
-        The completed state stops well short of the bloom threshold, because the
-        art bible lets nothing in the ENVIRONMENT into the bloom tier. Blue means
-        ally and gold means reward; a glowing floor is neither, and letting
-        scenery bloom is what turns bloom from feedback into weather.
+        **This reverses the decision recorded in the block it replaces**, which
+        cut the trace's clearcoat to 0.15 and raised its roughness specifically
+        to kill a specular streak, because "a trace inlaid in a board is not
+        wet." That was correct about a circuit trace. The object is reclassified,
+        so the streak is now the point rather than the defect - see
+        `waterMaterial.ts`, which carries the whole argument, every tunable, and
+        the arithmetic that keeps the effect under the bloom threshold.
+
+        Progress moves from an emissive ramp to the body's sky mix, so the trace
+        still brightens across the whole progression - display 0.212 empty to
+        0.358 complete - and both ends stay inside the midground band, which the
+        emissive ramp never managed.
       */}
-      <mesh geometry={traceBatch}>
-        {completedCount === 0 ? (
-          <meshPhysicalMaterial {...mattePlastic(palette.lockedDeep)} />
-        ) : (
-          /*
-            Two overrides on the emissive preset, and both are corrections the
-            critique measured.
-
-            `clearcoat` down from 1.0 and its roughness up from 0.10. A tube
-            with a mirror clearcoat carries one unbroken specular streak down
-            its entire length, which is the single strongest "rubber hose" cue
-            in the frame and reads as wet. A trace inlaid in a board is not wet.
-
-            And `color` split from `emissive`. `emissive()` sets both to the
-            same hex, so the trace's DIFFUSE was also `palette.circuit`, whose
-            display luma is 0.770 before any emission is added at all - which is
-            why it measured 0.85 against decks at 0.65. The emissive stays cyan,
-            because blue means ally and that is the game's vocabulary; the
-            diffuse drops to the dim cyan the palette already carries for
-            exactly this job, so the surface has somewhere to shade to. The glow
-            ramp comes down with it, from 0.18 + 0.12n to 0.12 + 0.07n, which
-            tops out at 0.40 rather than 0.66 - still well clear of the bloom
-            threshold, which nothing in the environment may cross.
-          */
-          <meshPhysicalMaterial
-            {...emissive(palette.circuit, 0.12 + 0.07 * completedCount, {
-              color: palette.visorDim,
-              clearcoat: 0.15,
-              clearcoatRoughness: 0.5,
-              roughness: 0.55,
-            })}
-          />
-        )}
-      </mesh>
+      <WaterTrace geometry={traceBatch} completed={completedCount} total={hubLessons.length} />
 
       {/*
-        The groves.
+        The groves, as pale glass rather than as bright pink plastic.
 
-        The glow is deliberately under the tier-B target. `palette.token` has a
-        linear luminance of 0.366, a whisker over the 0.35 floor, so tier B's
-        1.15 raw needs an emissiveIntensity of 3.14 and the red channel reaches
-        4.3 before tone mapping. The first pass shipped at `GLOW.source` and the
-        groves came out as flat pink blades with no shading anywhere on them,
-        which is the "saturated bright surface" failure the art bible names. At
-        0.34 the raw luminance is 0.60, the facets shade again, and the hue
-        survives.
+        They measured display 0.692 to 0.748 with the red channel clipped at 255,
+        against decks at 0.612 to 0.698 and a lawn at 0.478 to 0.592 - so
+        decoration was the brightest thing on the island and it out-chromaed the
+        hero, which is item 5 of the handoff and has survived three rounds.
+        `glassShard.ts` carries the numbers: what each of the two mechanisms
+        contributed, why transmission and `GLOW.hold` are both refused rather
+        than merely unused, and what the replacement predicts.
+
+        `castShadow` is kept. A shard is a solid object and real glass does cast
+        a shadow; at 0.045 to 0.09 m across these are slivers on the lawn, and
+        dropping them would leave the groves floating.
       */}
       <mesh geometry={shardBatch} castShadow>
-        <meshPhysicalMaterial {...crystal(palette.token, 0.34)} />
+        <meshPhysicalMaterial {...glassShard()} />
       </mesh>
 
       {markers && (
