@@ -37,7 +37,13 @@ export function HUD() {
         <Key label="W / S" action="Drive" />
         <Key label="A / D" action="Turn" />
         <Key label="Space" action="Jump" />
-        <Key label="Drag" action="Look" />
+        {/*
+          Both gestures, because they are genuinely different affordances rather
+          than aliases: a drag is bounded by the size of the trackpad, so scroll
+          is the one that can turn the camera all the way round to the front of
+          the character in a single motion.
+        */}
+        <Key label="Drag / Scroll" action="Look" />
         <QualitySelector />
       </div>
 

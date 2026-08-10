@@ -186,11 +186,50 @@ export const CAMERA = {
    */
   positionDamping: 6,
   targetDamping: 10,
-  /** Orbit sensitivity for mouse drag and gamepad right stick. */
-  mouseSensitivity: 0.0032,
+  /**
+   * Orbit sensitivity, in radians per pixel of drag.
+   *
+   * Was 0.0032, which needed **982 px of drag for a half turn** and 1963 for a
+   * full one. On any laptop trackpad that is more than one gesture, so the camera
+   * could not be brought round to the front of the character in a single motion
+   * however long you were willing to keep dragging. At 0.009 a half turn is
+   * 349 px, which fits comfortably inside one sweep.
+   */
+  mouseSensitivity: 0.009,
   stickSensitivity: 2.6,
-  /** Pitch clamp, so you can never flip under the world or stare at the sky. */
-  minPitch: -0.5,
+  /**
+   * How long realignment stays suppressed after the player last moved the camera
+   * by hand, in seconds.
+   *
+   * The suppression used to be frame-instantaneous, tested on whether a look
+   * delta arrived this exact frame. Against a realign spring with a 126 ms
+   * half-life that meant any pause mid-drag, and any frame that happened to
+   * deliver no `mousemove`, immediately started pulling the camera back behind the
+   * character. A camera angle the player chose is not un-chosen the moment their
+   * hand stops.
+   *
+   * Long enough to look at something and think about it; short enough that the
+   * camera still tidies up after you rather than needing to be put back.
+   */
+  manualHold: 2.5,
+  /**
+   * Pitch clamp, so you can never flip under the world or stare at the sky.
+   *
+   * **`minPitch` is derived, not chosen.** The rest offset adds `height`
+   * unconditionally on top of `sin(pitch) * distance`, so the camera drops below
+   * its own look target once `sin(pitch) < -height / distance`, which is
+   * `-4.3 / 10.7 = -0.402`, i.e. pitch below -0.4135 rad. Past that the collision
+   * ray is aimed downward from the target and hits the ground, the pull-in
+   * collapses distance to `minDistance` 1.6, and recovery takes about two seconds
+   * at `pullOutSpeed`. The symptom was that trying to look at the character's face
+   * snapped the camera into it at 1.6 m through a 40 degree lens and then crawled
+   * back out.
+   *
+   * -0.35 keeps the camera 0.56 m above the look target at the limit, so the ray
+   * always points up and outward and can never find the floor, while still giving
+   * a nearly level view of the face. The old -0.5 put it 0.83 m BELOW the target.
+   */
+  minPitch: -0.35,
   maxPitch: 1.1,
   /**
    * Collision pull-in. The camera raycasts toward the player and sits in front of

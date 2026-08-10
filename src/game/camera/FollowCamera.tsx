@@ -5,7 +5,6 @@ import { Vector3, type Group, type PerspectiveCamera } from 'three'
 import { CAMERA } from '../player/tuning'
 import { stepCameraYaw } from '../player/movement'
 import { cameraFrame, resetCameraFrame } from './cameraFrame'
-import type { InputIntent } from '../input/useInput'
 
 /**
  * Third-person follow camera with spring damping, collision pull-in, and
@@ -28,12 +27,17 @@ import type { InputIntent } from '../input/useInput'
  */
 export function FollowCamera({
   target,
-  intent,
+  consumeLook,
   inputLocked,
   cameraScale,
 }: {
   target: React.RefObject<Group | null>
-  intent: React.RefObject<InputIntent>
+  /**
+   * Reads the frame's orbit delta and zeroes it, from the input layer that owns
+   * it. See `useInput.consumeLook` for why the consumer clears it rather than the
+   * end-of-frame sweep.
+   */
+  consumeLook: () => { x: number; y: number }
   inputLocked: React.RefObject<boolean>
   /**
    * Per-scene multiplier on the rest offset, from `SceneDefinition`.
@@ -50,6 +54,15 @@ export function FollowCamera({
 
   const yaw = useRef(0)
   const pitch = useRef(0.25)
+
+  /**
+   * Seconds of realignment suppression still owed to a manual orbit.
+   *
+   * A timer rather than a per-frame flag, because the thing being protected is a
+   * camera position the player chose, and they did not stop choosing it the
+   * instant their hand stopped moving.
+   */
+  const manualHold = useRef(0)
 
   /*
     The frame is a module singleton, so it outlives this component. Since the
@@ -101,6 +114,7 @@ export function FollowCamera({
 
   /** Reused collision ray. Rapier's Ray is a plain JS object, so no free is needed. */
   const rayRef = useRef<InstanceType<typeof rapier.Ray> | null>(null)
+
 
   useFrame((state, delta) => {
     const focus = target.current
@@ -154,26 +168,53 @@ export function FollowCamera({
       // Left false so releasing the pin does not immediately whip the camera
       // round to wherever the robot happens to be pointing.
       initialised.current = false
+      // Drained even here. See consumeLook below: the accumulator has exactly one
+      // consumer and it must be emptied on every frame that consumer runs, or a
+      // pinned or covered beat banks up every pixel of drag and applies the whole
+      // sum at once on the frame the pin releases.
+      consumeLook()
       return
     }
 
     const dt = Math.min(delta, 0.05)
 
-    // Orbit. Input is already accumulated for the frame by the input layer.
-    const lookX = intent.current.lookX
-    const lookingManually = lookX !== 0 || intent.current.lookY !== 0
+    /*
+      Read the orbit delta and zero it in the same statement.
 
-    // Kept as its own value rather than folded straight into yaw, because it is
-    // the one part of the camera's rotation that is allowed to move the input
-    // frame with it.
-    let manualLookDelta = 0
+      **This function owns the look accumulator.** It used to be cleared by
+      `endInputFrame()`, which runs at the end of `useBeforePhysicsStep` - and
+      Rapier's stepper is subscribed before this component, so on every frame the
+      physics accumulator took a step the delta was zeroed before it was ever
+      read. At 60 Hz that is most frames, which is why dragging felt throttled
+      rather than broken, and the gamepad right stick was completely dead because
+      `sample()` added to it inside the same step that cleared it.
+
+      A value cleared by the thing that reads it cannot be cleared before the
+      read, which is why ownership moved here rather than the call order being
+      rearranged. There is only one consumer, so there is nothing to share with.
+    */
+    const look = consumeLook()
+    const lookingManually = look.x !== 0 || look.y !== 0
 
     if (!inputLocked.current) {
-      manualLookDelta = -lookX * CAMERA.mouseSensitivity
-      yaw.current += manualLookDelta
-      pitch.current += intent.current.lookY * CAMERA.mouseSensitivity
+      yaw.current += -look.x * CAMERA.mouseSensitivity
+      pitch.current += look.y * CAMERA.mouseSensitivity
       pitch.current = Math.max(CAMERA.minPitch, Math.min(CAMERA.maxPitch, pitch.current))
     }
+
+    /*
+      How long ago the player last moved the camera by hand.
+
+      Realignment is suppressed for `CAMERA.manualHold` after that, rather than
+      only on the exact frames a look delta arrived. The old test was
+      frame-instantaneous, so the moment a hand paused mid-drag - or on any frame
+      that happened to produce no `mousemove` - the spring took 8.8% of the way
+      back to behind the character, at a 126 ms half-life. Holding the camera
+      anywhere other than directly behind was impossible while moving, which is
+      the whole of "I cannot rotate round to see the character's face".
+    */
+    if (lookingManually) manualHold.current = CAMERA.manualHold
+    else manualHold.current = Math.max(0, manualHold.current - dt)
 
     // ---- Realign behind the direction the robot is pointing ----------------
     /*
@@ -188,7 +229,7 @@ export function FollowCamera({
         yaw: yaw.current,
         facing: focus.rotation.y,
         following: cameraFrame.following,
-        lookingManually,
+        lookingManually: manualHold.current > 0,
         dt,
       })
     }

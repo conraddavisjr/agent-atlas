@@ -45,7 +45,7 @@ import { earnedCosmetics } from './state/progression'
 const FX = fxOverrides()
 
 export default function App() {
-  const { intent, sample, endFrame } = useInput()
+  const { intent, sample, endFrame, consumeLook } = useInput()
   const quality = useQuality()
 
   /**
@@ -278,7 +278,7 @@ export default function App() {
             <FollowCamera
               key={`camera-${displayed.sceneId}`}
               target={player}
-              intent={intent}
+              consumeLook={consumeLook}
               inputLocked={inputLocked}
               cameraScale={scene.cameraScale}
             />
