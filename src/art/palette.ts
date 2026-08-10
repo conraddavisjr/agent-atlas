@@ -92,9 +92,31 @@ export const palette = {
    * Cool the whole way through now. The warm cream horizon it replaced made the
    * island read as sitting in haze rather than in air, and it fought every
    * green in the world.
+   *
+   * **The horizon came down from `#d6ecfb`, which was out of band and taking
+   * the whole image with it.** Its display luma was 0.9114 against a background
+   * band that ends at 0.86, and it rendered at 0.92 to 0.93. Nothing caught it
+   * because `band()` is only ever applied to surface albedos, and the sky is not
+   * a surface anyone stands on - so the largest single area in every frame was
+   * the one thing in the palette exempt from the value system.
+   *
+   * What that costs is not just the sky. A critique of the second round
+   * measured 46 per cent of `hub-establishing` sitting at 0.83 to 0.86 and only
+   * 6.5 per cent of the frame below 0.30, and concluded that every other
+   * failing was downstream: bloom cannot read because there is nothing dark for
+   * light to sit against, the rim cannot read because the shell's shadow side
+   * is already at 0.55, and the greyscale test cannot pass because three
+   * semantic classes share one value. A world with no shadow end is a product
+   * photograph.
+   *
+   * `#b9cdda` is the same hue and chroma scaled to display luma 0.7913 - inside
+   * the background band, near its floor. It also doubles the sky's own gradient,
+   * since the zenith stays at 0.6119, and the horizon colour is what
+   * `registry.ts` hands to the fog, so distance falls off into the same value
+   * rather than into a brighter one.
    */
   skyTop: '#5aa8e8',
-  skyHorizon: '#d6ecfb',
+  skyHorizon: '#b9cdda',
   cloud: '#ffffff',
   cloudShadow: '#c2d8ea',
 
