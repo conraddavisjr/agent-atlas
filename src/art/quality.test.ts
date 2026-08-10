@@ -72,12 +72,29 @@ describe('tier settings', () => {
     expect(medium.maxDpr).toBeLessThanOrEqual(high.maxDpr)
   })
 
-  it('keeps the most expensive setting to the top tier alone', () => {
-    // Grass through the shadow pass a second time. Called out separately
-    // because it is the one setting that can halve the frame rate by itself.
+  it('never casts grass into the shadow map, at any tier', () => {
+    /*
+      This was the one setting reserved for the top tier, on the grounds that it
+      is the most expensive thing in the game. It is off everywhere now, and the
+      reason is image quality rather than cost.
+
+      Two hundred thousand blades stippling a shadow map do not resolve into
+      shade; they resolve into blade-shaped noise, and the map is sampled by
+      every surface in the scene, so the noise lands on stone decks and on the
+      character's white shell metres from any grass. Measured as RMS deviation
+      from a 5x5 local mean, on a plain stone deck in `hub-totem`: 0.11 at low,
+      0.34 at medium, and 1.29 at high, against 0.17 in the pre-round baseline.
+      The tier that is supposed to look best looked worn and dirty, and it was
+      the only tier that did.
+
+      Asserted across all three tiers rather than deleted, because "turn grass
+      shadow casting back on at high" is exactly the change a future performance
+      or fidelity pass would reach for, and the cost of finding this out again
+      is a full critique round.
+    */
     expect(QUALITY.low.grassCastShadow).toBe(false)
     expect(QUALITY.medium.grassCastShadow).toBe(false)
-    expect(QUALITY.high.grassCastShadow).toBe(true)
+    expect(QUALITY.high.grassCastShadow).toBe(false)
   })
 
   it('turns ambient occlusion off entirely at the bottom tier', () => {

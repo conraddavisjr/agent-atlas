@@ -115,7 +115,7 @@ export function PostFX() {
             other half of the crackle described under `aoRadius`. 2.0 keeps most
             of the reach and measurably halves the artefact.
           */
-          intensity={2.0}
+          intensity={3.0}
           distanceFalloff={0.6}
           /*
             Sample counts, named, because the preset this used to pass was a

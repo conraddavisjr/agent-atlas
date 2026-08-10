@@ -466,7 +466,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
   high: {
     grassBlades: 220_000,
     flowers: 14_000,
-    grassCastShadow: true,
+    grassCastShadow: false,
     grassRadius: 16,
     shadowMapSize: 4096,
     softShadows: true,
