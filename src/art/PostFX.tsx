@@ -35,18 +35,54 @@ const GRADE_LUT = createGradeLut()
 /**
  * Post-processing.
  *
- * Ambient occlusion is the headline change here, and it reverses a decision
- * this file used to state outright. The original comment rejected SSAO because
- * it costs a real slice of the frame budget on integrated graphics and the
- * tight shadow camera was providing enough contact shadowing on its own. That
- * was true of a world made of a dozen large primitives. It stopped being true
- * the moment the ground filled with grass, rocks and scatter: without occlusion
- * every one of those objects reads as pasted onto the ground rather than
- * sitting in it, and no amount of shadow map resolution fixes that, because the
- * contact is smaller than a texel.
+ * **Ambient occlusion is off at all three tiers, and the pass below is wired,
+ * tuned and unreachable by default.** That is the decision in
+ * `docs/design/97-decision-shadow-end.md` item 9, and this comment records it
+ * because the file used to argue the opposite at length and a file that argues
+ * against its own configuration is worse than one with no comment at all.
  *
- * The reversal is tier-gated rather than unconditional, which is the part that
- * makes it affordable. The bottom tier still gets the old behaviour.
+ * The case the old text made was that a world of grass, rocks and scatter needs
+ * occlusion or every object reads as pasted onto the ground, and that no shadow
+ * map fixes it because the contact is smaller than a texel. That is still the
+ * right diagnosis. What was wrong was the choice of instrument. Three things
+ * killed it, in the order they were established:
+ *
+ * 1. **It cannot be the frame's shadow end, arithmetically.** n8ao composites
+ *    `mix(scene, color * scene, 1 - pow(visibility, intensity))`, so `color`
+ *    sets a floor: `#8fa4cc` at linear luma 0.3675 puts a FULLY occluded pixel
+ *    at 37% of its own value and no lower. On a lawn at 0.50 display luma the
+ *    hardest contact this pass can draw is 0.35. Round 3 is about getting
+ *    something to 0.10, and there is no setting of this pass that reaches it.
+ * 2. **It costs about half the frame rate at high**, and half resolution was
+ *    not enough to change that. The numbers, and the reason only the alternated
+ *    ratio is evidence, are on `aoHalfRes` in `quality.ts`.
+ * 3. **It cannot be composed.** Being screen-space it has no notion of which
+ *    object a sample belongs to, so with the radius anywhere near blade height
+ *    it projects the grass field's depth pattern onto whatever stands in the
+ *    grass, hero included. See `aoRadius` below for that measurement.
+ *
+ * And it never delivered the two contacts it was kept for. Blade-to-ground is
+ * baked into the grass's own vertex colours now (`Grass.tsx`, `CONTACT`: root at
+ * 0.24 of the blade's own tint ramping to full over the bottom 34% of its
+ * height, measured on a real frame at 0.377 at the roots against 0.516 at the
+ * tips). Object bases it never reached, and the reason is geometry rather than
+ * radius: a pylon is `pill(0.34, h - 0.68)`, a CAPSULE whose lower hemisphere is
+ * tangent to a flat lawn at a single point, so there is no concave corner at a
+ * pylon base for any occlusion pass to find - and the shallow pool it does draw
+ * around the tangency sits inside a 0.75 m planting exclusion ring that is
+ * itself hidden behind 0.16 to 0.45 m of lawn at every playing-height camera
+ * angle. Round 2's F14 recorded the base as untreated while the pass was
+ * running, and that is why.
+ *
+ * Where the pass WAS earning its cost, stated plainly because removing it is a
+ * real loss and pretending otherwise is how a decision stops being checkable:
+ * flat-on-flat stone junctions. Totem plinths on spur lobes, deck pucks on the
+ * lawn, portal jambs flush on T3 - fillets of 0.05 to 0.12 m against a 0.28 m
+ * radius, which is the one contact shape this pass is good at and the one the
+ * grass ramp does not cover. That loss has never been measured. Item 3 of the
+ * new anchor band - recessed apertures, kerb faces, riser faces - is what is
+ * meant to replace it, and if it does not, this is the thing to re-measure
+ * before blaming anything else.
  *
  * Order matters and is not alphabetical. Occlusion goes first, because it is a
  * property of the scene rather than of the image and must be applied while the
@@ -84,6 +120,11 @@ export function PostFX() {
       the context's `normalPass` in the whole file is the SSAO component.
     */
     <EffectComposer multisampling={0}>
+      {/*
+        False at every tier. `?gfx=ao` is the only thing that gets past this
+        gate, and it reaches all three tiers together so that an A/B is not also
+        a tier change. `?nogfx=ao` still wins if both are present.
+      */}
       {quality.ambientOcclusion ? (
         <N8AO
           /*
@@ -108,12 +149,33 @@ export function PostFX() {
           */
           aoRadius={0.28}
           /*
-            An exponent, not a multiplier: N8AO applies `pow(ao, intensity)`.
-            It had been raised to 3.0 to compensate for the lighter colour
-            multiplier below, and an exponent that high also amplifies every
-            small variation in the AO buffer into a visible one - which is the
-            other half of the crackle described under `aoRadius`. 2.0 keeps most
-            of the reach and measurably halves the artefact.
+            An exponent, not a multiplier, and it applies to VISIBILITY rather
+            than to occlusion, which reverses the sign of everything one would
+            assume about it. Verified in n8ao's own compositor:
+
+              float finalAo = pow(texel.r, intensity);
+              ...
+              mix(sceneTexel.rgb, color * sceneTexel.rgb, 1.0 - finalAo)
+
+            `texel.r` is 1 where nothing is occluded, so the darkening weight is
+            `1 - pow(visibility, intensity)` and **raising the exponent darkens
+            MORE, not less.** At visibility 0.8 an exponent of 2.0 gives a weight
+            of 0.360 and 3.0 gives 0.488. It was raised to 3.0 to compensate for
+            the lighter colour multiplier below, and that direction is right; the
+            side effect is that it also stretches every small variation in the AO
+            buffer, which is the other half of the crackle described under
+            `aoRadius`.
+
+            **The prose that stood here said "2.0 keeps most of the reach and
+            measurably halves the artefact", and the prop said 3.0.** Both cannot
+            be true and the code is what ran, so every standard deviation quoted
+            in this block - 5.26 at radius 0.28, 4.93 at 0.15, 4.98 at half
+            resolution - was measured at 3.0. Left at 3.0 deliberately, now that
+            the pass is off by default: `?gfx=ao` exists to repeat a measurement,
+            and it has to hand back the configuration that was measured rather
+            than the one a comment recommended and nobody applied. If the pass is
+            ever re-enabled for real, 2.0 is an untested hypothesis, not a
+            finding.
           */
           intensity={3.0}
           distanceFalloff={0.6}
@@ -167,9 +229,26 @@ export function PostFX() {
             artefact. Cheaper and slightly better, so there is nothing to
             weigh.
 
-            It still does not reach the targets. AO is affordable in this scene
-            only if something else about it changes, and that decision is not
-            this comment's to make.
+            It still does not reach the targets, and the decision that sentence
+            deferred has now been taken: **the thing that changed is that the
+            pass came out.** Off at all three tiers, so `halfRes` never reaches a
+            pass at all today.
+
+            Re-measured after the grass-shadow fix, three alternating runs each
+            at 1660x934 on `hub-establishing` at high: 35.9 / 21.0 / 31.3 mean
+            fps with AO on against 74.2 / 61.7 / 59.9 with it off, p95 11.5 /
+            9.5 / 10.0 against 21.9 / 22.4 / 15.6. No overlap in either column,
+            and about half the frame rate. Absolute fps from that machine is not
+            trustworthy - one configuration read 65.5 mean in one session and 21
+            to 36 twenty minutes later with nothing changed - so the alternated
+            ratio is the only part of that which is evidence, and it is enough.
+
+            Every number in this block is kept rather than deleted because they
+            are the four findings that would otherwise be rediscovered one
+            expensive session at a time, and because `?gfx=ao` has to hand the
+            pass back the configuration that was measured. Half resolution is
+            part of that configuration: it is cheaper AND slightly better here,
+            which is a conclusion no future reader would guess.
           */
           halfRes={quality.aoHalfRes}
           depthAwareUpsampling

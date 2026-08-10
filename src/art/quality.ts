@@ -60,6 +60,22 @@ export type QualitySettings = {
   shadowMapSize: number
   /** Percentage-closer soft shadows. Costs a real amount of fragment work. */
   softShadows: boolean
+  /**
+   * Screen-space ambient occlusion, the `<N8AO>` pass.
+   *
+   * **Off at all three tiers**, decided in `docs/design/97-decision-shadow-end.md`
+   * item 9. The pass is still wired in `PostFX.tsx` with every tuned prop and
+   * every measurement behind it intact, so re-enabling it is this one boolean,
+   * or `?gfx=ao` without a rebuild.
+   *
+   * Off at all THREE rather than only at high, and that is the part worth
+   * stating: false / true / true is the tier ladder changing the art rather
+   * than the fidelity, which section 7 of the art bible and round 1's F5 both
+   * forbid. The three tiers are meant to be the same picture at different cost,
+   * and an occlusion pass is not a resolution setting - it moves the value of
+   * the largest surface in the frame. See `aoHalfRes` below for the measured
+   * cost, and `PostFX.tsx` for what the pass could and could not deliver.
+   */
   ambientOcclusion: boolean
   /**
    * N8AO's ambient sample count, and the denoise sample count that cleans it.
@@ -190,10 +206,27 @@ export type QualitySettings = {
   /**
    * Resolve AO at half resolution and upsample.
    *
-   * Spec ladder: off / on / off, which is not a typo: `halfRes` roughly
-   * quarters the AO pass's fragment count at medium, and high pays full price
-   * for the edge quality. Off everywhere here, since turning it on at medium
-   * softens every contact and is a look change.
+   * On at medium and high, and it is dead code at every tier now that
+   * `ambientOcclusion` is false everywhere - kept true rather than reset,
+   * because the value is a MEASUREMENT and resetting it would throw the
+   * measurement away. The spec's original ladder was off / on / off on the
+   * theory that high should pay full price for the edge quality, and that trade
+   * does not survive contact with the numbers: at 1660x934 on
+   * `hub-establishing` at high, 73.4 fps mean and 50.5 p95 with the pass off
+   * against 46.3 and 17.9 full-resolution and 48.5 and 31.4 half-resolution,
+   * and the crackle on the character's shell reads 4.98 standard deviation
+   * half-res against 5.26 full-res because the depth-aware upsample softens the
+   * very sampling pattern that is the artefact. Cheaper AND slightly better, so
+   * there was nothing to weigh.
+   *
+   * Half resolution was not enough to make the pass affordable, which is what
+   * eventually removed it: three alternating runs each, same shot and buffer,
+   * after the grass-shadow fix, gave 35.9 / 21.0 / 31.3 mean and 11.5 / 9.5 /
+   * 10.0 p95 with AO on against 74.2 / 61.7 / 59.9 and 21.9 / 22.4 / 15.6 with
+   * it off. No overlap in either column. **Absolute fps from that machine is
+   * not trustworthy** - one configuration read 65.5 mean in one session and 21
+   * to 36 twenty minutes later with nothing changed - so only the alternated
+   * ratio is evidence, and it is about half the frame rate.
    */
   aoHalfRes: boolean
 
@@ -344,11 +377,10 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     shadowMapSize: 1024,
     softShadows: false,
     ambientOcclusion: false,
-    // Unused while ambientOcclusion is false, and deliberately still the
-    // cheaper preset rather than a placeholder, so forcing AO on at this tier
-    // for a diagnostic does not also hand it the expensive settings.
-    // AO is off at this tier, so these never reach a pass. Kept at the
-    // cheapest honest values rather than at a placeholder.
+    // AO is off at every tier now, so these never reach a pass anywhere. Kept
+    // at the cheapest honest values rather than at a placeholder, so that
+    // forcing the pass on at this tier with `?gfx=ao` gets the settings this
+    // tier would actually have shipped rather than a number nobody chose.
     aoSamples: 16,
     aoDenoiseSamples: 4,
     propDensity: 0.35,
@@ -414,7 +446,9 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     grassRadius: 16,
     shadowMapSize: 2048,
     softShadows: true,
-    ambientOcclusion: true,
+    // Was true. See the field's doc comment: off at all three tiers, so that
+    // the ladder changes fidelity rather than art. `?gfx=ao` turns it back on.
+    ambientOcclusion: false,
     aoSamples: 16,
     aoDenoiseSamples: 8,
     propDensity: 0.7,
@@ -470,7 +504,11 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     grassRadius: 16,
     shadowMapSize: 4096,
     softShadows: true,
-    ambientOcclusion: true,
+    // Was true, and this is the tier the measurement was taken at: about half
+    // the frame rate for a pass that could not reach 0.10 of display luma and
+    // could not tell the hero from the lawn he stands in. See the field's doc
+    // comment and `docs/design/97-decision-shadow-end.md` item 9.
+    ambientOcclusion: false,
     aoSamples: 16,
     aoDenoiseSamples: 8,
     propDensity: 1,

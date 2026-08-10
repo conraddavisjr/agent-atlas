@@ -125,9 +125,29 @@ The island has a trim, not a thickness.
 
 The case for keeping it was item 1, and item 1 has now been decided against it.
 
-1. **It cannot be the shadow end, because it cannot be composed.** It is screen-space and has no notion of which object a sample belongs to, so with the radius anywhere near blade height it projects the grass field's depth pattern onto whatever is standing in the grass, hero included. And its floor is arithmetic: `mix(scene, color * scene, 1 - ao)` with `color = #8fa4cc` puts a fully occluded pixel at 37% of its own value. It can make a smudge in the 0.4s. It has no access to 0.10, which is the number this round is about.
+1. **It cannot be the shadow end, and this is measured rather than argued.** A clean A/B at high, same origin, same progression, same procedure, `?nogfx=ao` against the default:
+
+| `hub-establishing`, high | AO on | AO off | what the pass is worth |
+| --- | --- | --- | --- |
+| mean | 0.6473 | 0.6627 | -0.0154 |
+| below 0.10 | 0.00% | 0.00% | **nothing** |
+| below 0.20 | 1.60% | 1.44% | 0.16 points |
+| below 0.30 | 5.53% | 4.92% | 0.61 points |
+| 0.38-0.56 | 21.76% | 15.83% | 5.9 points |
+
+Across the other four vantages the pass is worth 0.4 to 1.0 points of the share below 0.30 and, in every one, **nothing at all below 0.10.**
+
+That is the whole case. The target for this round is to move the share below 0.20 from 1.6% to 8-14%, and the pass in question supplies 0.16 of those points. Its floor is arithmetic and explains why: `mix(scene, color * scene, 1 - ao)` with `color = #8fa4cc` puts a fully occluded pixel at 37% of its own value, so on a 0.65 deck it can reach 0.47 and no further. It can make a smudge in the 0.4s; it has no access to 0.10.
+
+Note the fourth row, which is a gain and not a cost. The pass was holding the lawn 0.046 below where it should be, which is 5.9 points of the frame stuck in the gap between the midground and gameplay bands. **Turning it off delivers a large part of the "lawn inside its own band" row on its own**, so anything else aimed at the lawn has to be sized after this lands rather than before, or the two lifts compound past 0.74 and re-break round 1's finding from the other side.
+
+It is also screen-space, with no notion of which object a sample belongs to, so with the radius anywhere near blade height it projects the grass field's depth pattern onto whatever is standing in the grass, hero included.
 2. **It costs about half the frame rate at high.** Three alternating runs each: 35.9 / 21.0 / 31.3 mean fps with it on against 74.2 / 61.7 / 59.9 with it off, p95 11.5 / 9.5 / 10.0 against 21.9 / 22.4 / 15.6. No overlap in either column.
-3. **Both jobs it was kept for are served better elsewhere.** Blade-to-ground contact is baked into the grass's own vertex colour now and does not depend on the pass. Object-base contact is what item 1's second clause owns, and round 2's F14 records that the pass was not delivering it anyway.
+3. **One of the two jobs it was kept for is served better elsewhere, and the other was never being done for the reason anyone thought.** Blade-to-ground contact is baked into the grass's own vertex colour and does not depend on the pass: round 2 measured the near sward ramping 0.516 at the tips to 0.377 at the roots, which is 0.139 of display luma produced by a vertex attribute.
+
+Object-base contact is the interesting half. Round 2's F14 records the pylon meeting the lawn with no treatment at all, and that was written with the pass running, so the obvious reading is that the pass cannot reach a 0.28 m contact. That reading is wrong and the real reason is worse. **A pylon is `pill(0.34, h - 0.68)`, a capsule translated so the bottom of its lower hemisphere sits exactly on a flat lawn at y = 0, which is a sphere tangent to a plane touching at a single point.** The surfaces separate quadratically - 0.004 m of gap at 5 cm out - so it is the contact shape that produces the least occlusion of any, and no occlusion pass and no shadow map will ever draw a contact there. That is a geometry defect, it is item 2 of the anchor band's membership to fix, and it would have survived any amount of work on the pass.
+
+Where the pass genuinely was earning its cost is flat-on-flat stone: the totem plinth on its spur lobe, deck pucks on the lawn, the portal jambs on T3, all with fillets of 0.05 to 0.12. At a corner like that visibility approaches 0.5 and the pass was putting a real 0.28 m band down, taking a 0.65 deck to roughly 0.47. **That band is a real loss and it is measured, not waved away** - see the acceptance table. Item 3 of the anchor band's membership is what replaces it, and the two are not interchangeable: a cast shadow darkens only the sun-opposite side where occlusion darkened all the way round.
 4. **On at medium and high and off at low is the tier ladder changing the art rather than the fidelity**, which section 7 of the bible and round 1's F5 both prohibit. Off at all three makes the three tiers the same picture.
 5. **It has been a net negative twice in two rounds.** The crackle, which was its own sampling pattern amplified by an exponent of 3.0, and then the interaction that made every high-tier surface read as scuffed plastic.
 
@@ -151,12 +171,27 @@ The claims above are measurable and this is how they will be checked. `hub-estab
 | lawn, clean patch | 0.5015 / 0.5635 | inside 0.56-0.74 |
 | cast shadow on stone deck | not measured | 0.18 or more below the lit deck |
 | shell shadow side, `backlit` | 0.55-0.60 at saturation 0.084 | 0.40-0.48 at higher saturation |
-| ground within 0.3 m of a pylon base | no treatment at all | 0.12 or more below ground 2 m away |
-| HF noise, round 2's three F3 patches | 3.32 / 2.62 / 3.33 | at or below the low tier's 0.24 / 0.63 / 0.74 |
+| a visible object-to-deck junction | 0.28 m occlusion band, lost with the pass | recovered by authored contact, at least as deep |
+| ground beside a pylon shaft | tangent capsule, no corner to occlude | a corner exists, and reads |
+
+Round 2's F3 measured a high-frequency noise metric on three patches and read 3.32 / 2.62 / 3.33 at high against 0.24 / 0.63 / 0.74 at low.
+**That row is deliberately not in this table, and the reason is worth writing down.**
+F3 explicitly exonerated ambient occlusion at the time - the pass runs at medium and medium was clean - blamed grass casting into the shadow map, and `24022db` fixed it before this round started.
+Ambient occlusion is configured identically at medium and high, same sample counts, same radius, intensity, colour and half-resolution, so its contribution to noise at high equals its contribution at medium, which was measured as clean.
+Predicted consequence: removing the pass will move those three patches barely at all.
+Putting the row in this round's acceptance table would credit an already-fixed regression to this change, and then read a correct null result as a failure.
+The patches are still worth capturing, in all three states, and `?gfx=ao` is what makes the pre-state recoverable at all.
 
 The band-occupancy and location numbers are computed on the captured PNG with the same Rec.709-on-gamma-encoded-bytes convention `__dev.sample()` uses, and that measurement was verified against the in-page one before any of it was believed: mean 0.6474, below-0.30 5.53%, above-0.80 22.86% from both, to four decimal places.
 That check matters more than it looks.
 ImageMagick's own `-fx` and `%[fx:mean]` disagree with the eyedropper convention by about 0.18 of luma on these frames, which is more than a whole band wide, and a threshold expression built on it reported 50% of every frame above 0.86.
+
+**And one more thing had to be pinned before any of this was believable, which is the seventh silent failure in this screenshot path.**
+A vantage pins the camera, the player, the clock, the field of view and the drawing buffer. It did not pin progression, and progression changes the frame: four lesson totems switch between `locked` at 0.383 and `unlocked` at 0.804, and the Core node gains its completion rings, which are among the brightest elements in `hub-establishing`.
+The save lives in `localStorage`, which is keyed by origin, so two dev servers on two ports are two different save files.
+Two capture sets of the same commit at the same tier, one from each, disagreed by 0.0106 of whole-frame mean luma and 0.9 points of the share below 0.20 - larger than the ambient-occlusion effect they were being compared to measure - while all five local probes agreed to within 0.004, because the difference is confined to two objects near the centre of frame.
+Nothing about the numbers looked wrong. A coarse 10x6 luma map is what localised it.
+`__dev.setProgress()` now pins it, `capture()` reports the state it was taken at, and **every number in this document is at five of five lessons complete**, which is what rounds 1 and 2 were captured at.
 
 ---
 

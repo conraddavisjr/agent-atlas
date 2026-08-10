@@ -97,16 +97,56 @@ describe('tier settings', () => {
     expect(QUALITY.high.grassCastShadow).toBe(false)
   })
 
-  it('turns ambient occlusion off entirely at the bottom tier', () => {
+  it('never runs ambient occlusion, at any tier', () => {
+    /*
+      Decided in `docs/design/97-decision-shadow-end.md` item 9, and asserted
+      across all three tiers rather than only at `low`, for the same reason
+      `grassCastShadow` is: "turn AO back on at high" is precisely the change a
+      future fidelity pass reaches for, and the cost of rediscovering why not is
+      a full critique round.
+
+      Three reasons, in the order they were established.
+
+      Cost: about half the frame rate at high. Three alternating runs each at
+      1660x934 on `hub-establishing` after the grass-shadow fix gave 35.9 / 21.0
+      / 31.3 mean fps with the pass on against 74.2 / 61.7 / 59.9 with it off,
+      p95 11.5 / 9.5 / 10.0 against 21.9 / 22.4 / 15.6. No overlap in either
+      column. Only the alternated ratio is evidence - absolute fps from that
+      machine moved 65.5 to 21-36 across two sessions with nothing changed.
+
+      Reach: it cannot be the frame's shadow end even in principle. n8ao
+      composites `mix(scene, color * scene, 1 - pow(visibility, intensity))`, so
+      with `color = #8fa4cc` a FULLY occluded pixel floors at 37% of its own
+      value. On a lawn at 0.50 display luma that is 0.35 at absolute best. The
+      band this round is about starts at 0.06 and the pass has no arithmetic
+      route to it.
+
+      Parity: false / true / true is the ladder changing the ART rather than the
+      fidelity, which section 7 of the art bible and round 1's F5 both forbid. An
+      occlusion pass moves the value of the largest surface in the frame; it is
+      not a resolution setting.
+
+      `?gfx=ao` turns it back on at all three tiers without a rebuild, which is
+      what keeps the measurement above repeatable. See `fx.ts`.
+    */
     expect(QUALITY.low.ambientOcclusion).toBe(false)
-    // Still the cheap counts rather than a placeholder, so forcing AO on at
-    // this tier for a diagnostic does not also buy the expensive settings.
+    expect(QUALITY.medium.ambientOcclusion).toBe(false)
+    expect(QUALITY.high.ambientOcclusion).toBe(false)
+
+    // The tuned settings survive the removal, deliberately: they are
+    // measurements, and `?gfx=ao` has to reach a pass configured the way the
+    // one that was measured was configured, or the A/B compares two unknowns.
     expect(QUALITY.low.aoSamples).toBe(16)
     expect(QUALITY.low.aoDenoiseSamples).toBe(4)
+    expect(QUALITY.high.aoHalfRes).toBe(true)
   })
 
   it('denoises ambient occlusion enough to hide its own jitter where it is visible', () => {
     /*
+      Only reachable through `?gfx=ao` now that the pass is off at every tier,
+      and kept for exactly that reason: the diagnostic has to see the
+      configuration that was measured, not the wrapper's defaults.
+
       n8ao leaves `accumulate` off, so its sampling jitter is a fixed pattern
       rather than something that averages away over frames, and the denoise
       count is the only thing between that pattern and the screen. The wrapper's
