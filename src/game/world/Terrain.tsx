@@ -1,16 +1,15 @@
 import { useMemo } from 'react'
 import { useThree } from '@react-three/fiber'
 import { RigidBody, CylinderCollider } from '@react-three/rapier'
-import { palette } from '@/art/palette'
 import { mattePlastic } from '@/art/materials'
-import { paintByFacing } from '@/art/geometry'
+import { paintByHeight } from '@/art/geometry'
 import {
   createGroundRoughnessTexture,
   createGroundTexture,
   GROUND_METRES_PER_TILE,
   GROUND_ROUGHNESS_BIAS,
 } from '@/art/groundTexture'
-import { PLATEAU_RADIUS, islandSkirtLathe } from './hubLayout'
+import { PLATEAU_RADIUS, islandSkirtLathe, islandSkirtValues } from './hubLayout'
 
 /**
  * The island's ground, and the skirt that gives it thickness.
@@ -42,19 +41,29 @@ import { PLATEAU_RADIUS, islandSkirtLathe } from './hubLayout'
  * The critique measured the consequence exactly: the lawn ends against sky as a
  * hard curve with nothing below it.
  *
- * So the fix is not more geometry. It is one lathe with an **overhanging lip**:
- * the first stop below the lawn steps outward as well as down, so a band of
- * soil projects past the plateau's silhouette all the way round and the island
- * gains an edge from every elevated angle. The lip is up-facing, so it takes
- * the steeply overhead key almost in full and lands in the midground band as a
- * value measured on the frame rather than as an albedo that happens to be in
- * range. Below it the cliff turns down and in and goes darker, which is correct
- * and free: the lip overhangs it, so the cliff is largely hidden behind its own
- * lip in exactly the shots where a near-black cliff against a pale sky would
- * have been the frame's strongest edge.
+ * The fix was not more geometry, it was one lathe with an **overhanging lip**,
+ * and it worked: the island gained an edge. The version after it - the current
+ * one - is about what that edge turned out to be made of. See
+ * `hubLayout.islandSkirtProfile`, which carries the arithmetic. The short form:
+ * the overhang's widest stop is the island's lower silhouette, so putting it
+ * 0.52 m below the lawn made the whole visible band an up-facing shelf, which
+ * measured 95.8% of every skirt pixel in `hub-establishing` with the cliff
+ * contributing zero. The widest stop is now 1.80 m down, and the band it
+ * bounds is a wall rather than a shelf.
  *
  * One mesh, one material, no shadow interaction. Three draw calls saved, and it
  * is the first version of this that is visible at all.
+ *
+ * ## Why the values ride on height and not on facing
+ *
+ * A lathe segment is one conical band with one normal, so `paintByFacing` gives
+ * it one value however many stops the profile has. That is why the old skirt
+ * measured a flat 0.230 to 0.202 down ninety pixels: the surface was one band,
+ * and 0.028 of the 0.029 of fall was the vignette rather than the soil.
+ * `paintByHeight` puts a rung on every profile stop instead, so the gradient
+ * down the silhouette is authored rather than hoped for, and the decision
+ * document's "darkest at the bottom of the silhouette" becomes a thing the
+ * geometry states.
  *
  * ## And the photograph is gone with it
  *
@@ -69,30 +78,18 @@ import { PLATEAU_RADIUS, islandSkirtLathe } from './hubLayout'
 
 export { PLATEAU_RADIUS }
 
-/** Enough that the rim reads as a circle rather than a polygon at this scale. */
-const RIM_SEGMENTS = 128
-
 /**
- * Band 2, the midground, split by facing rather than by mesh.
+ * Enough that the rim reads as a circle rather than a polygon at this scale.
  *
- * The lip takes `palette.soil` unchanged: display luma 0.319 on a surface whose
- * normal Y is about 0.90, which takes the steeply overhead key almost in full
- * and should render near 0.29, mid-band.
- *
- * The cliff cannot take `palette.soilDeep`, and the reason is the whole lesson
- * of the critique rather than an oversight. The band test is a statement about
- * the frame. A surface facing down and outward receives a small fraction of
- * that same key, so an albedo already sitting at the band's value renders far
- * below it: `soilDeep` at 0.197 would come out near 0.06, which is darker than
- * the pylons the critique named as the worst edge in the picture. 0.414 is the
- * albedo that puts the rendered cliff at roughly 0.20 to 0.25.
- *
- * It is a local constant only because `palette.ts` belongs to the integrator
- * this pass. It is the proposed new value for `palette.soilDeep`, which has no
- * other call site in the project, and it must not carry a `band()` assertion
- * when it lands there.
+ * Re-derived rather than re-trusted when the keel moved the island's silhouette
+ * edge 1.28 m further down, because the edge got longer and more prominent and
+ * this was the obvious thing to have to raise. It does not: at radius 16.78 a
+ * 128-gon's facet sagitta is 0.0051 m, and the nearest rim in `hub-establishing`
+ * is 17.8 m from the lens at 74.7 px/m, so the facet bulge is 0.38 px. Raising
+ * it to 256 changes the predicted underside area by 0.3% and the sagitta to a
+ * tenth of a pixel, which is 1,536 triangles bought for nothing.
  */
-const CLIFF = '#8a6440'
+const RIM_SEGMENTS = 128
 
 export function Terrain() {
   const gl = useThree((s) => s.gl)
@@ -130,23 +127,17 @@ export function Terrain() {
   }, [gl])
 
   /**
-   * The skirt: lip, cliff and root, as one lathe.
+   * The skirt: shelf, keel wall and root, as one lathe.
    *
-   * The two values ride on a vertex colour rather than on two materials, the
-   * same trick `deckBatch` uses, so the whole underside of the world is one
-   * draw. The changeover threshold is high - 0.62 - because the lip's normal Y
-   * is 0.90 and the vertical face immediately below it is 0.32, and the line
-   * between them is meant to be the hard bottom edge of the lip rather than a
-   * gradient across it.
+   * Six values ride on a vertex colour rather than on six materials, the same
+   * trick `deckBatch` uses, so the whole underside of the world is one draw.
    */
   const skirt = useMemo(
     () =>
-      paintByFacing(islandSkirtLathe(PLATEAU_RADIUS, RIM_SEGMENTS), {
-        up: palette.soil,
-        side: CLIFF,
-        threshold: 0.62,
-        softness: 0.12,
-      }),
+      paintByHeight(
+        islandSkirtLathe(PLATEAU_RADIUS, RIM_SEGMENTS),
+        islandSkirtValues(PLATEAU_RADIUS),
+      ),
     [],
   )
 
@@ -174,12 +165,36 @@ export function Terrain() {
       </RigidBody>
 
       {/*
-        No shadow interaction at all, and it is a saving rather than a
-        compromise. The skirt hangs below a solid disc under a steeply overhead
-        key, so everything it would ever cast onto is already in the plateau's
-        own shadow and there is nothing under the island to receive anything.
-        Casting would put a second full pass over a 128-segment lathe to change
-        no pixel.
+        Still no shadow interaction, and `receiveShadow` was reconsidered
+        properly this round rather than inherited. The keel is now visible and
+        the shelf above it overhangs, so "the lip casting onto the keel" is the
+        best contact this frame could have had. It cannot happen, and the reason
+        is not the shadow frustum.
+
+        THE FRUSTUM IS NOT THE PROBLEM. At `hub-establishing` the caster's box
+        centres on the player pushed 5 m along the camera bearing and clamped to
+        radius 6, which lands at (0.55, 0.50, 3.88). Over the visible keel that
+        puts light-space u in -13.4..17.3 and v in -11.2..9.6 against a half
+        extent of 12, and depth from the light in 20.2..41.2 m against near 10
+        and far 52. So 75% of the visible keel is INSIDE the frustum already.
+
+        WHAT STOPS IT IS THE SUN'S ELEVATION. The key sits at elevation 42.7
+        degrees. The camera's depression angle where it grazes the island's rim
+        is 44.7 degrees. Those are within two degrees of each other, so the
+        surface that just clears the overhang into view also just clears it into
+        the light: sampled every seventh pixel over the whole visible keel, the
+        number of key-lit pixels the island occludes from its own key is ZERO,
+        for this profile and for the previous one. `receiveShadow` here would
+        buy a second full depth pass over a 256-segment lathe and change no
+        pixel, which is precisely what the previous comment claimed for the
+        wrong reason.
+
+        Two ways it could become possible, both belonging to whoever owns
+        `Lighting.tsx` rather than here: drop the key's elevation, or widen the
+        overhang past 1.7 m so its shadow clears the wall below it on the
+        key-facing azimuth. The first is a composition decision about the whole
+        world; the second doubles the up-facing shelf, which is the one surface
+        on this mesh that can only ever be a midground value.
       */}
       <mesh geometry={skirt}>
         <meshPhysicalMaterial

@@ -15,6 +15,20 @@ import type { LightingVariant } from './Lighting'
  *
  * Both are deliberately chromatic rather than neutral grey. A neutral contact
  * reads as dirt; a cool one reads as shadow. See `01-lighting.md` section 4.
+ *
+ * **Two consumers now, and the hue is deliberately shared between them.**
+ * `ContactBlob.tsx` tints the character's blob and `contactDecal.ts` tints every
+ * static object base in the world. They must agree, because a hero whose shadow
+ * is a different colour from the shadow of the plinth he is standing beside is
+ * the single clearest way to make an authored contact read as a decal. What
+ * differs between the two is depth, not hue: the blob drives `uOpacity` from the
+ * pose solver, and the decal batch carries a per-family peak in
+ * `CONTACT_STRENGTH`, both multiplying toward the value below.
+ *
+ * The hub's `#3d4a6b` linearises to (0.0468, 0.0684, 0.1499) for a linear Rec.709
+ * luma of 0.0697, which is the number every strength in `CONTACT_STRENGTH` is
+ * solved against. Changing this hex changes all of them, and
+ * `contactDecal.test.ts` fails until they are re-derived.
  */
 export const CONTACT_TINT: Record<LightingVariant, string> = {
   /** Cool blue against the warm key and the green bounce. */

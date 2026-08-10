@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BoxGeometry, BufferGeometry, Vector2, Vector3 } from 'three'
+import { BoxGeometry, BufferGeometry, PlaneGeometry, Vector2, Vector3 } from 'three'
 import {
   beveledExtrude,
   boxProjectUV,
@@ -15,6 +15,7 @@ import {
   nodeShell,
   pad,
   paintByFacing,
+  paintByHeight,
   pill,
   puck,
   roundedCylinder,
@@ -427,6 +428,98 @@ describe('paintByFacing', () => {
   it('needs normals', () => {
     const bare = new BufferGeometry()
     expect(() => paintByFacing(bare, { up: '#fff', side: '#000' })).toThrow(/normal attribute/)
+  })
+})
+
+describe('paintByHeight', () => {
+  /** A 2 m tall box centred on the origin, so its vertices sit at y = +/-1. */
+  const tall = () => new BoxGeometry(1, 2, 1)
+
+  it('paints each vertex from its own height', () => {
+    const geometry = paintByHeight(tall(), [
+      { y: 1, colour: '#ffffff' },
+      { y: -1, colour: '#000000' },
+    ])
+    const position = geometry.getAttribute('position')
+    const colors = geometry.getAttribute('color')
+    expect(colors.count).toBe(position.count)
+
+    for (let i = 0; i < position.count; i++) {
+      expect(colors.getX(i)).toBeCloseTo(position.getY(i) > 0 ? 1 : 0, 5)
+    }
+  })
+
+  it('interpolates between the two rungs a vertex falls between', () => {
+    /*
+      A unit plane in the XY plane, so its vertices sit at y = +/-0.5. Against a
+      ramp from y = 1 to y = 0 the top row is halfway down it, and halfway from
+      white to black in the LINEAR working space is 0.5 - not the 0.7354 an sRGB
+      midpoint would give. Getting that backwards is how a gradient comes out
+      washed at one end, and it is why the interpolation happens on `Color`
+      components rather than on the hex strings.
+    */
+    const geometry = paintByHeight(new PlaneGeometry(1, 1), [
+      { y: 1, colour: '#ffffff' },
+      { y: 0, colour: '#000000' },
+    ])
+    const position = geometry.getAttribute('position')
+    const colors = geometry.getAttribute('color')
+    for (let i = 0; i < position.count; i++) {
+      // y = +0.5 is mid-ramp; y = -0.5 is below its bottom rung and clamps.
+      expect(colors.getX(i)).toBeCloseTo(position.getY(i) > 0 ? 0.5 : 0, 5)
+    }
+  })
+
+  it('clamps outside the ramp rather than extrapolating past it', () => {
+    /*
+      The skirt's ramp stops at the profile's own top and bottom, and the lawn
+      disc's edge ring sits exactly on the top rung. An extrapolating ramp would
+      hand a vertex a colour nobody authored - and for a dark ramp the
+      extrapolation runs negative, which three clamps silently, so the tell
+      would be a black ring at one end of the island's skirt and nothing else.
+    */
+    const geometry = paintByHeight(new BoxGeometry(1, 2, 1), [
+      { y: 0.5, colour: '#ffffff' },
+      { y: -0.5, colour: '#808080' },
+    ])
+    const position = geometry.getAttribute('position')
+    const colors = geometry.getAttribute('color')
+    for (let i = 0; i < position.count; i++) {
+      const expected = position.getY(i) > 0 ? 1 : 0.2158
+      expect(colors.getX(i)).toBeCloseTo(expected, 3)
+    }
+  })
+
+  it('refuses a ramp that does not descend', () => {
+    /*
+      A ramp handed over bottom-up does not throw on its own: every vertex falls
+      past the first rung, so the whole mesh comes out one flat colour, which
+      looks exactly like a painter that never ran. This is the same class of
+      failure as the lathe's inward normals and it is checked for the same
+      reason.
+    */
+    expect(() =>
+      paintByHeight(tall(), [
+        { y: -1, colour: '#000000' },
+        { y: 1, colour: '#ffffff' },
+      ]),
+    ).toThrow(/must descend/)
+    expect(() =>
+      paintByHeight(tall(), [
+        { y: 0, colour: '#000000' },
+        { y: 0, colour: '#ffffff' },
+      ]),
+    ).toThrow(/must descend/)
+  })
+
+  it('needs at least two rungs, and a position attribute', () => {
+    expect(() => paintByHeight(tall(), [{ y: 0, colour: '#fff' }])).toThrow(/at least two stops/)
+    expect(() =>
+      paintByHeight(new BufferGeometry(), [
+        { y: 1, colour: '#fff' },
+        { y: -1, colour: '#000' },
+      ]),
+    ).toThrow(/position attribute/)
   })
 })
 

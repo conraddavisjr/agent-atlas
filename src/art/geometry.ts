@@ -611,6 +611,77 @@ export function paintByFacing(
   return geometry
 }
 
+/** One rung of a `paintByHeight` ramp: a local Y and the albedo at that height. */
+export type HeightStop = { y: number; colour: string }
+
+/**
+ * Give a geometry a vertex colour that depends on how HIGH each vertex is.
+ *
+ * The companion to `paintByFacing`, and it exists because facing cannot express
+ * a gradient down a cone. A lathe segment is one conical band with one normal,
+ * so `paintByFacing` paints the whole band a single value however many stops the
+ * profile has - which is exactly the defect measured on the island's skirt: a
+ * flat 0.230 falling to 0.202 over ninety pixels, and the 0.028 of that fall was
+ * the VIGNETTE rather than the surface. The island read as having a trim rather
+ * than a thickness, and no amount of tuning the two facing colours could have
+ * fixed it, because there was only ever one facing in frame.
+ *
+ * Height also happens to be the axis the art direction is stated on:
+ * `docs/design/97-decision-shadow-end.md` asks for the underside to be
+ * "darkest at the bottom of the silhouette", which is a statement about Y.
+ *
+ * Reads `position` rather than any assumption about vertex ORDER. `LatheGeometry`
+ * emits its vertices azimuth-major, and a painter that indexed on that would be
+ * one three release away from painting the island in stripes with a correct
+ * triangle count and no error - the failure mode this codebase keeps paying for.
+ *
+ * Stops must run from the top down and must be strictly descending. A ramp
+ * handed over in the wrong order silently collapses to its first colour, which
+ * looks exactly like a painter that did not run, so it throws.
+ *
+ * Linear working space and a white material `color`, for the same reasons as
+ * `paintByFacing`; see that comment.
+ */
+export function paintByHeight(geometry: BufferGeometry, stops: readonly HeightStop[]): BufferGeometry {
+  const position = geometry.getAttribute('position')
+  if (!position) {
+    throw new Error('geometry: paintByHeight needs a position attribute')
+  }
+  if (stops.length < 2) {
+    throw new Error(`geometry: paintByHeight needs at least two stops, got ${stops.length}`)
+  }
+  for (let i = 1; i < stops.length; i++) {
+    if (stops[i].y >= stops[i - 1].y) {
+      throw new Error(
+        `geometry: paintByHeight stops must descend, but stop ${i} at y ${stops[i].y} is not ` +
+          `below stop ${i - 1} at y ${stops[i - 1].y}`,
+      )
+    }
+  }
+
+  const colours = stops.map((stop) => new Color(stop.colour))
+  const colors = new Float32Array(position.count * 3)
+
+  for (let i = 0; i < position.count; i++) {
+    const y = position.getY(i)
+    let lower = 1
+    while (lower < stops.length - 1 && y < stops[lower].y) lower++
+    const upper = lower - 1
+    const span = stops[upper].y - stops[lower].y
+    // Clamped rather than extrapolated at both ends, so a vertex outside the
+    // ramp takes the nearest authored value instead of an invented one.
+    const t = span === 0 ? 1 : Math.min(1, Math.max(0, (y - stops[lower].y) / span))
+    const a = colours[lower]
+    const b = colours[upper]
+    colors[i * 3] = a.r + (b.r - a.r) * t
+    colors[i * 3 + 1] = a.g + (b.g - a.g) * t
+    colors[i * 3 + 2] = a.b + (b.b - a.b) * t
+  }
+
+  geometry.setAttribute('color', new BufferAttribute(colors, 3))
+  return geometry
+}
+
 /**
  * Rewrite a geometry's UVs as a world-scale box projection.
  *

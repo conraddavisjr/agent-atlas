@@ -60,6 +60,50 @@ const LIGHT_UP = /*@__PURE__*/ new Vector3().crossVectors(KEY_DIR, LIGHT_RIGHT).
  * looking away from, and the reference brief endorses it directly: background
  * layers frequently cast no shadows at all, only AO, which flattens them and
  * pushes them back.
+ *
+ * WIDER THAN 12 WAS ALSO ASKED FOR, TO CATCH THE LIP'S SHADOW ON THE KEEL, AND
+ * THE ANSWER IS NO. The arithmetic, because it is short and it settles a
+ * recurring question.
+ *
+ * The shadow camera is orthographic and looks along -KEY_DIR, so its frustum is
+ * a square prism ALIGNED WITH THE SUN. Depth is not the constraint and never
+ * was: `near 10 / far 52` with the light parked 30 m up the key direction admits
+ * any caster with `-22 <= dot(X - C, KEY_DIR) <= 20`, and the keel apex at
+ * y = -7.2 sits at -5.22. The constraint is lateral, and it MOVES WITH DEPTH,
+ * because a prism aligned with the sun has a footprint that slides
+ * anti-sunward by `1 / tan(elevation)` = 1.084 m for every metre of drop.
+ *
+ * `islandSkirtProfile` puts the overhanging lip at radius 16.78 and the keel
+ * apex at y = -7.2. With the frustum centre at the island origin, the sunward
+ * reach of the box is:
+ *
+ *     y  0      p <= 17.15    the lip, at 16.78:  inside
+ *     y -0.34   p <= 16.79                        inside, by 1 cm
+ *     y -0.52   p <= 16.59                        outside by 0.19 m
+ *     y -1.9    p <= 15.09                        outside by 1.69 m
+ *     y -3.6    p <= 13.25                        outside by 3.53 m
+ *     y -7.2    p <=  9.35                        outside by 7.43 m
+ *
+ * So the lip is (barely) inside the box as a CASTER, and the cliff surface
+ * immediately below it that would RECEIVE its shadow is already outside. The
+ * shadow has nowhere to land. `CENTRE_CLAMP` buys 6 m when the player happens to
+ * be standing on the correct side, which covers down to about y = -5.4 and still
+ * misses the apex by 1.43 m. And `|u| <= 12` against an amplitude of 16.78
+ * means only +-45.7 degrees of the rim's azimuth is ever in the box at any depth.
+ *
+ * Including the whole rim at every depth needs HALF_EXTENT >= 17.04, which is
+ * essentially the 18 this was tightened FROM. The price: texel density falls 28%
+ * at every tier (high 170.7 -> 122.1 texels/m) and the VSM penumbra widens 40%
+ * (47 mm -> 66 mm at medium, radius 4). That is the entire gain this constant
+ * was introduced to buy, handed back, for one contact edge.
+ *
+ * THE CHEAP WAY TO GET THAT CONTACT IS NOT A SHADOW MAP. The lip-on-keel
+ * darkening is static, axially symmetric, and fixed relative to the geometry: the
+ * island does not move and neither does the sun. It is a vertex-colour ramp on
+ * the skirt lathe, which `paintByFacing` already drives, at zero texels, zero
+ * draw calls and zero CPU. That is precedented here rather than novel - decision
+ * 97 records that blade-to-ground contact was moved into the grass's own vertex
+ * colour for the same reason and does not depend on the pass at all.
  */
 const HALF_EXTENT = 12
 /** Metres the box is pushed ahead of the player along the camera's bearing. */
@@ -110,33 +154,110 @@ export const HUB_RIG = {
    * it is what puts the temperature axis the reference brief asks for onto the
    * surfaces the player stands on.
    *
-   * Up 1.50 to 1.55, which is where the sky fill's 0.05 went. The directional
-   * sum is unchanged at 2.55, and the key's total LUMINANCE actually falls 2.6%
-   * because the warmer hex carries less green and blue, so this does not spend
-   * any of the greyscale budget.
+   * 1.55 to 1.83, and this is the change that makes a cast shadow possible.
+   *
+   * The key is the ONLY term in the rig that raises a lit surface without
+   * raising a shadowed one, because a shadow removes it and nothing else.
+   * Integrated onto a deck top (`N = +Y`, `N.L` 0.6781) it delivers 0.5565 of
+   * irradiance luminance per unit of intensity, and onto a shadowed deck it
+   * delivers zero. So moving intensity out of the fills and into the key widens
+   * the lit-to-shadowed ratio from both ends at once, where lowering the fills
+   * alone only narrows the picture.
+   *
+   * Measured effect, modelled against the round-2 baseline: a lit deck holds at
+   * 0.589 display (it was 0.600) while its cast shadow falls from 0.442 to
+   * 0.382, so the contrast across a shadow edge goes 0.158 to 0.207. That also
+   * moves the shell's key-to-open-shadow ratio from 1.83:1 to 2.60:1, which is
+   * INTO the 2:1-3:1 window the budget block below claims for it and had
+   * actually fallen out of.
+   *
+   * THE RISK, stated because it is the one this number carries. The directional
+   * sum is now exactly at the 2.60 cap with no spare, and the key's own GGX lobe
+   * on the shell's clearcoat rises 18% with it. `hub-backlit` is the shot whose
+   * stated criterion is whether anything other than an emissive has crossed the
+   * bloom threshold at a grazing angle, so that is where this shows up first.
+   * If it does, the escape ladder at the bottom of this file applies unchanged.
    *
    * The key's DIRECTION is shared with `SkyDome`'s sun and must not move. Its
    * COLOUR is not shared, and `SkyDome` is owned by another stream: if the sun
    * disc and the key ever visibly disagree in temperature, this is the number
    * that moved and the sky is the thing to check against.
    */
-  key: { color: '#ffe7bc', intensity: 1.55 },
+  key: { color: '#ffe7bc', intensity: 1.83 },
   /**
-   * The sky fill, lowered rather than merely dimmed.
+   * The sky fill, 0.25 to 0.12.
    *
-   * Its job, per its own comment below, is to give shadowed regions form. At
-   * (-11, 4.5, -7) it was 19 degrees up, so a horizontal deck top caught it at
-   * `N.L` 0.328 - almost as much as a vertical face in shadow caught, which is
-   * how the level's largest cool term ended up on the surfaces meant to be warm.
-   * At y 2.4 it is 10.4 degrees up: `N.L` on a deck top falls to 0.181 while
-   * `N.L` on a vertical facing it RISES from 0.950 to 0.984. The blue moves off
-   * the floor and onto the shadowed walls, which is the whole point of it.
+   * Its stated job is to give shadowed regions FORM rather than merely a lifted
+   * floor, and the measurement that justifies cutting it is that at the two
+   * vantages where that job matters it is not doing it.
+   *
+   * Form on a shadowed object means a difference between two of its faces. A
+   * light whose azimuth lies on the camera axis lights both visible faces of a
+   * box equally and produces none, whatever its intensity. This light sits at
+   * azimuth 237.5 degrees; the camera at `hub-backlit` sits at 241.0 and at
+   * `hub-grazing` at 240.9, so it is **3.4 degrees off the camera axis** in both
+   * shots. On the hero's head there it reaches the front face at `N.L` 0.680 and
+   * the side face at 0.711 - a 4% difference across a 90-degree corner.
+   *
+   * So at the two shots that need it, this light can only raise the level, and
+   * the level is what round 2's F2 measured as too high. Its remaining 0.12 is
+   * kept rather than zeroed because at `hub-establishing` and `hub-portal` it IS
+   * 33-38 degrees off the camera axis and does real work.
+   *
+   * ITS AZIMUTH IS THE REAL FIX AND IS DELIBERATELY NOT DONE HERE. Moving it 40
+   * to 60 degrees off the key's opposite would restore face-to-face contrast at
+   * both backlit vantages for free. It is left alone because handoff item 3 is
+   * about to move the rim for the same reason, and doing both in one round makes
+   * neither attributable. They are one change and belong in one commit.
+   *
+   * The position's ELEVATION is unchanged and still load-bearing: at
+   * (-11, 4.5, -7) it was 19 degrees up and a deck top caught it at `N.L` 0.328,
+   * almost as much as a shadowed vertical caught. At y 2.4 it is 10.4 degrees
+   * up, `N.L` on a deck top is 0.181 and `N.L` on a vertical facing it is 0.984.
    */
-  skyFill: { color: '#9ec9f0', intensity: 0.25, position: [-11, 2.4, -7] as const },
-  /** The camera-relative rim. Unchanged; see the block comment on the element. */
+  skyFill: { color: '#9ec9f0', intensity: 0.12, position: [-11, 2.4, -7] as const },
+  /**
+   * The camera-relative rim. INTENSITY DELIBERATELY UNCHANGED at 0.55.
+   *
+   * Recorded here because it is the second largest single obstacle to a readable
+   * cast shadow and the next round will want the number. Integrated onto a deck
+   * top the rim deposits `sin(RIM_ELEV) * 0.55` of cool light, which is 0.1845
+   * of irradiance luminance - 15.3% of everything a shadowed deck received
+   * before this change and 19.1% of what it receives after. It is the largest
+   * ANALYTIC term on a surface the key cannot reach.
+   *
+   * And on the hero's shadow side at `hub-backlit` it delivers exactly ZERO,
+   * because at that vantage its azimuth has collapsed onto the key's (60.98
+   * against 60.95 degrees, round 2's F3) and the camera-facing surfaces have
+   * `N.L` -0.90. So trading rim intensity for key intensity would buy
+   * cast-shadow contrast at no cost at all to the shot the rim exists for. That
+   * trade is not taken here: handoff item 3 owns the rim, and arriving at it
+   * with the intensity already moved would confound its result.
+   *
+   * `RIM_ELEV` is the cheaper half of the same trade and is also left alone:
+   * 0.45 to 0.30 rad would cut the floor spill 32% (0.1845 to 0.1253) while
+   * RAISING `cos(elevation)` on a vertical from 0.900 to 0.955. Round 4 should
+   * price it alongside the azimuth.
+   */
   rim: { color: '#bfeaff', intensity: 0.55, elevation: RIM_ELEV },
-  /** The camera-relative bounce fill. Unchanged. */
-  bounceFill: { color: '#ffe9cf', intensity: 0.2, elevation: FILL_ELEV },
+  /**
+   * The camera-relative bounce fill, 0.20 to 0.10.
+   *
+   * This is the cheapest cut in the rig and the arithmetic is a one-liner: it is
+   * aimed at `camAz` by construction, so its azimuth is **0 degrees off the
+   * camera axis at every vantage, always**. It therefore cannot produce
+   * face-to-face contrast on anything, ever. It can only raise the level of
+   * whatever faces the camera - which at `hub-backlit` is the hero's shadow
+   * side, where it was the third largest term at 0.1664 of irradiance luminance,
+   * 16.7% of the total, against 0.0235 on a deck top.
+   *
+   * A 7:1 preference for camera-facing verticals over floors is exactly the
+   * shape of the cut this round needs, which is why this one goes furthest.
+   * It is halved rather than removed because at `low` it is the term that is
+   * already absent, and taking it to zero would make `low` and `high` differ by
+   * nothing at all in a place the tier ladder is meant to be invisible anyway.
+   */
+  bounceFill: { color: '#ffe9cf', intensity: 0.1, elevation: FILL_ELEV },
   /**
    * The hemisphere, and the single largest cool term on any horizontal surface.
    *
@@ -151,8 +272,32 @@ export const HUB_RIG = {
    * brief's rule that ambient is saturated and never grey, but now in the same
    * family as the dome instead of three times its chroma. This is the change
    * that moves a lit deck from warmth 0 to warmth +15.
+   *
+   * BOTH COLOURS ARE UNCHANGED, and the ground colour is unchanged on purpose
+   * against a suggestion that it was doing nothing. three computes
+   * `mix(ground, sky, 0.5 * dot(N, up) + 0.5)`, so on a VERTICAL face the weight
+   * is exactly 0.5 and the ground colour arrives at half strength - not "almost
+   * nothing". Integrated, `#6fbe3d` puts (0.162, 0.515, 0.045) of linear green
+   * into every vertical surface in the level, and the hemisphere term on the
+   * hero's shadow side is (0.182, 0.327, 0.248): the greenest thing reaching it.
+   * The hero's shadow side is not grey because the ambient is grey. See the
+   * emissive note in the budget block at the bottom of this file for what it
+   * actually is.
+   *
+   * `scale` is here because `quality.hemisphereIntensity` lives in
+   * `quality.ts`, which is owned elsewhere, and the hub needs 0.34 where the
+   * tier ladder offers 0.55. It is a MULTIPLIER rather than a clamp so that the
+   * ladder survives: 0.60/0.55/0.55 becomes 0.372/0.341/0.341, low still above
+   * medium, every tier still inside the bible's 0.60 cap with room to spare.
+   *
+   * Why the hemisphere is the right thing to cut this hard. Its only variation
+   * is with world up, so between two VERTICAL faces of the same object it is
+   * perfectly uniform - on a box in shadow it is an `ambientLight` wearing a
+   * different name, and section 5 of the budget block bans `ambientLight` for
+   * precisely that reason. It was the largest single term on the hero's shadow
+   * side at 0.2901, 29.2%, and it contributed nothing to describing the shape.
    */
-  hemisphere: { sky: '#bcd6ee', ground: '#6fbe3d' },
+  hemisphere: { sky: '#bcd6ee', ground: '#6fbe3d', scale: 0.62 },
 } as const
 
 /**
@@ -170,12 +315,57 @@ export const HUB_RIG = {
  * moving again.
  */
 export const HUB_ENV = {
-  /** Peak radiance 0.952. 1.52x under the threshold, the margin it had at 1.75. */
-  keySoftbox: 1.12,
-  /** Peak radiance 1.088. 1.33x under, the margin it had at 1.75. Hottest card. */
-  highlightStrip: 1.28,
-  /** `scene.environmentIntensity`, which multiplies every card. */
-  intensity: 0.85,
+  /**
+   * Peak radiance 0.952, EXACTLY as before: `1.36 * 0.70 == 1.12 * 0.85`.
+   * 1.52x under the threshold, the margin it had at 1.75.
+   */
+  keySoftbox: 1.36,
+  /**
+   * Peak radiance 1.088, EXACTLY as before: `1.5543 * 0.70 == 1.28 * 0.85`.
+   * 1.33x under, the margin it had at 1.75. Still the hottest card.
+   */
+  highlightStrip: 1.5543,
+  /**
+   * `scene.environmentIntensity`, 0.85 to 0.70, and the reason the two numbers
+   * above moved with it.
+   *
+   * The environment does two unrelated jobs through one scalar. Its DIFFUSE
+   * contribution to a surface is `radiance * solid angle`, integrated - that is
+   * ambient fill, and it was the largest single term on every shadowed surface
+   * measured this round: 40.5% of the hero's shadow side at `hub-backlit` and
+   * 51.0% of a shadowed deck top. Its SPECULAR contribution is bounded by peak
+   * RADIANCE alone, because a prefiltered cubemap lookup cannot exceed its own
+   * brightest texel, and that is what makes the clearcoat read as moulded
+   * plastic and what the bloom margins are computed against.
+   *
+   * Lowering `environmentIntensity` alone would cut both. So the two cards whose
+   * job is specular are scaled by the reciprocal, `0.85 / 0.70`, which holds
+   * their peak radiance bit-for-bit and therefore holds every bloom margin and
+   * every assertion in `Lighting.test.ts` about them. What falls by 17.6% is the
+   * ambient fill from the broad dim cards and the background, which is the only
+   * part this round wanted.
+   *
+   * THIS IS A HARD FLOOR AT 0.68. The highlight strip has to rise as this falls,
+   * and `1.28 * 0.85 / 0.68 = 1.60` is exactly the bible's single-Lightformer
+   * cap. Below 0.68 the strip breaches it and the peak can no longer be held, so
+   * anything further has to come from card SIZES instead - halving a card's area
+   * halves its diffuse contribution and leaves its peak radiance untouched.
+   *
+   * AND A MECHANISM WORTH KNOWING, verified in three 0.185.1 rather than assumed.
+   * `WebGLRenderer` sets `envMapIntensity` from `scene.environmentIntensity` for
+   * any Standard/Physical material whose own `envMap` is null
+   * (`WebGLRenderer.js:2693`), and `refreshMaterialUniforms` only writes
+   * `material.envMapIntensity` back when `material.envMap` is set
+   * (`WebGLMaterials.js:404`). Nothing in this project sets a per-material
+   * `envMap`, so this ONE number is the environment's contribution to every
+   * material in the hub, and every per-material `envMapIntensity` in
+   * `materials.ts` is dead: the shell's 1.15, the grass blades' 0.6, the island
+   * skirt's 0.4 and `flock()`'s 0.3 are all silently replaced by this value.
+   * That is why there is no way to dim the environment on the hero without also
+   * dimming it on the grass, and why the grass's "compensate with
+   * `envMapIntensity`" comment does not describe what runs.
+   */
+  intensity: 0.7,
 } as const
 
 /** Shortest signed angle, so a wrap never produces a spin. */
@@ -529,7 +719,11 @@ function HubRig({ quality }: { quality: QualitySettings }) {
         costs one mix and one dot.
       */}
       <hemisphereLight
-        args={[HUB_RIG.hemisphere.sky, HUB_RIG.hemisphere.ground, quality.hemisphereIntensity]}
+        args={[
+          HUB_RIG.hemisphere.sky,
+          HUB_RIG.hemisphere.ground,
+          quality.hemisphereIntensity * HUB_RIG.hemisphere.scale,
+        ]}
       />
     </>
   )
@@ -566,27 +760,63 @@ const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution
   return (
     <Environment frames={1} resolution={resolution} environmentIntensity={HUB_ENV.intensity}>
       {/*
-        The ambient floor, and the card that was missing entirely.
+        The ambient floor, `#243a52` to `#1d2a3c`, and the card that turned out
+        to be the `ambientLight` this rig bans.
 
         The virtual scene drei renders these into has NO background, so every
         gap between cards clears to black and the clearcoat reflects a void,
         which is one of the two reasons gloss currently reads as generic shine
-        rather than as moulded plastic. A uniform radiance over the full sphere
-        contributes `L * albedo` to diffuse, so this also supplies a chromatic
-        ambient to every surface in the scene for nothing. It must not go much
-        brighter than this or it becomes a fifth light and eats the value
-        structure.
+        rather than as moulded plastic. That job is real and is why this card
+        stays rather than going away.
+
+        But read the mechanism honestly. A uniform radiance filling the whole
+        sphere delivers `PI * L * environmentIntensity` of irradiance to EVERY
+        normal identically, with no dependence on the normal at all - which is
+        the exact definition of the `ambientLight` that section 5 of the budget
+        block below bans, in the same terms, for removing the shading it is meant
+        to lift. At `#243a52` and 0.85 that came to 0.109 of irradiance
+        luminance before the other cards occluded part of the sphere, which is a
+        fifth of the whole hemisphere light. Measured through the occlusion it
+        was delivering 0.0780 to a shadowed deck top (6.5% of everything it
+        received) and 0.0589 to the hero's shadow side (5.9%), all of it
+        structureless.
+        `#1d2a3c` cuts that by 56% and keeps a dark blue in the darkest
+        reflection, which is the part that was earning its place.
       */}
-      <color attach="background" args={['#243a52']} />
+      <color attach="background" args={['#1d2a3c']} />
 
-      {/* Key softbox, at the key directional's own bearing. It has to be at the
-          same bearing or the reflections in the clearcoat disagree with where
-          the shadows fall, which reads as wrong immediately even though nobody
-          can name it.
+      {/*
+        Key softbox, at the key directional's own bearing. It has to be at the
+        same bearing or the reflections in the clearcoat disagree with where the
+        shadows fall, which reads as wrong immediately even though nobody can
+        name it.
 
-          1.35 to 1.12, for the reason given on the highlight strip below: both
-          cards were sized against a threshold of 1.75 that has since been
-          measured at 1.45, and neither was re-derived when it moved. */}
+        1.12 to 1.36 is NOT a brightness change. `environmentIntensity` went
+        0.85 to 0.70 and this rises by the reciprocal, so its peak radiance is
+        still exactly 0.952 and its bloom margin is still exactly 1.52x. See
+        `HUB_ENV.intensity`.
+
+        THE MEASUREMENT THIS CARD SHOULD BE JUDGED ON, and the reason the next
+        round may want to shrink it. It sits at azimuth 60.3 degrees, which is
+        the key's own 60.95, so a deck top sees it almost head on - and it
+        delivered 0.3797 of irradiance luminance there, which was **31.5% of
+        everything a SHADOWED deck received** and is 39.4% after this round's
+        cuts. It is now the largest single term on any surface the key cannot
+        reach.
+
+        That is a copy of the key light that no shadow map can occlude, sitting
+        at the key's own bearing, and it is the single biggest reason a cast
+        shadow does not read on this island. It is left at 10 x 10 m here
+        because its diffuse contribution scales with AREA while its specular peak
+        does not, so the cut is free of bloom consequences but not free of value
+        consequences: it lifts the LIT deck by the same 0.3797, and the lit deck
+        is already only 0.03 clear of the 0.56 gameplay floor with the lawn
+        already below it. Shrinking this card to 6.5 m would take a shadowed deck
+        down another 0.219 of irradiance and buy roughly 0.03 more of shadow
+        contrast, at the cost of pushing the lit deck to 0.56. That is the right
+        trade to make in the round that raises the lawn, and the wrong one to
+        make before it.
+      */}
       <Lightformer
         intensity={HUB_ENV.keySoftbox}
         position={[7, 7.5, 4]}
@@ -612,11 +842,19 @@ const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution
         `hub-backlit` - the one shot whose stated criterion is whether anything
         other than an emissive has crossed the threshold.
 
-        1.28 restores the margin the design chose: peak radiance
+        1.28 restored the margin the design chose: peak radiance
         `1.0 * 1.28 * 0.85 = 1.088`, which is 1.33x under 1.45. It is still the
         hottest card in the rig and still the brightest thing a shell can
         reflect. Fixing this here rather than by dimming the emissives is
         deliberate: the emissives are the things that are meant to bloom.
+
+        1.28 to 1.5543 holds that peak EXACTLY while `environmentIntensity` falls
+        to 0.70: `1.0 * 1.5543 * 0.70 = 1.088`. Nothing about this card's
+        appearance or its bloom margin changes.
+
+        It is also what puts the floor under `environmentIntensity`. At 0.68 this
+        number would be 1.60, which is the bible's cap on a single Lightformer,
+        so 0.68 is as low as the ambient fill can be taken by this route.
       */}
       <Lightformer
         intensity={HUB_ENV.highlightStrip}
@@ -625,13 +863,64 @@ const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution
         color="#ffffff"
       />
 
-      {/* Cool sky wrap: large, low, opposite the key. This is the environment
-          half of the coloured-shadow story - a surface turned away from the key
-          sees mostly this card, so its reflections stay blue instead of being
-          neutralised by the softbox. */}
-      <Lightformer intensity={0.6} position={[-8, 3, -6]} scale={[14, 9, 1]} color="#8ec8f0" />
+      {/*
+        Cool sky wrap: large, low, opposite the key. This is the environment half
+        of the coloured-shadow story - a surface turned away from the key sees
+        mostly this card, so its reflections stay blue instead of being
+        neutralised by the softbox.
 
-      {/* Ground bounce: the grass, seen from below, filling undersides. */}
+        0.60 to 0.36, and the reason is that the "coloured" half of that story
+        was pointing at the wrong colour. Measured, this card was the single
+        largest ENVIRONMENT term on the hero's shadow side at `hub-backlit`:
+        0.1988 of irradiance luminance, 20.0% of everything that surface
+        received, more than the two analytic fills put together. It is at azimuth
+        233 degrees and the camera at that shot is at 241, so it sits almost
+        exactly behind the lens and lands squarely on the visible shadow side.
+
+        The reference brief's rule is that the shadow side of white plastic takes
+        the LEVEL'S dominant hue. This level's dominant hue is a saturated green
+        lawn. This card was making it blue, on top of a hemisphere whose sky half
+        is also blue and a background card that is also blue. Cutting it is the
+        largest single chroma correction available, and the green is left to the
+        ground bounce card below, which has real directional structure where a
+        uniform blue wash has none.
+
+        Not cut further because on a deck top it only delivers 0.0574, so it is
+        nearly free there, and it is the only thing keeping the anti-sunward
+        reflections in the clearcoat from going neutral.
+      */}
+      <Lightformer intensity={0.36} position={[-8, 3, -6]} scale={[14, 9, 1]} color="#8ec8f0" />
+
+      {/*
+        Ground bounce: the grass, seen from below, filling undersides.
+
+        Deliberately UNCHANGED at 0.30, having been raised to 0.66 and reverted,
+        and the failed experiment is recorded because it is the trap in this part
+        of the rig.
+
+        16 x 16 m at 4.72 m out subtends most of the lower hemisphere, so it is
+        the only term that reaches a downward-facing normal in any quantity, and
+        it is the greenest thing in the environment. Raising it looked like the
+        obvious way to serve two things at once: put the level's green onto the
+        hero's shadow side, and put light on the island underside that decision
+        97 makes the darkest thing in the world.
+
+        It does neither cleanly, because the environment is a distant IBL with no
+        positional falloff, so the same card lights the island's keel and the
+        robot's chin by exactly the same amount. At 0.66 the chin went from 0.461
+        to 0.504 display while the front of the head went to 0.430: the chin ends
+        up BRIGHTER than the face above it, which reads as uplighting and is a
+        worse defect than the one it was fixing. The green on the shadow side has
+        to come from the hemisphere's ground half instead, where the same 50%
+        vertical weight applies but the chin is not singled out.
+
+        What this card DOES control is whether the island's underside can occupy
+        the 0.06-0.18 anchor band at all, and after this round's cuts it is
+        marginal: a downward-facing surface at `palette.soil` `#6b4d31` lands at
+        0.048 display, BELOW the band's floor, and at the skirt's brighter cliff
+        albedo `#8a6440` it lands at 0.072, inside it. That is a fact the stream
+        building the keel needs and cannot see from here.
+      */}
       <Lightformer intensity={0.3} position={[1, -4.5, -1]} scale={[16, 16, 1]} color="#9ecf6a" />
 
       {/*
@@ -647,6 +936,26 @@ const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution
         `#0b0f1a` rather than black because the brief refuses pure black
         anywhere, and because a faint blue in the darkest reflection is what
         keeps a white shell chromatic.
+
+        UNCHANGED, and now measured, because "its occlusion is the mechanism" was
+        an assertion nobody had put a number on. Sweeping the whole sphere of
+        normals and integrating the environment with and without this card: the
+        most irradiance it removes from ANY normal is **0.0341 of luminance**, at
+        azimuth 30 degrees on the horizon, where it covers 29.8% of the
+        cosine-weighted hemisphere. For scale, the hemisphere light delivers
+        0.19-0.36 and the key softbox card 0.38. So the mechanism is real but the
+        magnitude is a rounding error: it is worth about a tenth of the
+        hemisphere, and on the two surfaces this round is about it is worth
+        nothing at all - on a deck top it contributes 0.0003 and occludes
+        essentially nothing, and on the hero's shadow side at `hub-backlit` its
+        direction is 142 degrees away from the normal, so it is not in that
+        hemisphere at any point.
+
+        Decision 97 already says a second one will not produce an anchor. This
+        confirms it and gives the reason: at 7.6 m from the cube camera on the
+        low +Z side, it is nowhere near the surfaces that need darkening, and
+        moving it somewhere useful would put it in front of the key softbox,
+        which is the one card whose specular the whole clearcoat read depends on.
       */}
       <Lightformer intensity={1} position={[3, -0.5, 7]} scale={[12, 7, 1]} color="#0b0f1a" />
 
@@ -670,15 +979,25 @@ const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution
   re-check the whole block, because the caps are on sums, not on individuals.
 
   DIRECTIONAL                                    intensity   running total
-    key            #ffe7bc  dir (9, 9.5, 5)         1.55          1.55
-    sky fill       #9ec9f0  world (-11, 2.4, -7)    0.25          1.80
-    rim / kicker   #bfeaff  camera-relative         0.55          2.35
-    bounce fill    #ffe9cf  camera-relative         0.20          2.55
+    key            #ffe7bc  dir (9, 9.5, 5)         1.83          1.83
+    sky fill       #9ec9f0  world (-11, 2.4, -7)    0.12          1.95
+    rim / kicker   #bfeaff  camera-relative         0.55          2.50
+    bounce fill    #ffe9cf  camera-relative         0.10          2.60
                                                    -------------------
-                                        CAP 2.60   TOTAL 2.55   SPARE 0.05
+                                        CAP 2.60   TOTAL 2.60   SPARE 0.00
 
-  HEMISPHERE       sky #bcd6ee / ground #6fbe3d     0.55   CAP 0.60
-                   (0.60 at the low tier, which drops the bounce fill)
+    THE SPARE IS GONE and that is deliberate. The caps in the bible are maxima,
+    not targets, and this round's whole finding is that the budget was being
+    spent on the wrong terms rather than that there was too little of it. 0.38
+    moved out of the two fills and into the key, which is the only term a shadow
+    can remove. If a later round needs headroom back, the rim's 0.55 is the
+    cheapest 0.15 in the table: see `HUB_RIG.rim`.
+
+  HEMISPHERE       sky #bcd6ee / ground #6fbe3d
+                   quality tier 0.60 / 0.55 / 0.55
+                   x HUB_RIG.hemisphere.scale 0.62
+                   = 0.372 / 0.341 / 0.341        CAP 0.60
+                   (the low tier is the high one, which drops the bounce fill)
 
   RIM SUB-CAP                                      0.55   CAP 0.60
 
@@ -687,22 +1006,31 @@ const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution
                    The hemisphere does the same job and keeps the form.
 
   ENVIRONMENT      radiance = linear(color) * Lightformer.intensity
-                                            * scene.environmentIntensity (0.85)
+                                            * scene.environmentIntensity (0.70)
                    Peak radiance is the ceiling on ANY specular reflection,
                    because a prefiltered cubemap lookup cannot exceed its own
                    brightest texel. This is why the env is provably bloom-safe
                    and an analytic light is not.
 
                                        intensity   peak radiance   margin
-    ambient floor  #243a52  background      -          0.074        19.6x
-    key softbox    #fff3e2  [7, 7.5, 4]     1.12       0.952         1.52x
-    highlight strip #ffffff [-4, 9, 4]      1.28       1.088         1.33x  <- hottest
-    cool sky wrap  #8ec8f0  [-8, 3, -6]     0.60       0.444         3.26x
-    ground bounce  #9ecf6a  [1, -4.5, -1]   0.30       0.159         9.11x
-    negative fill  #0b0f1a  [3, -0.5, 7]    1.00       0.009       165x     <- darkest
-    rim card       #cfeeff  [-2, 5, -9]     0.80       0.680         2.13x
+    ambient floor  #1d2a3c  background      -          0.032        45.9x
+    key softbox    #fff3e2  [7, 7.5, 4]     1.36       0.952         1.52x
+    highlight strip #ffffff [-4, 9, 4]      1.5543     1.088         1.33x  <- hottest
+    cool sky wrap  #8ec8f0  [-8, 3, -6]     0.36       0.220         6.60x
+    ground bounce  #9ecf6a  [1, -4.5, -1]   0.30       0.131        11.07x
+    negative fill  #0b0f1a  [3, -0.5, 7]    1.00       0.007       201x     <- darkest
+    rim card       #cfeeff  [-2, 5, -9]     0.80       0.560         2.59x
                                        -------------------------------------
-                          CAP 1.60 each   MAX 1.28   PEAK 1.088 vs 1.45
+                        CAP 1.60 each   MAX 1.5543   PEAK 1.088 vs 1.45
+
+    The two peaks that matter did not move at all. `environmentIntensity` fell
+    0.85 to 0.70 and the softbox and the strip rose by the reciprocal, so
+    `1.36 * 0.70` and `1.5543 * 0.70` are the same 0.952 and 1.088 they were at
+    `1.12 * 0.85` and `1.28 * 0.85`. What fell is the DIFFUSE fill from the four
+    broad dim entries, which is `radiance * solid angle` rather than radiance and
+    is therefore not what the bloom column measures. The strip is now 0.046 under
+    the single-card cap, which is what fixes `environmentIntensity`'s floor at
+    0.68.
 
     The margin column is against BLOOM_THRESHOLD, and it is a column rather
     than a sentence because the threshold moved once already, from a guessed
@@ -713,32 +1041,147 @@ const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution
 
   TEMPERATURE, on a horizontal deck (albedo #bfbbb4, display warmth +11)
 
-    Total irradiance R-B, by term, N = +Y:
+    Total irradiance R-B, by term, N = +Y, at hub-establishing:
 
-      key            +0.339      hemisphere     -0.114
-      key softbox    +0.041      rim            -0.115
-      bounce fill    +0.011      background     -0.038
+      key            +0.617      rim            -0.115
+      key softbox    +0.100      hemisphere     -0.120
+      bounce fill    +0.005      background     -0.053
                                  cool wrap      -0.032
-                                 sky fill       -0.026
-                                 rim card       -0.008
+                                 rim card       -0.017
+                                 sky fill       -0.012
                                        ------------------
-                                       TOTAL    +0.058 (was -0.229)
+                                       TOTAL    +0.374 (was +0.058)
 
-    Rendered, through ACES and the grade: a lit deck lands near (174,170,159),
-    display luma 0.667, warmth +15. It was (169,171,169), luma 0.668, warmth 0 -
-    an eleven-point warm albedo cancelled exactly by a thirteen-point cool rig.
-    A deck with the key occluded lands near warmth -18 and a shadowed vertical
-    facing the fill near -31, so the axis now runs +15 to -31 instead of 0 to
-    -45. Cool shadows against warm highlights, which is the thing the reference
-    brief asks for and the thing this rig had only half of.
+    METHOD NOTE, so the two columns are not naively diffed. The environment rows
+    above are now a ray-traced cosine-weighted integral of the six cards and the
+    background from the cube camera's own position at the origin, WITH card-on-card
+    occlusion, rather than the solid-angle estimate the previous column used. The
+    directional and hemisphere rows are unchanged in method. The env rows moved by
+    more than their intensities did, and that is the method rather than the rig.
+
+    A shadowed deck sits at R-B -0.243, so the temperature axis now runs +0.374
+    to -0.243 where it ran +0.058 to about -0.16. Cool shadows against warm
+    highlights, wider than before, which is what the reference brief asks for.
 
     The rim's -0.115 is unavoidable and is not a defect: a camera-relative rim
     at 26 degrees deposits `sin(26) * 0.55` of cool light on every horizontal
-    surface in the level. It is the price of the rim and it is paid knowingly.
+    surface in the level. It is the price of the rim and it is paid knowingly -
+    but see `HUB_RIG.rim`, because in LUMINANCE rather than temperature that same
+    spill is 0.1845, the largest analytic term on any shadowed floor in the level.
+
+  WHAT A SHADOW ACTUALLY REMOVES, which is the finding this round exists for
+
+    Decision 97 states that "a shadowed surface still receives 1.00 of
+    directional plus hemisphere 0.55 plus environment 0.85 against a key of 1.55,
+    so occluding the key removes well under half the light". The conclusion is
+    right and the reasoning does not survive being computed, because intensity is
+    not delivered radiance. Integrated onto a deck top before this round:
+
+      key softbox CARD      0.3797   31.5%   <- unshadowable, at the key's bearing
+      hemisphere            0.3573   29.7%
+      rim directional       0.1845   15.3%
+      background card       0.0780    6.5%
+      cool sky wrap card    0.0574    4.8%
+      highlight strip card  0.0536    4.5%
+      rim card              0.0443    3.7%
+      sky fill directional  0.0250    2.1%
+      bounce fill direction 0.0235    2.0%
+      negative fill card    0.0003    0.0%
+                          --------
+                            1.2036 of irradiance luminance, against 2.0660 lit,
+                            so a shadow removed 41.7% of the light and not "well
+                            under half" - close to half, and still not enough.
+
+    The two fills decision 97 names are the ninth and tenth entries on that list
+    and are worth 4.0% of it between them. The three largest entries are a
+    Lightformer at the key's own bearing that no shadow map can occlude, a
+    hemisphere light, and the rim's spill. That is why this round moved intensity
+    INTO the key rather than only out of the fills.
+
+    On the hero's shadow side at hub-backlit the ranking is completely different -
+    hemisphere 29.2%, cool wrap card 20.0%, bounce fill 16.7%, sky fill 13.6% -
+    and there the two fills ARE worth 30.4%. The two acceptance surfaces this
+    round is judged on do not share a dominant term, and treating them as one
+    problem is what made the previous two rounds disagree.
+
+  THE RIG IS AXIAL AT THE TWO BACKLIT VANTAGES, WHICH IS WHY THE HERO HAS NO FORM
+
+    Round 2's F2 reports the hero's head at hub-backlit running 0.562 to 0.604
+    over 170 px of "a curved surface" and calls it a lighting failure. It is not
+    one, and no intensity in this file can fix it. Two independent reasons, both
+    arithmetic.
+
+    FIRST, every analytic light is on the camera axis there. A light whose
+    azimuth lies on the camera axis reaches both visible faces of a box equally
+    and contributes NO face-to-face contrast, whatever its intensity. Degrees off
+    the camera axis, per vantage:
+
+                       establ. portal charac. grazing totem backlit
+      key                41.7    37.2    16.5     0.1   18.4    0.0
+      rim                16.0    14.5     6.8     0.0    7.6    0.0
+      sky fill           38.3    33.8    13.1     3.3   14.9    3.4
+      bounce fill         0.0     0.0     0.0     0.0    0.0    0.0
+      cool wrap card     33.9    29.4     8.7     7.7   10.5    7.8
+      rim card            6.7    11.2    31.9    48.3   30.1   48.4
+
+    At hub-backlit and hub-grazing every analytic light is within 3.4 degrees of
+    the camera axis. The bounce fill is at 0.0 everywhere BY CONSTRUCTION, since
+    it is aimed at `camAz`. The hemisphere has no azimuthal dependence at all. So
+    at those two shots the only term with any azimuthal structure left is the rim
+    CARD, at 48 degrees off-axis and 5.3% of the light. On the head, the sky fill
+    reaches the front face at N.L 0.680 and the side face at 0.711 - 4% across a
+    90-degree corner. Measured through the whole pipeline, the front-to-side step
+    is 0.027 display before this round and 0.030 after it. The level moved 0.114
+    and the form did not move at all, exactly as this table predicts.
+
+    SECOND, the surface is not curved. `HEAD_SHELL` is a 0.72 x 0.54 x 0.62
+    rounded box with corner radius 0.11, so 0.32 m of its 0.54 m height - 59%, and
+    79 px of the 133 px it occupies at hub-backlit - is a single FLAT face with one
+    normal, which no light can put a gradient across. `playerFacing` -1.33 puts the
+    front face 42.8 degrees off the camera bearing and the side face 47.2, so the
+    vertical corner fillet sits within 4.3 degrees of facing the lens, i.e. at the
+    head's centre column near x = 830. The critique's probe column is x = 820. It
+    runs DOWN the corner fillet rather than across the form. And the camera is
+    3.5 degrees above the head centre at 6.21 m, so the only surfaces the key
+    reaches - the up-facing ones - are within 3.5 degrees of edge-on and the
+    terminator has almost no pixels to occupy. The crown-to-shadow-side step is
+    0.163 before and 0.266 after, and it lives in a two-pixel sliver.
+
+    THE FIX IS AN AZIMUTH, NOT AN INTENSITY, and it is handoff item 3 plus the
+    sky fill's azimuth, which are the same change and should land together.
+
+  AND THE HERO'S SHADOW SIDE IS NOT GREY BECAUSE THE AMBIENT IS GREY
+
+    F2's other half is that the shadow side measures rgb (141,154,152),
+    saturation 0.084, in a saturated green level. The rig is not the cause. The
+    irradiance arriving on that surface is (0.696, 1.070, 1.134) in linear rgb -
+    a ratio of 0.61 : 0.94 : 1.00, strongly chromatic, and its greenest single
+    term is the hemisphere's ground colour at (0.182, 0.327, 0.248).
+
+    What neutralises it is `shell()` in materials.ts, which carries
+    `emissive: '#ffb489'` at `emissiveIntensity: 0.08`. That is a CONSTANT
+    (0.0800, 0.0365, 0.0200) of warm radiance added to every pixel of the hero
+    regardless of lighting - 0.0446 of luminance, 23.5% of the shadow side's
+    total, in a hue almost exactly opposite the one the rig delivers. Setting it
+    to zero and changing nothing else takes that surface from 0.583 at saturation
+    0.053 to 0.498 at saturation 0.267, a 5x chroma change from one constant.
+
+    It also gets WORSE as the fill comes down, because a fixed term is a larger
+    share of a smaller total. After this round the shadow side reads 0.469 at
+    saturation 0.173 and warmth +22: the saturation target is met, and it is met
+    in orange rather than in the level's green. materials.ts is not owned by this
+    file, so this is recorded rather than fixed. Anyone chasing "the shadow side
+    should take the level's hue" needs that 0.08 at or below 0.02 first.
 
   MEASURED / DERIVED HEADROOM
     peak lit diffuse on the shell   ~0.54 luminance
     open shadow side                ~0.19 luminance   ratio 2.8:1 (target 2:1-3:1)
+                                    NOTE: those two are analytic-only. Including
+                                    the environment integral the same ratio was
+                                    1.83:1 before this round, i.e. OUTSIDE the
+                                    2:1-3:1 window the line claims, and is 2.60:1
+                                    after it. The environment was 30-51% of the
+                                    light and was never in this figure.
     rim diffuse at its peak          0.119 luminance  cannot bloom
     SkyDome peak (sun glow)         ~0.97 luminance   do NOT raise the 0.55 /
                                                      0.12 glow coefficients in

@@ -30,6 +30,14 @@ export type Vantage = {
   playerFacing: number
   /** Clock time to freeze at, in seconds. */
   time: number
+  /**
+   * Lesson completion to pin before the shot, because for two of these the
+   * subject named in `judges` only exists in one progression state.
+   *
+   * `'all'` is the default and is right for five of the six. See the note on
+   * `hub-totem`, which is the exception and the reason this field exists.
+   */
+  progress?: 'all' | 'none' | readonly string[]
   /** What this shot is for. Its acceptance criterion. */
   judges: string
 }
@@ -208,6 +216,31 @@ export const VANTAGES: Record<string, Vantage> = {
     playerAt: [-6.0, 1.6, 5.9],
     playerFacing: 1.54,
     time: 0,
+    /*
+      Four of five, and the one left out is the one this camera is pointed at.
+
+      `lookAt` is the `what-is-ai` totem at (-5, STEP, 5), and **a completed
+      totem has no ring.** The ring is the progress indicator, so at five of five
+      this vantage frames a bare plinth and judges an emissive that is not in the
+      frame. Captured side by side in one page load, the ring is a large pale
+      torus standing proud of the plinth at zero lessons and simply absent at
+      five, and the shot's whole acceptance criterion is that ring's intensity
+      against the bloom threshold.
+
+      Round 2 reported "Totem ring, hub-totem x=930, peak 0.921" alongside
+      "Portal lintel bar, hub-portal, peak 0.948" - and the portal is a sealed
+      slab with a lock plate until every basics lesson is done, so those two
+      numbers cannot have come from the same save. Progression was never pinned,
+      so each round was measuring whatever state the profile happened to be in.
+      That is what this field closes.
+
+      The cost is that the chrome dome is a cosmetic earned after the whole
+      basics zone, so holding one lesson back removes it from this shot. That is
+      the right trade: the dome is judged at `hub-character` and `hub-backlit`,
+      and the second half of this criterion - nothing other than an emissive may
+      cross the threshold - is `hub-backlit`'s job by its own wording.
+    */
+    progress: ['what-is-an-llm', 'popular-models', 'what-is-a-prompt', 'first-prompt'],
     judges: 'Totem emissive intensity against the bloom threshold. Nothing except the emissive itself may glow.',
   },
 

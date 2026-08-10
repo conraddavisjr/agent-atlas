@@ -19,6 +19,35 @@ import { useProximity } from '../interaction/useProximity'
  * AND missing their glow, so the read holds even for a colourblind player who
  * cannot rely on the desaturation alone.
  */
+/**
+ * The two jambs' footprint, in the portal's own local space.
+ *
+ * Exported because the jamb-on-T3 junction is one of the three flat-on-flat
+ * corners the ambient occlusion pass was genuinely earning its cost at, and with
+ * that pass gone the hub's contact-decal batch has to put the band there
+ * instead. The batch is built in `HubIsland.tsx` so that every contact in the
+ * scene stays one draw call, which means the numbers have to leave this file.
+ *
+ * They are read by the meshes below as well as exported, so the decal and the
+ * geometry cannot drift apart - which is the whole reason this is a constant
+ * rather than three literals repeated in two files.
+ *
+ * An all-caps constant export, which is what keeps fast refresh working for this
+ * file: the lint rule permits a constant beside a component and only objects to a
+ * shared function. `LessonTotem.tsx` exports `TOTEM` on the same basis, for the
+ * same reason - an object's dimensions belong with the object.
+ */
+export const PORTAL_JAMB = {
+  /** Half-extent across the opening. */
+  halfX: 0.25,
+  /** Half-extent through the wall. Deeper than it is wide, so contact is elliptical. */
+  halfZ: 0.35,
+  /** Height, and therefore also the height of the lintel's underside. */
+  height: 3.4,
+  /** Distance from the portal's centreline to each jamb's centre. */
+  spacing: 1.5,
+} as const
+
 export function Portal({
   position,
   rotation = 0,
@@ -118,10 +147,10 @@ export function Portal({
         {[-1, 1].map((side) => (
           <RoundedBox
             key={side}
-            args={[0.5, 3.4, 0.7]}
+            args={[PORTAL_JAMB.halfX * 2, PORTAL_JAMB.height, PORTAL_JAMB.halfZ * 2]}
             radius={0.12}
             smoothness={3}
-            position={[side * 1.5, 1.7, 0]}
+            position={[side * PORTAL_JAMB.spacing, PORTAL_JAMB.height / 2, 0]}
             castShadow
             receiveShadow
           >

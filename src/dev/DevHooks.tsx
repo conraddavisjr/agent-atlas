@@ -251,6 +251,13 @@ export function DevHooks() {
     }
 
     const applyVantage = (v: Vantage) => {
+      /*
+        Progression first, because it changes what geometry exists and the
+        settle frames after this are what let that geometry arrive. See the note
+        on `progress` in vantages.ts: for `hub-totem` this is the difference
+        between judging its emissive and judging a bare plinth.
+      */
+      setProgress(v.progress ?? 'all')
       devBridge.teleport?.(v.playerAt[0], v.playerAt[1], v.playerAt[2], v.playerFacing)
       cameraFrame.override = { position: v.position, lookAt: v.lookAt, fov: v.fov }
     }
@@ -397,7 +404,7 @@ export function DevHooks() {
       }
     }
 
-    const setProgress = (lessons: 'all' | 'none' | string[] = 'all') => {
+    const setProgress = (lessons: 'all' | 'none' | readonly string[] = 'all') => {
       const ids =
         lessons === 'all' ? LESSONS.map((l) => l.id) : lessons === 'none' ? [] : [...lessons]
       const unknown = ids.filter((id) => !LESSONS.some((l) => l.id === id))

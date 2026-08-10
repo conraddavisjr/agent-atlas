@@ -46,6 +46,95 @@ import {
  */
 
 /**
+ * The boulder layer's dimensions, exported because two files now need them.
+ *
+ * `HubIsland.tsx` builds one merged contact-decal batch for the whole scene, so
+ * it has to know where the boulders are and how wide each one's foot is. The
+ * alternative was a second draw call for thirty quads, which the draw budget does
+ * not have room for and which would also have put the boulders' contact on a
+ * different lever from everything else's.
+ *
+ * `baseScale` is metres of radius per unit of `Placement.scale`, and `sink` is
+ * the fraction of a boulder's own half-height that sits above the lawn.
+ */
+export const BOULDER = {
+  baseScale: 0.32,
+  sink: 0.5,
+  /**
+   * Vertical squash from `createRockGeometry`, which flattens every rock so it
+   * sits INTO the ground rather than resting on it like a ball.
+   */
+  squash: 0.68,
+} as const
+
+/**
+ * Where the boulder clumps are centred.
+ *
+ * A module function rather than a hook, so the contact batch can ask the same
+ * question the mesh asks and get the same answer by construction instead of by
+ * two copies of six literals agreeing. `mulberry32` makes it deterministic, which
+ * is what lets this be shared rather than plumbed.
+ *
+ * This and `boulderPlacements` cost the file its fast refresh, and the alternative
+ * was worse. `BOULDER` above is a constant and the lint rule permits it, but a
+ * shared FUNCTION is not, and the rule's own suggestion - a separate module - would
+ * put the boulder layer's composition somewhere other than the boulder layer.
+ * Scatter is static scenery nobody iterates on interactively, so a full reload on
+ * edit is close to free here. `LessonTotem.tsx` takes exactly this trade for
+ * `totemPlinth` and gives the same reason.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function boulderCentres(radius: number) {
+  return clusterCentres({
+    clusters: 6,
+    radius: radius * 0.906,
+    centreMinRadius: radius * 0.625,
+    centreMaxRadius: radius * 0.844,
+    seed: 5,
+  })
+}
+
+/**
+ * The boulder placements, as a pure function of the three things they depend on.
+ *
+ * Lifted out of the component for the reason above. It is called twice per scene
+ * - once by `Scatter` for the meshes, once by `HubIsland` for the contact decals
+ * - and the two calls MUST agree, which is why this is one function rather than
+ * two `useMemo`s with the same arguments typed out.
+ *
+ * The distances are the environment spec's, as fractions of the island so a scene
+ * with a different plateau still gets the same composition. At the hub's radius
+ * of 16 they are the spec's numbers exactly: boulders between 9.0 and 14.5, their
+ * centres between 10.0 and 13.5.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function boulderPlacements(
+  radius: number,
+  density: number,
+  exclusions: Exclusion[],
+): Placement[] {
+  /*
+    `clusterRadius` 1.6 against a boulder base of 0.32 m is what makes this a
+    clump rather than a loose group: five boulders averaging 0.65 m across inside
+    a 3.2 m circle are touching each other. The wide 0.45 to 1.6 scale range
+    matters as much as the tight radius, because a clump of same-sized rocks reads
+    as a pattern and a clump of one big rock with four small ones reads as a rock
+    that broke.
+  */
+  return clusteredPlacements({
+    count: Math.round(30 * density),
+    radius: radius * 0.906,
+    minRadius: radius * 0.5625,
+    centres: boulderCentres(radius),
+    clusterRadius: 1.6,
+    exclusions,
+    seed: 5,
+    minScale: 0.45,
+    maxScale: 1.6,
+  })
+}
+
+/**
  * An irregular lump from a subdivided icosahedron.
  *
  * Pushing each vertex along its own normal by a repeatable amount is enough to
@@ -131,48 +220,19 @@ export function Scatter({
   const pebbleGeometry = useMemo(() => createRockGeometry(83, 0), [])
 
   /*
-    The distances below are the environment spec's, expressed as fractions of
-    the island so a scene with a different plateau still gets the same
-    composition. At the hub's radius of 16 they are the spec's numbers exactly:
-    boulders between 9.0 and 14.5, their centres between 10.0 and 13.5, pebbles
-    out to 15.0, clover from 6.4 to 15.0.
+    The pebble and clover distances below are the environment spec's, expressed
+    as fractions of the island so a scene with a different plateau still gets the
+    same composition. At the hub's radius of 16 they are the spec's numbers
+    exactly: pebbles out to 15.0, clover from 6.4 to 15.0. The boulders' own
+    numbers moved to `boulderPlacements` above, where the contact batch can read
+    them too.
   */
-  const boulderCentres = useMemo(
-    () =>
-      clusterCentres({
-        clusters: 6,
-        radius: radius * 0.906,
-        centreMinRadius: radius * 0.625,
-        centreMaxRadius: radius * 0.844,
-        seed: 5,
-      }),
-    [radius],
-  )
+  const centres = useMemo(() => boulderCentres(radius), [radius])
 
-  /*
-    Six clumps of about five boulders each.
-
-    `clusterRadius` 1.6 against a boulder base of 0.32 m is what makes this a
-    clump rather than a loose group: five boulders averaging 0.65 m across
-    inside a 3.2 m circle are touching each other. The wide 0.45 to 1.6 scale
-    range matters as much as the tight radius, because a clump of same-sized
-    rocks reads as a pattern and a clump of one big rock with four small ones
-    reads as a rock that broke.
-  */
+  /** Six clumps of about five boulders each. See `boulderPlacements`. */
   const rockPlacements = useMemo(
-    () =>
-      clusteredPlacements({
-        count: Math.round(30 * density),
-        radius: radius * 0.906,
-        minRadius: radius * 0.5625,
-        centres: boulderCentres,
-        clusterRadius: 1.6,
-        exclusions,
-        seed: 5,
-        minScale: 0.45,
-        maxScale: 1.6,
-      }),
-    [density, radius, boulderCentres, exclusions],
+    () => boulderPlacements(radius, density, exclusions),
+    [radius, density, exclusions],
   )
 
   /*
@@ -188,14 +248,14 @@ export function Scatter({
         count: Math.round(90 * density),
         radius: radius * 0.9375,
         minRadius: radius * 0.53,
-        centres: boulderCentres,
+        centres,
         clusterRadius: 2.6,
         exclusions,
         seed: 17,
         minScale: 0.5,
         maxScale: 1.3,
       }),
-    [density, radius, boulderCentres, exclusions],
+    [density, radius, centres, exclusions],
   )
 
   /*

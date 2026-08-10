@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { RigidBody, CuboidCollider, CylinderCollider } from '@react-three/rapier'
 import { useFrame } from '@react-three/fiber'
 import {
@@ -30,12 +30,19 @@ import { mulberry32, type Exclusion } from '@/art/placement'
 import { useQuality } from '@/art/useQuality'
 import { Grass } from '@/art/Grass'
 import { Flowers } from '@/art/Flowers'
-import { Scatter } from '@/art/Scatter'
+import { BOULDER, Scatter, boulderPlacements } from '@/art/Scatter'
+import {
+  CONTACT_STRENGTH,
+  contactDecalGeometry,
+  createContactDecalMaterial,
+  type Contact,
+} from '@/art/contactDecal'
+import { CONTACT_TINT } from '@/art/contactTint'
 import { useGame } from '../GameContext'
 import { useGameStore, useProgress } from '@/state/gameStore'
 import { LESSONS, ZONES } from '@/state/lessons'
 import { isSceneAccessible, isLessonComplete } from '@/state/progression'
-import { Portal } from './Portal'
+import { PORTAL_JAMB, Portal } from './Portal'
 import { LessonTotems, TOTEM, totemPlinth, type TotemPlacement } from './LessonTotem'
 import { Terrain, PLATEAU_RADIUS } from './Terrain'
 import {
@@ -306,8 +313,20 @@ const KERBS = [
   // T1. Open at the bridge mouth in the south and up to T2 in the north.
   { x: -4.1, z: -6.6 + KERB_INSET, length: 3.8, yaw: 0, top: 5 * STEP },
   { x: 4.1, z: -6.6 + KERB_INSET, length: 3.8, yaw: 0, top: 5 * STEP },
-  { x: -5, z: -10.6 - KERB_INSET, length: 2, yaw: 0, top: 5 * STEP },
-  { x: 5, z: -10.6 - KERB_INSET, length: 2, yaw: 0, top: 5 * STEP },
+  /*
+    These two are T1's NORTH edge, at z = -10.60, and the inset has to run in +z
+    to reach the deck. They read `- KERB_INSET` until this pass, which put them at
+    z = -10.78: a 0.36 m kerb spanning -10.96 to -10.60, touching T1 along one
+    line and hanging entirely off the deck into open air beyond it. Every other
+    entry in this table insets toward the deck - `6 - INSET`, `-6 + INSET`,
+    `4 - INSET`, `-4 + INSET`, `-15 + INSET` - so the sign was the only thing
+    wrong and the fix is consistent with all nine of them.
+
+    Their colliders come from this same table, so nothing was ever functionally
+    broken; there was simply an invisible wall in the same wrong place as the mesh.
+  */
+  { x: -5, z: -10.6 + KERB_INSET, length: 2, yaw: 0, top: 5 * STEP },
+  { x: 5, z: -10.6 + KERB_INSET, length: 2, yaw: 0, top: 5 * STEP },
   { x: 6 - KERB_INSET, z: -8.6, length: 4, yaw: Math.PI / 2, top: 5 * STEP },
   { x: -6 + KERB_INSET, z: -8.6, length: 4, yaw: Math.PI / 2, top: 5 * STEP },
   // T2. Open south from T1 and north to T3.
@@ -474,6 +493,258 @@ const TOTEM_SPURS: Record<string, [number, number, number]> = {
   'what-is-an-llm': [5, STEP, 5],
   'popular-models': [-5, STEP, -5],
   'what-is-a-prompt': [5, STEP, -5],
+}
+
+/**
+ * Where the portal stands, as a constant rather than as a literal in the JSX.
+ *
+ * The arch is 0.70 deep, so it occupies z from -14.15 to -14.85 and sits fully on
+ * T3, which ends at -15.0. It is a constant now because the contact batch needs
+ * the same three numbers the `<Portal>` element does, and a jamb's contact landing
+ * 0.4 m from its jamb is not a bug anyone would spot in a screenshot.
+ */
+const PORTAL_AT: [number, number, number] = [0, 7 * STEP, -14.5]
+
+/**
+ * Contact patches for every static object base in the scene, as one list.
+ *
+ * ## Why this exists at all
+ *
+ * Ambient occlusion came out at all three tiers with the shadow-end decision, and
+ * the junctions where it was earning its cost were flat-on-flat stone: a plinth on
+ * a spur lobe, the portal's jambs on T3, a riser meeting the tread below it. At a
+ * flat-on-flat corner visibility approaches 0.5, so the pass was putting a real
+ * 0.28 m band there and taking a 0.65 deck down to about 0.47. **That band is what
+ * this list replaces**, and the strengths in `CONTACT_STRENGTH` are solved
+ * backwards from it rather than chosen.
+ *
+ * Derived from the layout tables above rather than written out by hand, for the
+ * same reason `hubExclusions` is: a contact list that drifts from the objects it
+ * sits under still renders, and still looks like it is working.
+ *
+ * ## What is deliberately NOT in it, and why
+ *
+ * **The Core's four struts.** They stand at `baseRadius` 2.10 on Puck C, whose
+ * radius is 2.20 and which drafts inward by three degrees, so a 0.22 m pill at
+ * 2.10 already overhangs the puck it stands on. There is no receiving surface
+ * under the outboard half of each foot, and any patch centred on the foot puts
+ * full-strength multiply on ground that is 0.40 m lower - a dark disc floating
+ * over Puck B. The strut placement wants fixing before it can be contacted; that
+ * is a layout change and this round is not it.
+ *
+ * **The dais and deck footprints on the lawn.** Puck A at radius 6.00, T1 at
+ * 12 x 4, the bridge, the east pucks and the west pile all meet the lawn and all
+ * want this treatment. They are left out because their patches would overlap each
+ * other - Puck A's band at 6.0 to 6.8 runs straight through the four spur lobes'
+ * - and multiply STACKS, so the crevices between them would go roughly 0.20 below
+ * the lawn where a single patch gives 0.14. That is probably correct and it is
+ * certainly not verifiable from arithmetic, so it wants one measured pass of its
+ * own rather than being smuggled in with the rest.
+ *
+ * **The eleven kerb feet.** Same mechanism as the risers below and the same value,
+ * but the table above does not record which side of each run is the deck and which
+ * is open air, so all eleven outward normals would have to be inferred by hand.
+ * The two risers prove the mechanism on cases that can be checked; the kerbs are
+ * the next increment.
+ *
+ * **Pebbles and clover.** A pebble is 0.03 to 0.09 m across. Its contact would be
+ * one or two pixels at every framing in the set, which is the definition of a
+ * setting that renders and changes nothing.
+ */
+function hubContacts(
+  pylons: readonly { degrees: number; height: number }[],
+  groves: number,
+  boulders: readonly { x: number; z: number; scale: number }[],
+): Contact[] {
+  const out: Contact[] = []
+
+  /*
+    The pylons, on the lawn.
+
+    **The acceptance shot for these is `hub-establishing`, NOT `hub-backlit`, and
+    that is a correction to the brief rather than a preference.** At `hub-backlit`
+    the camera is 1.49 m up and 8.89 m out, a 9.5-degree depression, where 0.30 m
+    of blade hides 1.79 m of the ground behind it - so the 0.75 m planting
+    exclusion at each pylon foot and everything drawn on it is behind the lawn from
+    that vantage and from any other camera at playing height. At
+    `hub-establishing` the same foot is seen at 30.6 degrees, where 0.30 m of blade
+    hides 0.51 m, and most of the bald ring reads.
+
+    The band is 0.81 m, which is 27 px at `hub-establishing` after the ground's
+    foreshortening, against an acceptance floor of 6.
+
+    It reaches past the 0.75 m exclusion on purpose. The exclusion's boundary is
+    itself a defect - bare ground texture renders BRIGHTER than the grass it
+    interrupts, which is the "bright bald ground under the props" half of F4 - so a
+    gradient that crosses the boundary darkens the bald ring and hides the edge of
+    it in the same pass.
+  */
+  for (const pylon of pylons) {
+    const [x, z] = pylonPosition(pylon.degrees)
+    out.push({ x, z, y: 0, footX: 0.34, band: 0.81, strength: CONTACT_STRENGTH.lawn })
+  }
+
+  /*
+    The totem plinths, on their spur lobes. This is the primary acceptance case.
+
+    `puck(0.70, 0.58, 0.06)` standing at y = 0.40 on `puck(1.50, 0.40)` is
+    flat-on-flat with a 0.05 fillet, which is the corner the occlusion pass was
+    doing its best work at, and `hub-totem` frames it at 21.4 degrees of depression
+    over a deck with no grass on it. Nothing occludes the result.
+
+    It is also the case the shadow map provably cannot serve. `hub-totem`'s camera
+    forward dots to 0.924 with the key's shadow direction, so the plinth's own cast
+    shadow is directly behind it from that vantage at any frustum or resolution.
+
+    **The band is 0.80 m rather than the 0.45 it was first authored at, and the
+    reason is worth recording because it is a mistake this file could make again.**
+    The falloff is `pow(1 - t, 1.7)` in the band's own normalised width, so a
+    narrow band does not make a tighter contact, it makes a contact that has
+    already decayed by the time it clears the object. At 0.45 m the alpha 0.30 m out
+    from the plinth's rim was 0.080, which is a 2% darkening and no read at all. At
+    0.80 m the same point is 0.234 and the point 0.10 m out is 0.414, which is 0.13
+    of drop on a 0.66 deck. **Band width is what sets contact strength at
+    distance**, not the peak.
+
+    0.80 puts the rim exactly at the 1.50 m lobe edge, where the alpha is zero, so
+    the patch cannot spill off the lobe with anything in it. The quad's corners
+    reach 2.12 m but lie outside the unit circle and clamp to a literal no-op.
+    Where it runs past the lobe's INNER edge it lands on Puck A, which is the same
+    height, because the lobes fuse into it by 0.43 m.
+  */
+  for (const position of Object.values(TOTEM_SPURS)) {
+    out.push({
+      x: position[0],
+      z: position[2],
+      y: position[1],
+      footX: TOTEM.radius,
+      band: 0.8,
+      strength: CONTACT_STRENGTH.deck,
+    })
+  }
+
+  /*
+    The portal's two jambs, on T3.
+
+    A `rect`, because the foot is 0.50 across and 0.70 deep and a radial falloff
+    round it would put three times the band on the deep sides that it puts on the
+    narrow ones. The band is 0.30 m all round, uniform by construction.
+
+    The rotation term is omitted rather than forgotten: the hub's portal is placed
+    at yaw 0, and a `rect` patch carries a `yaw` field for the day it is not.
+  */
+  for (const side of [-1, 1]) {
+    out.push({
+      x: PORTAL_AT[0] + side * PORTAL_JAMB.spacing,
+      z: PORTAL_AT[2],
+      y: PORTAL_AT[1],
+      footX: PORTAL_JAMB.halfX,
+      footZ: PORTAL_JAMB.halfZ,
+      band: 0.3,
+      shape: 'rect',
+      strength: CONTACT_STRENGTH.deck,
+    })
+  }
+
+  /*
+    The two risers in the portal stack, as edge bands rather than as footprints.
+
+    This is the one place the removal of ambient occlusion takes something away
+    that was doing visible work: F9 records "a thin AO line" at the tread-to-riser
+    junction as one of only two things separating the steps. The line goes with the
+    pass, so it is authored here.
+
+    A long thin foot along the run with a 0.30 m band across it puts the peak
+    exactly at the riser and fades it out over the last 0.30 m of each end of the
+    run, which is what an occlusion pass produced at a corner that stops. The half
+    of each quad on the far side of the riser plane is inside the deck above and is
+    discarded by the depth test.
+
+    Derived from `DECKS` so the plane, the width and the receiving height cannot
+    drift: consecutive decks abut, so the riser is at the upper deck's south face
+    and the tread below it is the lower deck's top.
+
+    One known imperfection, on the record because it is a 250% check rather than
+    something arithmetic can settle: T1 and T2 are `slab`s with a 0.12 m chamfer,
+    so for the 0.12 m of tread nearest each riser the real surface curves below the
+    flat top the quad sits on, and the band's leading edge floats over that chamfer
+    by up to 0.13 m. At `hub-portal` that strip is about 7 px wide and sits in a
+    V-groove that already reads as a dark line.
+  */
+  for (let i = 1; i < DECKS.length; i++) {
+    const upper = DECKS[i]
+    const lower = DECKS[i - 1]
+    out.push({
+      x: upper.x,
+      z: upper.z + upper.depth / 2,
+      y: lower.height,
+      footX: upper.width / 2 - 0.3,
+      footZ: 0.02,
+      band: 0.3,
+      shape: 'rect',
+      strength: CONTACT_STRENGTH.deck,
+    })
+  }
+
+  /*
+    The crystal groves.
+
+    **This is the family that has failed before**, and the note at the root pad
+    above records how: a 0.60 m disc of band-2 albedo lying on grass read as a hole
+    burnt in the lawn. What makes this different is in `contactDecal.ts` - it
+    multiplies rather than replaces, and its falloff reaches exactly zero at the
+    rim rather than stopping at a radius.
+
+    It is included rather than skipped because the defect it fixes is measured.
+    `hub-grazing` shows a flat, smooth, blade-free patch of bright ground under the
+    right-hand cluster with a hard boundary where the grass starts, and F4 measured
+    it at 0.650 against 0.512 two hundred pixels away. That is not the shards'
+    emissive - a pylon's exclusion ring does the same thing with no emissive within
+    ten metres - it is `hubExclusions` clearing `grove.radius * 0.55` of planting
+    and bare ground texture rendering brighter than the grass it replaces. A
+    gradient centred on the grove is the treatment for it.
+
+    The foot is the exclusion radius, so the patch is at full strength exactly
+    across the bald ring and fades through the grass beyond it.
+  */
+  for (const grove of GROVES.slice(0, groves)) {
+    out.push({
+      x: grove.x,
+      z: grove.z,
+      y: 0,
+      footX: grove.radius * 0.55,
+      band: 0.7,
+      strength: CONTACT_STRENGTH.scatter,
+    })
+  }
+
+  /*
+    The boulders, from `Scatter`'s own placement function so the two cannot
+    disagree.
+
+    A boulder is an ellipsoid squashed to 0.68 vertically and sunk to half its own
+    height, so the cross-section it presents at the lawn is `baseScale * scale`
+    times sqrt(1 - (sink / squash)^2), which is 0.678 of its widest radius.
+
+    Only boulders at scale 0.6 and above get one. Below that the foot is under
+    0.13 m and the band would be a handful of pixels at every framing in the set,
+    which is cost with no read.
+  */
+  for (const boulder of boulders) {
+    if (boulder.scale < 0.6) continue
+    const widest = BOULDER.baseScale * boulder.scale
+    const foot = widest * Math.sqrt(1 - (BOULDER.sink / BOULDER.squash) ** 2)
+    out.push({
+      x: boulder.x,
+      z: boulder.z,
+      y: 0,
+      footX: foot,
+      band: 0.3 * boulder.scale + 0.1,
+      strength: CONTACT_STRENGTH.scatter,
+    })
+  }
+
+  return out
 }
 
 function pylonPosition(degrees: number): [number, number] {
@@ -664,9 +935,34 @@ export function HubIsland() {
 
     parts.push({ geometry: puck(collarRadius, 0.3, 0.08), position: [0, collarY - 0.15, 0] })
 
+    /*
+      The pylons, sunk by exactly their own radius, which is a contact fix rather
+      than a layout change.
+
+      `pill(r, l)` is a `CapsuleGeometry` translated so the bottom of its LOWER
+      HEMISPHERE sits at local y = 0. Placed at y = 0 on a lawn that
+      `Terrain.tsx` makes geometrically flat, that is a sphere tangent to a plane:
+      the two surfaces touch at a single point and separate quadratically. The
+      shaft's cross-section is 0.082 m at 1 cm up and 0.241 m at 10 cm, and the
+      distance from a lawn pixel at horizontal distance d to the nearest pylon
+      surface is `sqrt(d^2 + 0.34^2) - 0.34`, which is 4 mm at d = 5 cm.
+
+      **It is the contact shape that produces the least occlusion of any**, so no
+      shadow map and no occlusion pass could ever have put a contact there, at any
+      resolution or radius. Round 2's F14 recorded the symptom - "the pylon in
+      `hub-backlit` still meets the lawn with no treatment at all" - and diagnosed
+      it as a missing pass. The cause was the model.
+
+      Sinking by 0.34 buries the whole lower hemisphere and brings the 0.34
+      cylinder wall down to meet the lawn at a real right angle, which is a corner
+      that both the cast shadow and the contact decal can act on. The pill is
+      lengthened by the same 0.34 so the crown stays at exactly `pylon.height` and
+      the cap disc above it does not have to move. The collider is a 0.4 m
+      cylinder against a 0.34 m mesh, so collision is untouched.
+    */
     for (const pylon of visiblePylons) {
       const [x, z] = pylonPosition(pylon.degrees)
-      parts.push({ geometry: pill(0.34, pylon.height - 0.68), position: [x, 0, z] })
+      parts.push({ geometry: pill(0.34, pylon.height - 0.34), position: [x, -0.34, z] })
       if (gates.pylonDetail) {
         parts.push({ geometry: puck(0.62, 0.3, 0.08), position: [x, pylon.height, z] })
       }
@@ -897,6 +1193,42 @@ export function HubIsland() {
 
   const exclusions = useMemo(() => hubExclusions(gates.groves, gates.pylons), [gates.groves, gates.pylons])
 
+  /**
+   * The contact batch: one geometry, one draw call, every static base in the hub.
+   *
+   * Gated on `quality.contactShadow`, which is the flag the character's blob
+   * already uses and which is true at every tier. That is deliberate on both
+   * counts. It is true at low because low has a 1024 shadow map and no occlusion
+   * pass at all, so low is the tier that needs authored contact most - the same
+   * argument `ContactBlob.tsx` makes for itself. And reusing the flag rather than
+   * adding one means `?nogfx=blob` turns the whole contact system off in one
+   * lever, which is what makes the A/B reproducible without a rebuild.
+   *
+   * The boulder placements come from `Scatter`'s own exported function with the
+   * same three arguments `Scatter` passes it, so the decals sit under the rocks by
+   * construction rather than by two copies of six literals agreeing.
+   */
+  const contacts = useMemo(
+    () =>
+      contactDecalGeometry(
+        hubContacts(
+          visiblePylons,
+          gates.groves,
+          boulderPlacements(PLATEAU_RADIUS, quality.propDensity, exclusions),
+        ),
+      ),
+    [visiblePylons, gates.groves, quality.propDensity, exclusions],
+  )
+
+  const contactMaterial = useMemo(() => createContactDecalMaterial(CONTACT_TINT.hub), [])
+  /*
+    Disposed on unmount, because a `ShaderMaterial` built here owns a compiled
+    program and three does not collect it. Everything else in this file is a
+    geometry handed to a JSX material, which r3f disposes for us; this is the one
+    object we constructed and therefore the one we have to release.
+  */
+  useEffect(() => () => contactMaterial.dispose(), [contactMaterial])
+
   return (
     <group>
       {/*
@@ -947,6 +1279,33 @@ export function HubIsland() {
       <mesh geometry={dressBatch} castShadow receiveShadow>
         <meshPhysicalMaterial {...mattePlastic('#ffffff', { vertexColors: true })} />
       </mesh>
+
+      {/*
+        Object-base contact, for everything that is not the character.
+
+        `renderOrder` -1, which is EARLIER than the character's blob rather than
+        alongside it, and the reason is worth stating because -1 looks like a
+        mistake.
+
+        Three renders the whole opaque list before the whole transparent list, and
+        `renderOrder` only sorts within a list. So -1 still draws after every
+        opaque surface - which is what a multiply needs - while drawing before
+        every other transparent in the scene. That ordering matters: the node
+        shells and the totem shells are alpha-blended at the default 0, they hang
+        directly above bases that now carry contact, and from any elevated vantage
+        they project onto it. At `renderOrder` 1 this batch would multiply the
+        shells themselves, making an element the critique already calls a dirty
+        acrylic bauble dirtier. At -1 the shells composite over a finished ground.
+
+        Leaving it at 0 would have worked most of the time and failed by distance
+        sorting some of the time, which is worse than either.
+
+        `frustumCulled` stays on. The batch's bounding sphere covers the island so
+        the test effectively always passes, and paying for it is still correct.
+      */}
+      {contacts && quality.contactShadow && (
+        <mesh geometry={contacts} material={contactMaterial} renderOrder={-1} />
+      )}
 
       {/*
         The traces, whose brightness is the hub's second reading of progress, on
@@ -1036,10 +1395,10 @@ export function HubIsland() {
       />
 
       {/* The gate to the next zone, at the top of the stack and at the edge of
-          the world. The arch is 0.70 deep, so it occupies z from -14.15 to
-          -14.85 and sits fully on T3, which ends at -15.0. */}
+          the world. See `PORTAL_AT` for the depth arithmetic; it is a constant
+          because the contact batch reads the same three numbers. */}
       <Portal
-        position={[0, 7 * STEP, -14.5]}
+        position={PORTAL_AT}
         locked={!caveOpen}
         label="The Prompt Cave"
         player={player}

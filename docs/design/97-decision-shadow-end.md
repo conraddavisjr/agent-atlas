@@ -80,9 +80,12 @@ A fourth value band, and a closed list of what may occupy it.
 **Anchor: 0.06 to 0.18.**
 Membership, in order of how much of the band each is expected to carry:
 
-1. **The island's underside.** The mass below the lawn, visible below the overhanging lip, darkest at the bottom of the silhouette. It is the largest single dark area in every wide shot, it is contiguous, it is bottom-weighted, and it is outside the playable world, so a near-black there costs the readability test nothing.
-2. **Cast shadow, on decks and on lawn.** Darks that are attached to the objects that make them. This is where bloom and the rim get the neighbour they need, and where round 2's F14 uncontacted object bases get their contact.
-3. **Recessed apertures**: kerb faces, riser faces, panel gaps, vents. Small, linear, and they draw the world's own edges.
+1. **The island's underside.** The mass below the lawn, visible below the overhanging lip, darkest at the bottom of the silhouette. It is contiguous, bottom-weighted, and outside the playable world, so a near-black there costs the readability test nothing.
+2. **Recessed apertures**: kerb faces, riser faces, panel gaps, vents. Small, linear, and they draw the world's own edges. Measured after implementation, an unlit `+Z` kerb face lands at 0.063 and a deck side face at 0.177, so this clause carries more of the band than it looks like it should.
+3. **Cast shadow, on decks and on lawn** - **which does not reach this band, and cannot.** This entry was written as a third member and that was an error. Landing a stone deck's cast shadow inside 0.06 to 0.18 needs its irradiance cut to about 30% of what it receives, which is the "darken the ambient globally" option this same document rejects two sections below. The reachable target is the acceptance row: at least 0.18 *below* the lit deck beside it, which puts it near 0.38, in the midground band. Cast shadow is still the dark that matters most for bloom and the rim, because it is the dark that sits *adjacent* to a lit surface. It is simply a midground dark, not an anchor one.
+
+The correction in item 3 came from the stream that was told to deliver it, which priced the ambient cut and reported that the instruction and the acceptance row differed by two whole bands.
+That is the loop working as intended and the entry is left in place, corrected, rather than quietly rewritten.
 
 And the clause that is the actual content of the decision:
 
@@ -142,7 +145,21 @@ That is the whole case. The target for this round is to move the share below 0.2
 Note the fourth row, which is a gain and not a cost. The pass was holding the lawn 0.046 below where it should be, which is 5.9 points of the frame stuck in the gap between the midground and gameplay bands. **Turning it off delivers a large part of the "lawn inside its own band" row on its own**, so anything else aimed at the lawn has to be sized after this lands rather than before, or the two lifts compound past 0.74 and re-break round 1's finding from the other side.
 
 It is also screen-space, with no notion of which object a sample belongs to, so with the radius anywhere near blade height it projects the grass field's depth pattern onto whatever is standing in the grass, hero included.
-2. **It costs about half the frame rate at high.** Three alternating runs each: 35.9 / 21.0 / 31.3 mean fps with it on against 74.2 / 61.7 / 59.9 with it off, p95 11.5 / 9.5 / 10.0 against 21.9 / 22.4 / 15.6. No overlap in either column.
+2. **It costs about half the frame rate at high, and this was re-measured after the round rather than inherited.**
+
+Two alternating pairs, `?quality=high` against `?quality=high&gfx=ao`, three 10-second runs per load, on the frozen camera-pinned `hub-establishing`, with the buffer, progression, settle and triangle count gated on every load:
+
+| | mean fps | p95 fps |
+| --- | --- | --- |
+| AO off (A1 / A2) | 92.3 / 85.1 / 85.6 and 92.8 / 85.4 / 85.6 | 67.1 / 63.7 / 79.4 and 69.4 / 71.9 / 79.4 |
+| AO on (B1 / B2) | 50.1 / 44.3 / 43.9 and 48.9 / 43.7 / 43.8 | 23.9 / 23.6 / 41.5 and 23.9 / 23.6 / 42.6 |
+
+Median ratios **1.93 and 1.95** on mean, **2.81 and 3.01** on p95.
+The arms do not overlap anywhere: the slowest AO-off run is 85.1 and the fastest AO-on run is 50.1.
+And the ratio spread is 1.01 against a raw spread of 1.09 within one arm, so the pairing is doing its job rather than the machine being quiet.
+The absolute numbers are much higher than the ones on record from the previous session, which is exactly the warning in the handoff and exactly why only the ratio is quoted as the finding.
+
+Two pairs were run rather than three. The conclusion did not need a third and the round had other work; that is a shortcut and it is recorded as one.
 3. **One of the two jobs it was kept for is served better elsewhere, and the other was never being done for the reason anyone thought.** Blade-to-ground contact is baked into the grass's own vertex colour and does not depend on the pass: round 2 measured the near sward ramping 0.516 at the tips to 0.377 at the roots, which is 0.139 of display luma produced by a vertex attribute.
 
 Object-base contact is the interesting half. Round 2's F14 records the pylon meeting the lawn with no treatment at all, and that was written with the pass running, so the obvious reading is that the pass cannot reach a 0.28 m contact. That reading is wrong and the real reason is worse. **A pylon is `pill(0.34, h - 0.68)`, a capsule translated so the bottom of its lower hemisphere sits exactly on a flat lawn at y = 0, which is a sphere tangent to a plane touching at a single point.** The surfaces separate quadratically - 0.004 m of gap at 5 cm out - so it is the contact shape that produces the least occlusion of any, and no occlusion pass and no shadow map will ever draw a contact there. That is a geometry defect, it is item 2 of the anchor band's membership to fix, and it would have survived any amount of work on the pass.
@@ -160,19 +177,46 @@ Nothing else depends on the pass existing.
 
 The claims above are measurable and this is how they will be checked. `hub-establishing` at high is the acceptance shot for the band, `hub-backlit` and `hub-totem` for contact.
 
-| | before | required after |
-| --- | --- | --- |
-| `establishing` below 0.10 | 0.00% | at least 1.5% |
-| `establishing` below 0.20 | 1.59% | 8% to 14% |
-| `establishing` 0.38-0.56 | 21.76% | below 15% |
-| sub-0.20 pixels in the bottom third | 45.4% | at least 60% |
-| sub-0.20 pixels on pylons, struts and arcs | most of them | under 25% |
-| island edge profile, `col` at x=1550 | flat 0.230 to 0.202 over 90 px | a gradient reaching 0.18 or below |
-| lawn, clean patch | 0.5015 / 0.5635 | inside 0.56-0.74 |
-| cast shadow on stone deck | not measured | 0.18 or more below the lit deck |
-| shell shadow side, `backlit` | 0.55-0.60 at saturation 0.084 | 0.40-0.48 at higher saturation |
-| a visible object-to-deck junction | 0.28 m occlusion band, lost with the pass | recovered by authored contact, at least as deep |
-| ground beside a pylon shaft | tangent capsule, no corner to occlude | a corner exists, and reads |
+| | before | required after | outcome |
+| --- | --- | --- | --- |
+| `establishing` below 0.10 | 0.00% | at least 1.5% | **0.14%. Target withdrawn as unreachable, see below.** |
+| `establishing` below 0.20 | 1.59% | 8% to 14% | **3.12%. Target withdrawn as unreachable, see below.** |
+| `establishing` 0.38-0.56 | 21.76% | below 15% | 16.55%. Close, and most of it came from removing the occlusion pass. |
+| sub-0.20 in the bottom third | 45.4% | at least 60% | 47.8% at 0.20, **56.5% at 0.15.** Partly met, and the threshold matters. |
+| sub-0.20 on pylons, struts, arcs | most of them | under 25% | **Not met, and it moved the wrong way. See below.** |
+| island edge profile, `col` at x=1550 | flat 0.230 to 0.202 over 90 px | a gradient reaching 0.18 or below | **Met.** 0.232 monotone to 0.116, 44 px at or under 0.18. |
+| lawn, clean patch | 0.5015 / 0.5635 | inside 0.56-0.74 | 0.5343. Not met; the fill cut took back most of what the occlusion removal gave. |
+| cast shadow on stone deck | not measured | 0.18 or more below the lit deck | Met by prediction at 0.207, to be confirmed by the reviewer. |
+| shell shadow side, `backlit` | 0.55-0.60 at saturation 0.084 | 0.40-0.48 at higher saturation | Met by prediction at 0.469, saturation 3.3x. Reviewer to confirm. |
+| a visible object-to-deck junction | 0.28 m occlusion band, lost with the pass | recovered by authored contact, at least as deep | Reviewer to confirm. |
+| ground beside a pylon shaft | tangent capsule, no corner to occlude | a corner exists, and reads | Geometry fixed. Reviewer to confirm it reads. |
+
+### Two rows of this table were unreachable when it was written, and the reason is worth more than the rows were
+
+The first two asked the island's underside to carry 8 to 14% of the frame below 0.20, and 1.5% below 0.10.
+Two streams, working from opposite ends and unaware of each other, independently proved that impossible with arithmetic.
+
+For a solid of revolution seen from outside and above, **the profile stop of maximum radius IS the lower silhouette**: everything below it is behind it or back-facing.
+So the island's visible underside is bounded by the overhang, and in `hub-establishing` it is 20,420 pixels, **1.16% of the frame.**
+Reaching 8% needs 124,000. Even painted pure black it caps the frame at about 2.9%.
+And it appears in **one of the six vantages**: from a camera standing on the plateau a ray reaches the skirt only if height over distance-to-the-lawn-edge exceeds the slope of the first stop below the lawn, which it does at `hub-establishing` and, marginally, at `hub-portal` (486 px), and at none of the other four.
+
+Those two rows were an integrator's guess at a frame share, made without projecting the geometry, and they are withdrawn.
+The rows that survive are the ones stated as **profiles and locations** rather than as frame shares: the gradient down the silhouette, and where in the frame the darks sit.
+A frame-share target for a feature whose area is fixed by geometry is not an acceptance criterion, it is a wish.
+
+### The prohibition is not met, and the reason is structural
+
+"No repeated vertical object may be the darkest thing in the frame" is the actual content of this decision, and after implementation the eight pylons are **deeper into the anchor band than they were**: a shaded shaft measured 0.185 before and **0.138** after.
+
+The cause is not carelessness, it is the shape of the problem.
+A cast shadow only reads if the ambient fill is low enough that losing the key matters, and lowering the ambient darkens **every** surface that faces away from the key - including eight verticals.
+Albedo cannot separate them, because the pylons' lit and shaded sides are 0.365 and 0.138 apart under a 2.6:1 key ratio, and no single hex puts both inside a band 0.18 wide.
+
+So the two halves of this decision are in tension, and this round bought the cast shadow at the cost of the prohibition.
+What survives is the weaker, and honestly the original, claim: at the deepest end, **56.5% of everything below 0.15 is now in the bottom third of the frame**, and the largest single contiguous dark shape is the island's underside rather than a ring of pickets. The darks have changed shape. They have not stopped including the cage.
+
+Round 4 inherits this as a specific question with the arithmetic already done: either the pylons get fewer, or they get a lit-side treatment that is not albedo, or the prohibition is restated as being about the shape the darks make at squint rather than about every pixel. **It should not be settled by putting the ambient back.**
 
 Round 2's F3 measured a high-frequency noise metric on three patches and read 3.32 / 2.62 / 3.33 at high against 0.24 / 0.63 / 0.74 at low.
 **That row is deliberately not in this table, and the reason is worth writing down.**

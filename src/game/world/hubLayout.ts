@@ -14,6 +14,7 @@
  */
 
 import { LatheGeometry, Vector2, type BufferGeometry } from 'three'
+import { palette } from '@/art/palette'
 
 export type Point3 = [number, number, number]
 
@@ -278,47 +279,149 @@ export function trunkTraceCorners(): Point3[] {
 export type LatheStop = { radius: number; y: number }
 
 /**
- * The island's underside, as a single lathe profile with an overhanging lip.
+ * One stop on the skirt profile: where it is, and what colour it is there.
  *
- * **Why the island had no thickness even though it had rim geometry.** The old
- * build drew a rim cylinder, a soil band and a root cone, all of them tapering
- * INWARD from the plateau radius. Every camera in the game looks down at the
- * island from above, so the plateau disc occludes all three of them completely:
- * the far rim is behind the lawn, the near rim is behind the camera, and the
- * lateral rims face away. Three meshes, six draw calls with their shadow
- * passes, and not one pixel of any of them reached the frame. The lawn ended
- * against sky as a hard curve, which is precisely what the critique measured.
- *
- * The fix is not more geometry, it is an OVERHANG. The first stop below the
- * lawn steps outward as well as down, so the lip's outer edge projects beyond
- * the plateau's silhouette from every elevated angle and the eye sees a band of
- * soil all the way round the island. That band is also up-facing, with a normal
- * Y near 0.90, so it takes the steeply overhead key almost in full and lands in
- * the midground band as a MEASURED value rather than as an albedo that happens
- * to be in range - which is the distinction the whole critique turns on.
- *
- * Below the lip the cliff turns down and in, and it is progressively darker
- * because it faces away from the key. That is correct and it costs nothing: the
- * lip overhangs it, so from any camera high enough to see the island's shape
- * the cliff is mostly hidden behind its own lip.
+ * The value rides on the same row as the geometry on purpose. The two previous
+ * versions of this skirt each kept the profile in one place and its colours in
+ * another, and the second one shipped a two-colour facing paint against an
+ * eight-stop profile, so seven of the eight stops were the same value. Putting
+ * them in one table makes that class of mismatch unrepresentable rather than
+ * merely tested for, and `paintByHeight` consumes the y values directly, so the
+ * ramp cannot drift off the geometry it is painting.
  */
-export function islandSkirtProfile(plateauRadius: number): LatheStop[] {
+export type SkirtStop = LatheStop & { value: string }
+
+/*
+  THE SKIRT'S VALUES.
+
+  Only the top stop exists in `palette.ts`. The four below it are proposed
+  palette values, declared here for one round exactly as `Terrain.tsx`'s `CLIFF`
+  was last round, and listed in the build report for promotion. None of them may
+  ever carry a `band()` assertion: `VALUE_BANDS.anchor` refuses hex assertions on
+  purpose, and these are the reason it does.
+
+  The display luma of each hex is in the comment because the rendered value is
+  NOT the hex - it is roughly a fifth of it on these facings, and every previous
+  round of this project was lost by confusing the two.
+*/
+/** 0.221 as a hex. The lip shelf's lower edge, where the mid-value band ends. */
+const KEEL_SHELF = '#4a3524'
+/** 0.108. The widest point, and the deepest thing normally in frame. */
+const KEEL_WALL = '#241a13'
+/** 0.074. Below the silhouette; visible only if a camera ever goes under. */
+const KEEL_UNDER = '#191209'
+/** 0.054 / 0.050. The root, which no vantage in the game can reach. */
+const KEEL_ROOT_UPPER = '#120d0a'
+const KEEL_ROOT = '#100c0a'
+
+/**
+ * The island's underside: one lathe profile, with an overhanging flare whose
+ * widest point is 1.8 m BELOW the lawn.
+ *
+ * ## Two previous versions, two different ways of being wrong
+ *
+ * **Version one** drew a rim cylinder, a soil band and a root cone, all tapering
+ * INWARD from the plateau radius. Every camera looks down at the island, so the
+ * plateau occluded all three completely. Six draw calls with their shadow
+ * passes, not one pixel in any frame.
+ *
+ * **Version two** - the one this replaces - fixed that with an overhang: the
+ * first stop below the lawn stepped outward to `r + 0.78` at y = -0.52, and
+ * everything below turned back in. It is visible, and it is the reason the
+ * island has an edge at all. But it bought a TRIM rather than a THICKNESS, and
+ * the profile arithmetic says why.
+ *
+ * For a solid of revolution seen from outside and above, the stop of maximum
+ * radius IS the lower silhouette. Everything below it is either behind it or
+ * back-facing. Version two put that stop 0.52 m below the lawn, so the entire
+ * visible band below the lawn was the 0.72 m up-facing shelf between the lawn's
+ * edge and the overhang - measured on `hub-establishing` at high, 1660x934, as
+ * 95.8% of every skirt pixel in the frame, with the cliff below contributing
+ * exactly zero. The band read 0.230 falling to 0.202 over ninety pixels at
+ * x = 1550, and **0.028 of that 0.029 fall was the vignette**, not the surface.
+ * The cliff's careful `soilDeep` was painting geometry no camera could see.
+ *
+ * ## What changed, and the one number it turns on
+ *
+ * The widest point stays at `r + 0.78` - the island's silhouette is unchanged in
+ * plan, which matters because three other systems are framed against it - and
+ * moves DOWN, from y = -0.52 to y = -1.80. The overhang is preserved; the
+ * thickness it overhangs is what is new. The band between the lawn's edge and
+ * the silhouette stops being a shelf seen nearly face-on and becomes a wall
+ * falling 1.54 m, and it is that wall which carries the anchor band.
+ *
+ * Predicted on the same frame: the underside goes from 4,785 pixels at or below
+ * 0.18 to 10,572, from 5 pixels below 0.10 to 1,806, and the x = 1550 profile
+ * from a flat 0.231-0.201 to a monotone 0.231 down to 0.127 with 44 contiguous
+ * pixels at or below 0.18.
+ *
+ * ## The shelf's slope is load-bearing and it is not an aesthetic choice
+ *
+ * 0.26 over 0.52, a slope of 0.50. From a camera standing ON the plateau, a ray
+ * reaches the skirt only if it clears the lawn's edge and then descends faster
+ * than the outermost skirt surface - so the underside is invisible from inside
+ * the island unless `height / distance-to-edge` exceeds this slope. The worst
+ * case among the five vantages sited on the island is `hub-totem` at 0.341, and
+ * `hub-grazing` is 0.111. That is why a near-black underside cannot appear as a
+ * band at eye level in those shots: not because it is dark enough to get away
+ * with, but because it is not in the frame. Lower this slope below about 0.36
+ * and that stops being true.
+ */
+export function islandSkirtProfile(plateauRadius: number): SkirtStop[] {
   const r = plateauRadius
   return [
     // Flush with the lawn's edge, so the lawn-to-soil transition is a hard line.
-    { radius: r, y: 0 },
-    // The overhang. This is the only stop whose radius exceeds the plateau's,
-    // and it is the entire reason the island reads as having thickness.
-    { radius: r + 0.72, y: -0.34 },
-    // A short near-vertical outer face, which gives the lip a bottom edge
-    // instead of letting it fair away into the cliff.
-    { radius: r + 0.78, y: -0.52 },
-    // The cliff, falling in.
-    { radius: r - 0.7, y: -1.9 },
-    { radius: r - 3.8, y: -3.6 },
-    { radius: r - 8.6, y: -5.4 },
-    { radius: r - 13.4, y: -6.6 },
-    { radius: 0, y: -7.2 },
+    { radius: r, y: 0, value: palette.soil },
+    /*
+      The lip shelf, and it does two opposite jobs depending on which side of the
+      island it is on. Worth stating both, because the first draft of this comment
+      claimed only the flattering one.
+
+      On the KEY flank it is up-facing surface taking the key at N.L up to 0.999,
+      so it is a midground value by arithmetic and no albedo can argue it into the
+      anchor band: measured over azimuths 50 to 100 degrees it means 0.196, which
+      is the bright line that makes the dark below it read as a thickness rather
+      than as a black outline drawn round the lawn. That is the round-2 gain, and
+      it is kept.
+
+      On the ANTI-KEY flank the same surface is the DARKEST THING IN THE FRAME, at
+      0.073 to 0.088. Up-facing and no key to face. It is also the only part of the
+      skirt still in frame out there: the wall below is dead vertical, so its
+      normal is radial, and a radial normal goes edge-on to the camera about 70
+      degrees either side of the camera's own bearing. Past that the shelf is all
+      there is, which is why it reads as 108 px of dark at x = 0 rather than as the
+      hairline its 0.52 m width suggests.
+
+      `KEEL_SHELF` is therefore the one constant to move if the left flank crushes.
+      It is monotone and it trades directly against the acceptance run at x = 1550:
+      0.183 gives a 51 px run and 260 crushed pixels, 0.221 gives 44 px and 97,
+      0.265 gives 29 px and none, 0.310 gives 6 px and fails. 0.221 is chosen for
+      margin on the criterion rather than on the crush, because the model behind
+      those numbers is anchored on a key-lit surface and is least trustworthy
+      exactly where the crush would be.
+
+      Narrower than version two's 0.72 for the same reason it is not narrower
+      still: every metre of it is midground on one side and anchor on the other.
+    */
+    { radius: r + 0.52, y: -0.26, value: KEEL_SHELF },
+    /*
+      The widest point, and the whole change. Down here rather than at -0.52, so
+      there is 1.54 m of wall above it inside the island's own silhouette.
+
+      Its normal is (1.000, -0.007): dead vertical. A vertical wall on the
+      anti-key flank receives no key at all, and on the key flank receives
+      0.735 * cos(azimuth from the key) - about half what the shelf gets. Both
+      are in the frame at `hub-establishing`, which is why the underside comes out
+      asymmetric: 0.06-0.13 on the left flank, 0.13-0.23 on the right. That is
+      the light being correct rather than a defect to flatten.
+    */
+    { radius: r + 0.78, y: -1.8, value: KEEL_WALL },
+    // Below the silhouette. The turn back in has to be here rather than higher,
+    // or the widest point moves up and the wall above it is occluded again.
+    { radius: r + 0.4, y: -3.05, value: KEEL_UNDER },
+    { radius: r - 3.4, y: -4.55, value: KEEL_ROOT_UPPER },
+    { radius: r - 9.2, y: -6.0, value: KEEL_ROOT },
+    { radius: 0, y: -7.2, value: KEEL_ROOT },
   ]
 }
 
@@ -333,12 +436,32 @@ export function islandSkirtProfile(plateauRadius: number): LatheStop[] {
  * backfacing shell: invisible from outside the island, with a correct triangle
  * count, correct bounds, `visible: true` and no error anywhere. The frame comes
  * out looking exactly like the one this change exists to fix.
+ *
+ * The keel makes that test sharper rather than redundant. Version two's profile
+ * was outward-facing at every stop, so an inward shell would have shown from any
+ * angle; this one has a dead-vertical stop at the widest point, whose normal is
+ * (1.000, -0.007) and whose sign therefore turns on 0.12 m of radius. That is
+ * exactly the size of edit somebody makes while tuning a silhouette.
  */
 export function islandSkirtLathe(plateauRadius: number, segments: number): BufferGeometry {
   const points = islandSkirtProfile(plateauRadius)
     .map((stop) => new Vector2(stop.radius, stop.y))
     .reverse()
   return new LatheGeometry(points, segments)
+}
+
+/**
+ * The skirt's value ramp, in the form `paintByHeight` takes.
+ *
+ * Derived from the profile rather than written beside it, so the ramp's rungs are
+ * the profile's own heights by construction. A rung that does not coincide with a
+ * profile stop is not merely untidy: the GPU interpolates vertex colour linearly
+ * between the ring vertices it has, so a rung authored halfway down a segment is
+ * silently rounded to the nearest ring and the value the comment claims is not
+ * the value that renders.
+ */
+export function islandSkirtValues(plateauRadius: number): Array<{ y: number; colour: string }> {
+  return islandSkirtProfile(plateauRadius).map((stop) => ({ y: stop.y, colour: stop.value }))
 }
 
 // ---------------------------------------------------------------------------

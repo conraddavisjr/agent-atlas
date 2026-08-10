@@ -9,6 +9,7 @@ import {
   densifyPath,
   islandSkirtLathe,
   islandSkirtProfile,
+  islandSkirtValues,
   monolithArc,
   orthoTrace,
   pathLength,
@@ -18,6 +19,7 @@ import {
   type Point3,
 } from './hubLayout'
 import { mulberry32 } from '@/art/placement'
+import { displayLuma, palette } from '@/art/palette'
 import { trace } from '@/art/geometry'
 
 const AXIS_TOLERANCE = 1e-9
@@ -234,8 +236,106 @@ describe('islandSkirtProfile', () => {
     expect(widest).toBeGreaterThan(PLATEAU_RADIUS + 0.5)
   })
 
+  it('puts its widest stop well BELOW the lawn, which is what makes a thickness', () => {
+    /*
+      The version before this one satisfied the overhang test above and still
+      gave the island a trim rather than a thickness, so this is the assertion
+      that was missing rather than a restatement of it.
+
+      For a solid of revolution seen from outside and above, the stop of maximum
+      radius IS the lower silhouette: everything below it is behind it or
+      back-facing. Version two put that stop 0.52 m below the lawn, so the only
+      thing ever in frame below the lawn was the up-facing shelf between the
+      lawn's edge and the overhang - measured as 95.8% of every skirt pixel in
+      `hub-establishing` with the cliff below contributing exactly zero. The
+      depth of the widest stop is the height of the visible wall, and therefore
+      the entire budget the anchor band has to spend.
+    */
+    const widest = profile.reduce((a, b) => (b.radius > a.radius ? b : a))
+    expect(widest.y).toBeLessThan(-1.2)
+
+    // And it must be the UNIQUE maximum, or the silhouette is a band rather
+    // than an edge and the wall above it goes back behind its own overhang.
+    const ties = profile.filter((s) => s.radius >= widest.radius)
+    expect(ties).toHaveLength(1)
+  })
+
+  it('keeps the shelf steep enough that no on-island camera can see the keel', () => {
+    /*
+      This is the number that keeps a near-black band out of `hub-grazing` and
+      `hub-backlit`, and it is geometry rather than restraint.
+
+      From a camera standing ON the plateau, a ray reaches the skirt only if it
+      clears the lawn's edge and then descends faster than the outermost skirt
+      surface does. So the underside is invisible from inside the island unless
+      `camera height / horizontal distance to the lawn edge` exceeds the slope of
+      the first stop below the lawn. Best case over the five vantages sited on
+      the island - each looking at its own nearest rim - is `hub-totem` at 0.341:
+
+        hub-character  1.72 / 5.91 = 0.291
+        hub-grazing    0.75 / 6.74 = 0.111
+        hub-totem      2.35 / 6.90 = 0.341
+        hub-backlit    1.49 / 8.40 = 0.177
+        hub-portal     5.10 / 9.34 = 0.546   <- the one that can, and does
+
+      Below about 0.36 this stops being true and the keel starts appearing at eye
+      level in shots framed on the character, which is the one place the decision
+      document promises it never will.
+    */
+    const lawn = profile[0]
+    const shelf = profile[1]
+    const slope = Math.abs(shelf.y - lawn.y) / (shelf.radius - lawn.radius)
+    expect(slope).toBeGreaterThan(0.36)
+  })
+
+  it('darkens monotonically as it descends, since a cone cannot shade itself', () => {
+    /*
+      The acceptance criterion for this round, expressed where it can be checked
+      without a GPU: "the x = 1550 profile shows a gradient rather than a flat
+      plateau". A lathe segment is one conical band with one normal, so the
+      lighting contributes almost nothing to a gradient down the skirt - the old
+      skirt measured 0.230 falling to 0.202 over ninety pixels and 0.028 of that
+      0.029 was the VIGNETTE. The gradient has to be authored into the values, so
+      it is asserted on the values.
+    */
+    const luma = profile.map((s) => displayLuma(s.value))
+    for (let i = 1; i < luma.length; i++) {
+      expect(luma[i], `stop ${i} at y ${profile[i].y}`).toBeLessThanOrEqual(luma[i - 1])
+    }
+    // And it has to actually travel, not merely fail to rise.
+    expect(luma[0] - luma[luma.length - 1]).toBeGreaterThan(0.2)
+  })
+
+  it('starts from palette.soil and never asserts a band on the darks', () => {
+    /*
+      `palette.band()` refuses the anchor band on purpose - a surface reaches
+      0.06 to 0.18 by facing away from the key, not by having a dark hex - so the
+      only thing assertable here is the top of the ramp, which is a midground
+      value and is a real palette entry.
+    */
+    expect(profile[0].value).toBe(palette.soil)
+    for (const stop of profile) expect(stop.value).toMatch(/^#[0-9a-f]{6}$/)
+  })
+
+  it('hands paintByHeight rungs that land exactly on profile stops', () => {
+    /*
+      The GPU interpolates vertex colour linearly between the ring vertices it
+      has, so a ramp rung authored halfway down a segment is silently rounded to
+      the nearest ring: the value the comment claims is not the value that
+      renders, and nothing reports it. Deriving the rungs from the profile makes
+      that unrepresentable, and this pins the derivation.
+    */
+    const values = islandSkirtValues(PLATEAU_RADIUS)
+    expect(values).toHaveLength(profile.length)
+    values.forEach((rung, i) => {
+      expect(rung.y).toBe(profile[i].y)
+      expect(rung.colour).toBe(profile[i].value)
+    })
+  })
+
   it('starts flush with the lawn edge and descends monotonically', () => {
-    expect(profile[0]).toEqual({ radius: PLATEAU_RADIUS, y: 0 })
+    expect(profile[0].radius).toBe(PLATEAU_RADIUS)
+    expect(profile[0].y).toBe(0)
     for (let i = 1; i < profile.length; i++) {
       expect(profile[i].y).toBeLessThan(profile[i - 1].y)
     }
