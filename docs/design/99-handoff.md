@@ -13,7 +13,7 @@ Read `00-art-bible.md` first. It outranks the five numbered specs, and where it 
 
 That was written before the critique loop ran. The loop then spent most of its time proving it again, in a new place: not in the game, but in the harness that photographs the game.
 
-Eight more silent failures have been found, and every one of them produced a valid PNG of the wrong thing:
+Ten more silent failures have been found, and every one of them produced a valid PNG of the wrong thing:
 
 1. **The frameloop was being taken back.** `frameloop` is a prop of `<Canvas>`, and r3f's `configure` runs on every render of it. The Canvas passes no such prop, so any React re-render reverted `setFrameloop('never')`. `advance(timestamp)` kept rendering, but `update()` only honours the timestamp under `'never'` and otherwise falls back to `clock.getDelta()` - a few tenths of a millisecond on a microtask loop. Every `useFrame` subscriber, Rapier's accumulator included, got a delta two hundred times too small. Forty settle frames became two milliseconds and the character was photographed mid-fall.
 2. **The driven path was gated on `document.hidden`,** which does not mean "rAF will fire". A tab can be the active tab of a buried window.
@@ -24,6 +24,9 @@ Eight more silent failures have been found, and every one of them produced a val
 
 7. **Progression was never pinned,** and it changes the frame. Two capture sets of the same commit at the same tier disagreed by more than the effect they were being compared to measure, while every local probe agreed to within 0.004, because the difference sits on two objects near the centre of frame. Found in round 3. See "The harness".
 8. **ImageMagick's own `-fx` and `%[fx:mean]` are not in the eyedropper's colour convention.** They disagree by about 0.18 of luma on these frames, which is wider than a whole value band, and a threshold expression built on them reported 50% of every frame above 0.86 and looked plausible. Anything that measures a frame has to be checked against `__dev.sample()` before it is believed. Found in round 3.
+
+9. **The stated 0.3% triangle tolerance in `capture()` actually reaches 1.9% at the low tier.** Found by round 3's reviewer.
+10. **`magick -colorspace Gray` linearises**, so it is the `-fx` trap in different clothes. The integrator generated the greyscale frames with it while judging the bible's section 8 test, which means a squint judgement in round 3 was made on an image of the wrong tonality. Use `-grayscale Rec709Luma`, and measure the colour PNG rather than a converted one. Found by round 3's reviewer.
 
 The working rule stands and now has a second half:
 
@@ -52,6 +55,10 @@ Fixed and confirmed visible: the second specular lobe on the shell, the hole in 
 
 **Round 3 settled that**, on a narrow brief: handoff items 1 and 9, decided together as one composition call because they were one question. The decision is `97-decision-shadow-end.md`, the three build streams and their falsifications are in `bd78b54`, and the fresh review of the result is `98-critique-round3.md`.
 
+**Round 3's verdict, which is the live one, and it is a third diagnosis of the same failing test rather than a repeat of either.** The lawn is not a value, it is a **0.37-wide distribution**: its 5th to 95th percentile spans 0.363 to 0.731, so one surface reads simultaneously as walkable stone, as the gap between bands that must be empty, and as unclimbable cliff. Ten per cent of `hub-establishing` is grass sitting inside the 0.38-0.56 gap, and grass is 60.8% of everything in it. Lawn p75 is 0.615 against deck p25 of 0.535, so the two overlap through the middle.
+
+Three rounds of acceptance rows have asked for a "clean lawn patch" to land inside 0.56-0.74. Round 3 delivered that - the mean is now 0.561 - and the greyscale test still fails, **because the mean was never the thing.** A clean patch is the wrong statistic for a surface made of two hundred thousand blades whose own tip-to-root ramp is wider than the band it has to occupy. Round 2's F14 correctly asked for that ramp and it currently runs the roots to about 0.38, so the fix that gave the grass its ground contact is the same one putting walkable ground into the unwalkable band. **Compress the spread from the bottom rather than shifting the mean:** roughly 0.72 at the tips and 0.60 at the roots.
+
 Measured movement across round 3, high tier, all six vantages verified:
 
 | `hub-establishing` | round-3 entry | after |
@@ -73,7 +80,7 @@ The full round-2 report is `98-critique-round2.md`. Round 1's is `98-critique-ro
 
 ## Outstanding, in priority order
 
-**1. DECIDED AND IMPLEMENTED in round 3. One part of it failed and that part is now item 11.**
+**1. DECIDED AND IMPLEMENTED in round 3, and the review says the principle is right and the premise is wrong. Items 11 and 12 are what is left of it.**
 The decision is `docs/design/97-decision-shadow-end.md`: the darkest thing in this world is the ground seen from underneath. A fourth value band, anchor 0.06 to 0.18, membership closed to the island's underside and recessed apertures, and a prohibition on any repeated vertical object entering it.
 
 What settled it was not a new measurement but a different question. Both reviewers were describing the same six per cent of the frame from opposite sides, and neither could resolve it because "how dark should the darks be" has no answer. Thresholding the frame at 0.20 and asking **where** those pixels are answered it in one command: 65% of them in the right-hand third, on the shaded sides of the perimeter pylons, four of which are cropped by the top edge. The darks were in the shape of a cage. `tools/critique/frame.mjs where` is that query and it is now in the repo.
@@ -106,13 +113,27 @@ Two things about it worth keeping. The pass was **not** failing at object bases 
 
 **10. Depth of field was never built,** and `05-character-vfx.md` sections 9-11 (the pooled particle system) were never built. Both unchanged from the previous handoff. Anyone enabling DoF must delete the near field first.
 
-**11. The prohibition on repeated verticals is not met, and it got worse.**
+**11. The prohibition on repeated verticals is not met, it got worse, and the round's own report of it was selective.**
+
+The reviewer's numbers, which are better than the ones this file used to carry: below 0.15 the round added 5,091 warm pixels to the ground and **17,595 cool ones to the verticals**, so the warm share of the deepest darks fell from 51% to 25.2%. The two largest contiguous dark shapes in the frame are both pylon shafts and the largest is 1.66 times the largest skirt fragment.
+
+And the claim that survived - "the largest single contiguous dark shape is the island's underside" - is true only at a 0.20 threshold and only by 0.7%. The `frame.mjs where` call that produced the quoted 56.5% bottom-third share reports the **column** thirds in the same output, and they read 79.2% right and 5.4% centre. The favourable half was quoted and the damning half was not. **When a tool returns two axes, quote both or neither.**
+
+The reviewer's fix is the variable nobody has touched: not value, which is provably impossible, but **count and placement.** Eight verticals at radius 14.6 with four cropped by the top edge is what makes the shape a fence. Take the ring to four or five, keep the two that frame the portal sightline, and re-measure the column distribution rather than the luma.
 
 This is the half of item 1 that failed, and it is structural rather than careless. A cast shadow only reads if the ambient is low enough that losing the key matters, and lowering the ambient darkens **every** surface facing away from the key - including eight pylons. A shaded shaft measured 0.185 before the round and **0.138** after, which is deeper into the band the decision forbids them.
 
 Albedo cannot fix it: the pylons' lit and shaded sides sit at 0.365 and 0.138 under a 2.6:1 key ratio, and no single hex puts both inside a band 0.18 wide. So round 4 has three options and should pick one rather than tuning: fewer pylons, a lit-side treatment that is not albedo, or restating the prohibition as being about the shape the darks make at squint rather than about every pixel. **It must not be settled by putting the ambient back**, which would undo the cast shadow this round bought.
 
-**12. Nothing in this world has a corner where it meets the ground.**
+**12. The anchor band's lower bound is probably wrong for this world, and cast shadow should have been the answer.**
+
+This is the reviewer overturning the decision on the decision's own arithmetic, and it is the most useful thing in the round-3 report. The document found that landing a deck's cast shadow inside 0.06-0.18 needs the irradiance cut to about 30%, which it rightly rejects, and concluded "cast shadow is a midground dark, not an anchor one". The conclusion available was **"then the band's lower bound is wrong"**. Nothing in this frame needs 0.06-0.18 content: no emissive needs it, the bloom threshold is measured at 1.45, and section 8 asks for three separable classes rather than for a black point.
+
+Cast shadow is the only dark in this world present in all six vantages, the only one adjacent to a lit surface, and contiguous and bottom-weighted by construction because it is attached to the bottom of every object. It is also already round 3's largest measured win, 0.142 to 0.197 of contrast on a stone deck. The island's underside, by contrast, appears in one and a half of six shots and landed as two corner wedges: the skirt darks occupy the leftmost 5% and rightmost 10% of frame width with **nothing across the middle 80%**, because the island's lawn runs off the bottom edge. Two dark wedges in the lower corners is a vignette, and a vignette frames rather than supports.
+
+Concretely: the shadows at `hub-establishing` are four small disconnected ellipses under the Core struts plus a few puck shadows, all islands. Merge them into one mass and the picture gets a floor in six vantages instead of one and a half, which also settles item 11 for free, because a contiguous ground shadow is the one dark a pylon cannot compete with on shape whatever its luma.
+
+**13. Nothing in this world has a corner where it meets the ground.**
 
 `pill(0.34, h)` is a `CapsuleGeometry` translated so the bottom of its lower hemisphere sits exactly on the plane it stands on. That is a sphere tangent to a plane, touching at a single point, with 4 mm of gap 5 cm out - the contact shape that produces the least occlusion of any. The pylons were fixed in round 3 by sinking them by their own radius. **Everything else built from `pill()` has the same defect**, and the Core struts are worse: `baseRadius` 2.10 on a 2.20 puck that drafts 3 degrees inward means the foot already overhangs the puck, so there is no surface under the outboard half at all. That is a modelling defect and it has to be fixed before those bases can be contacted.
 
