@@ -10,7 +10,9 @@
     "lint": "eslint .",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "critique:sink": "node tools/critique/shotsink.mjs",
+    "critique:frame": "node tools/critique/frame.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.8",
