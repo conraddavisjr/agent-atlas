@@ -62,16 +62,21 @@ export type QualitySettings = {
   softShadows: boolean
   ambientOcclusion: boolean
   /**
-   * N8AO's quality preset, which is the string handed to `setQualityMode`.
+   * N8AO's ambient sample count, and the denoise sample count that cleans it.
    *
-   * Replaces the old `aoSamples` count, which never reached the pass. r3f's
-   * `<N8AO>` applies `aoSamples` in one layout effect and calls
-   * `setQualityMode(quality)` in a later one, so whenever both are passed the
-   * preset silently overwrites the count. Naming the preset directly is the
-   * only version of this setting that is not a lie. `'low'` is 16 AO samples
-   * with 4 denoise samples, `'medium'` is 16 with 8.
+   * Both named outright, because the preset string these replace was inert.
+   * r3f's `<N8AO>` in the installed version never calls `setQualityMode`; it
+   * destructures the numeric props and hands them to `applyProps`. A preset
+   * name therefore set a key nothing reads, and every tier silently ran the
+   * wrapper's own defaults of 16 and 4.
+   *
+   * n8ao does not accumulate across frames unless `accumulate` is set, so its
+   * jitter is a fixed pattern rather than something that averages away, and the
+   * denoise count is the only thing standing between that pattern and the
+   * screen. 4 is not enough on a hero surface.
    */
-  aoQuality: 'low' | 'medium'
+  aoSamples: number
+  aoDenoiseSamples: number
   /** Scatter density multiplier for rocks, ferns, pebbles and flowers. */
   propDensity: number
   cloudCount: number
@@ -342,7 +347,10 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     // Unused while ambientOcclusion is false, and deliberately still the
     // cheaper preset rather than a placeholder, so forcing AO on at this tier
     // for a diagnostic does not also hand it the expensive settings.
-    aoQuality: 'low',
+    // AO is off at this tier, so these never reach a pass. Kept at the
+    // cheapest honest values rather than at a placeholder.
+    aoSamples: 16,
+    aoDenoiseSamples: 4,
     propDensity: 0.35,
     cloudCount: 0,
     maxDpr: 1,
@@ -407,7 +415,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     shadowMapSize: 2048,
     softShadows: true,
     ambientOcclusion: true,
-    aoQuality: 'low',
+    aoSamples: 16,
+    aoDenoiseSamples: 8,
     propDensity: 0.7,
     cloudCount: 3,
     maxDpr: 1.5,
@@ -462,7 +471,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     shadowMapSize: 4096,
     softShadows: true,
     ambientOcclusion: true,
-    aoQuality: 'medium',
+    aoSamples: 16,
+    aoDenoiseSamples: 8,
     propDensity: 1,
     cloudCount: 5,
     maxDpr: 1.75,

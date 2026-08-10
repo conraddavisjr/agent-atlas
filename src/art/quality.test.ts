@@ -82,11 +82,33 @@ describe('tier settings', () => {
 
   it('turns ambient occlusion off entirely at the bottom tier', () => {
     expect(QUALITY.low.ambientOcclusion).toBe(false)
-    // The preset is still the cheap one rather than a placeholder, so forcing
-    // AO on at this tier for a diagnostic does not also buy the expensive
-    // settings.
-    expect(QUALITY.low.aoQuality).toBe('low')
-    expect(QUALITY.high.aoQuality).toBe('medium')
+    // Still the cheap counts rather than a placeholder, so forcing AO on at
+    // this tier for a diagnostic does not also buy the expensive settings.
+    expect(QUALITY.low.aoSamples).toBe(16)
+    expect(QUALITY.low.aoDenoiseSamples).toBe(4)
+  })
+
+  it('denoises ambient occlusion enough to hide its own jitter where it is visible', () => {
+    /*
+      n8ao leaves `accumulate` off, so its sampling jitter is a fixed pattern
+      rather than something that averages away over frames, and the denoise
+      count is the only thing between that pattern and the screen. The wrapper's
+      default of 4 put a visible crackle on the character's shell as soon as
+      anything on him started occluding.
+
+      Asserted rather than commented because the setting that used to control
+      this was a preset string the wrapper never read, so it looked configured
+      for as long as anyone cared to look.
+
+      Note what is deliberately NOT asserted: that `high` takes more ambient
+      samples than `medium`. Doubling 16 to 32 was tried against the actual
+      defect and moved it by 0.03 of a standard deviation, because the pattern
+      is the sampling kernel rather than noise in it. Raising a number that does
+      not help, and then pinning it with a test, is how a codebase acquires
+      settings nobody dares touch.
+    */
+    expect(QUALITY.medium.aoDenoiseSamples).toBeGreaterThanOrEqual(8)
+    expect(QUALITY.high.aoDenoiseSamples).toBeGreaterThanOrEqual(8)
   })
 
   it('defines every setting on every tier', () => {
@@ -136,7 +158,8 @@ describe('tier settings', () => {
       'chromaticAberration',
       'colourGrade',
       'bloomLevels',
-      'aoQuality',
+      'aoSamples',
+      'aoDenoiseSamples',
       'aoHalfRes',
       'surfaceMapSize',
       'sheenHero',

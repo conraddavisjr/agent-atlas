@@ -25,8 +25,16 @@ import { QUALITY, type QualitySettings, type QualityTier } from './quality'
  * image, and each is expensive enough or new enough to be worth isolating.
  * Deliberately not one flag per quality field: this is a bisection tool, and a
  * list of thirty names is not one.
+ *
+ * `ao` was missing from this list and earned its place the hard way. Tracking a
+ * crackle that had appeared on the character meant reaching for the only two
+ * levers that existed - `?nofx`, which turns off the entire chain and so only
+ * says "post", and switching to `low`, which changes twenty other things on the
+ * way past. Ambient occlusion is the one pass in the chain that generates a
+ * sampling pattern of its own, which makes it the first suspect for any
+ * speckle, and it was the one thing that could not be isolated.
  */
-export const GFX_SYSTEMS = ['rim', 'dof', 'lut', 'vfx', 'blob', 'face'] as const
+export const GFX_SYSTEMS = ['rim', 'dof', 'lut', 'vfx', 'blob', 'face', 'ao'] as const
 export type GfxSystem = (typeof GFX_SYSTEMS)[number]
 
 export type FxOverrides = {
@@ -133,6 +141,7 @@ export function applyGfxOverrides(
     ...(off.has('vfx') ? { particleBudget: 0, vfxDetail: 'off' as const } : {}),
     ...(off.has('blob') ? { contactShadow: false } : {}),
     ...(off.has('face') ? { faceAnimation: false } : {}),
+    ...(off.has('ao') ? { ambientOcclusion: false } : {}),
   }
 }
 

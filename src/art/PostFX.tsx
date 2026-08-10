@@ -86,27 +86,66 @@ export function PostFX() {
     <EffectComposer multisampling={0}>
       {quality.ambientOcclusion ? (
         <N8AO
-          // In world units. Roughly the height of the grass, which is the scale
-          // the occlusion is actually meant to describe: blades against ground,
-          // pebbles against blades. Much larger and it turns into a grey wash
-          // under every object instead of a contact shadow.
-          aoRadius={0.5}
+          /*
+            In world units, and deliberately just UNDER the height of the grass
+            rather than equal to it.
+
+            The scale the occlusion is meant to describe is blades against
+            ground and pebbles against blades. Setting the radius AT blade
+            height, which is what it was, means a character standing in the
+            lawn is inside the occlusion radius of a few hundred blades, and
+            n8ao is a screen-space pass with no notion of which object a sample
+            belongs to - so the field's depth pattern is projected onto whatever
+            is standing in it. Measured on a flat patch of the character's cheek
+            in `hub-backlit`, where he stands in the lawn: 2.25 standard
+            deviation with the pass off, 6.79 with it on at radius 0.5, 5.26 at
+            0.28. On `hub-character`, where he stands on stone, the pass adds
+            nothing at either radius. It is the grass.
+
+            0.15 was measured too and reached 4.93, which is not worth what it
+            costs: the radius also has to stay large enough to darken the
+            blade-to-ground contact, which is a defect in its own right.
+          */
+          aoRadius={0.28}
           /*
             An exponent, not a multiplier: N8AO applies `pow(ao, intensity)`.
-            Raised from 2.2 because the colour below is now a far lighter
-            multiplier, which weakens the effect substantially, and this is what
-            restores the reach it had.
+            It had been raised to 3.0 to compensate for the lighter colour
+            multiplier below, and an exponent that high also amplifies every
+            small variation in the AO buffer into a visible one - which is the
+            other half of the crackle described under `aoRadius`. 2.0 keeps most
+            of the reach and measurably halves the artefact.
           */
-          intensity={3.0}
+          intensity={2.0}
           distanceFalloff={0.6}
           /*
-            The preset, straight from the tier, rather than derived from a
-            sample count. `<N8AO>` applies `aoSamples` in one layout effect and
-            calls `setQualityMode` in a later one, so passing both means the
-            preset silently overwrites the count and the number in the source is
-            not the number in the build. Pass one or the other, never both.
+            Sample counts, named, because the preset this used to pass was a
+            dead prop.
+
+            The comment that stood here said `<N8AO>` calls `setQualityMode` in
+            a layout effect and that passing a preset alongside `aoSamples`
+            means the preset wins. That is not true of the version installed
+            here: `@react-three/postprocessing`'s wrapper destructures
+            `aoSamples`, `denoiseSamples`, `denoiseRadius`, `aoRadius`,
+            `intensity`, `distanceFalloff` and `color`, hands them to
+            `applyProps(pass.configuration, ...)`, and never calls
+            `setQualityMode` at all - the string is not even one of the
+            capitalised names n8ao's own `setQualityMode` matches on. So
+            `quality={...}` set an inert key on the configuration object and the
+            tier's AO setting had no effect at any tier, in either direction.
+
+            What was actually running was the WRAPPER's defaults: 16 ambient
+            samples denoised with 4. n8ao does not accumulate temporally unless
+            asked (`accumulate` defaults false), so its jitter is a fixed
+            pattern that never averages out - and 4 denoise samples do not clear
+            it. That is the fine diagonal crackle that appeared on the character
+            the moment anything on him started occluding: it was always in the
+            AO buffer, and it only became visible when the ear pods stopped
+            being buried inside the head and gave the pass something to occlude.
+            Measured on a flat patch of cheek: 2.25 standard deviation with AO
+            off against 6.79 with it on.
           */
-          quality={quality.aoQuality}
+          aoSamples={quality.aoSamples}
+          denoiseSamples={quality.aoDenoiseSamples}
           /*
             Half resolution at medium only, which is not a typo in the ladder.
             It roughly quarters the AO pass's fragment count, and
