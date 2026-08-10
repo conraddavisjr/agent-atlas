@@ -42,7 +42,23 @@ export const palette = {
    * value as the lawn on top of it, so the eye had nothing to separate them.
    */
   soil: '#6b4d31',
-  soilDeep: '#452f1c',
+  /**
+   * The island's cliff face, below the lip.
+   *
+   * Lighter than it looks like it should be, and that is the whole lesson of
+   * the critique rather than an oversight. The band test is a statement about
+   * the frame. This surface faces down and outward and receives a small
+   * fraction of the steeply overhead key, so an albedo already sitting at the
+   * band's value renders far below it: the previous `#452f1c` is 0.197 as a
+   * hex and would come out near 0.06 on this facing, which is darker than the
+   * pylons the critique named as the worst edge in the picture. 0.414 is what
+   * puts the rendered cliff at roughly 0.20 to 0.25.
+   *
+   * It lived as a local constant in `Terrain.tsx` for one round, with a note
+   * asking for exactly this promotion. It carries no `band()` assertion, on
+   * purpose: see the note on `VALUE_BANDS.anchor` below.
+   */
+  soilDeep: '#8a6440',
 
   /**
    * Stonework. A cool light grey with lilac and gold, which is the chip-block
@@ -198,16 +214,46 @@ export const palette = {
 
 export type PaletteColor = keyof typeof palette
 
-/** The three value bands from the art bible's section 8. */
-export type ValueBand = 'gameplay' | 'midground' | 'background'
+/**
+ * The bands from the art bible's section 8, plus the fourth one that section 8
+ * never assigned to anything.
+ */
+export type ValueBand = 'anchor' | 'gameplay' | 'midground' | 'background'
 
 /**
  * Display-space luma bounds per band, inclusive.
  *
  * Kept beside the colours rather than in a spec document because the only
  * version of this rule that survives is one a test can assert against.
+ *
+ * ## The anchor band, and why it is measured differently from the other three
+ *
+ * `docs/design/97-decision-shadow-end.md` is the decision this band comes from
+ * and the argument is there rather than here. The short form: the bible named
+ * three bands and its darkest floor was 0.20, so nothing in the world was ever
+ * asked to be darker than that, and nothing was. Measured on a fresh capture of
+ * `hub-establishing` at high, 1.59% of the frame sat below 0.20 and **0.00% of
+ * it below 0.10.** What little dark there was turned out to be the shaded sides
+ * of the perimeter pylons, two thirds of it in the right-hand third of the
+ * frame: the darks were in the shape of a cage rather than of a floor.
+ *
+ * So the band exists, its membership is a closed list - the island's underside,
+ * cast shadow, and recessed apertures - and no repeated vertical object may
+ * enter it.
+ *
+ * **`band()` refuses this one, and that refusal is the point.** Round 1's
+ * verdict was that the value structure had been applied to the palette table
+ * rather than to the frame, because `band()` asserts on an albedo hex while the
+ * bible's test is about what the eye reads off the screen. That gap is widest
+ * exactly here. A surface reaches the anchor band by FACING AWAY from a steeply
+ * overhead key, not by having a dark hex: `soilDeep` above is 0.414 as a hex and
+ * renders at 0.20 to 0.25, and the 0.197 hex it replaced would have rendered
+ * near 0.06. An albedo cannot make this claim, so it is not allowed to. The
+ * anchor band is asserted with `__dev.sample()` on a real frame, and the numbers
+ * live in the decision document's acceptance table.
  */
 export const VALUE_BANDS: Record<ValueBand, readonly [number, number]> = {
+  anchor: [0.06, 0.18],
   gameplay: [0.56, 0.74],
   midground: [0.2, 0.38],
   background: [0.76, 0.86],
@@ -243,8 +289,24 @@ export function displayLuma(hex: string): number {
  * statement about the palette rather than about the frame and the palette
  * cannot change at runtime.
  */
-export function band(hex: string, of: ValueBand): string {
+export function band(hex: string, of: Exclude<ValueBand, 'anchor'>): string {
   if (!import.meta.env.DEV) return hex
+  /*
+    Refused rather than checked, and the reason is the whole of round 1's
+    verdict. See the note on VALUE_BANDS.anchor: a surface reaches the anchor
+    band by facing away from the key, so no hex can claim it and an assertion
+    that appeared to check it would be the exact confident nonsense this file
+    already warns about in the other direction. The type signature excludes it;
+    this catches a caller who has cast around the type.
+  */
+  if ((of as ValueBand) === 'anchor') {
+    throw new Error(
+      `palette: band() cannot assert the anchor band. A surface reaches 0.06 to 0.18 by ` +
+        `facing away from the key, not by having a dark albedo - soilDeep is 0.414 as a hex ` +
+        `and renders at 0.20 to 0.25. Measure it on the frame with __dev.sample(). See ` +
+        `docs/design/97-decision-shadow-end.md.`,
+    )
+  }
   const [lo, hi] = VALUE_BANDS[of]
   const luma = displayLuma(hex)
   if (luma < lo || luma > hi) {

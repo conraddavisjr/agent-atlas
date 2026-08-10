@@ -3,6 +3,7 @@ import { useStore, useThree } from '@react-three/fiber'
 import { Box3, Vector3, type PerspectiveCamera } from 'three'
 import { cameraFrame } from '@/game/camera/cameraFrame'
 import { devBridge } from './devBridge'
+import { VALUE_BANDS, type ValueBand } from '@/art/palette'
 import { VANTAGES, type Vantage } from './vantages'
 
 /**
@@ -713,18 +714,23 @@ export function DevHooks() {
       b /= pixels
 
       const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
-      const bands: Record<string, readonly [number, number]> = {
-        gameplay: [0.56, 0.74],
-        midground: [0.2, 0.38],
-        background: [0.76, 0.86],
-      }
+      /*
+        Imported rather than restated. This table used to be a second copy of
+        the one in palette.ts, which is the drift that already cost this project
+        a bloom threshold: materials.ts and PostFX.tsx each wrote 1.75 and 1.45
+        down separately and spent a session disagreeing. The anchor band arrives
+        here for free because of it.
+      */
       const inBand =
-        Object.keys(bands).find((name) => luma >= bands[name][0] && luma <= bands[name][1]) ?? 'none'
+        Object.keys(VALUE_BANDS).find(
+          (name) =>
+            luma >= VALUE_BANDS[name as ValueBand][0] && luma <= VALUE_BANDS[name as ValueBand][1],
+        ) ?? 'none'
 
       return {
         rgb: [Math.round(r), Math.round(g), Math.round(b)],
         luma: +luma.toFixed(3),
-        /** Which of the art bible's three bands this patch lands in, if any. */
+        /** Which value band this patch lands in, or 'none' for a gap between them. */
         band: inBand,
         /** Positive means warm. The temperature axis, in raw sRGB points. */
         warmth: Math.round(r - b),

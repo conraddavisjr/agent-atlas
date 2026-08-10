@@ -42,8 +42,21 @@ describe('display luma', () => {
 describe('the value bands', () => {
   it('leaves a real gap between every pair', () => {
     // The gaps are the whole mechanism. Bands that touch are one band.
+    expect(VALUE_BANDS.anchor[1]).toBeLessThan(VALUE_BANDS.midground[0])
     expect(VALUE_BANDS.midground[1]).toBeLessThan(VALUE_BANDS.gameplay[0])
     expect(VALUE_BANDS.gameplay[1]).toBeLessThan(VALUE_BANDS.background[0])
+  })
+
+  it('gives the anchor band a floor below anything the world had reached', () => {
+    /*
+      The band exists because nothing was ever asked to be darker than the
+      bible's 0.20 midground floor, and nothing was: a fresh capture of
+      `hub-establishing` at high measured 1.59% of the frame below 0.20 and
+      exactly nothing below 0.10. A fourth band whose ceiling sat at, say, 0.24
+      would be the midground with a new name and would change no pixel.
+    */
+    expect(VALUE_BANDS.anchor[0]).toBeLessThan(0.1)
+    expect(VALUE_BANDS.anchor[1]).toBeLessThanOrEqual(0.18)
   })
 
   it('puts every walkable surface in the gameplay band', () => {
@@ -101,5 +114,22 @@ describe('band()', () => {
     */
     expect(() => band(palette.soil, 'gameplay')).toThrow(/0\.319/)
     expect(() => band(palette.rock, 'midground')).toThrow(/gameplay|midground/)
+  })
+
+  it('refuses the anchor band outright, rather than checking it', () => {
+    /*
+      The one band no albedo can claim, and refusing it is the point rather than
+      a limitation. Round 1's verdict was that the value structure had been
+      applied to the palette table instead of to the frame; the anchor band is
+      where that gap is widest, because a surface gets there by facing away from
+      a steeply overhead key. `soilDeep` is 0.414 as a hex and renders at 0.20 to
+      0.25, and the 0.197 hex it replaced would have rendered near 0.06 - so the
+      hex predicts the rendered value neither in magnitude nor in direction.
+
+      The type signature already excludes it. This catches a caller who has cast
+      around the type, which is exactly what someone reaching for it would do.
+    */
+    // @ts-expect-error - excluded from band()'s parameter type on purpose.
+    expect(() => band('#2a1f14', 'anchor')).toThrow(/__dev\.sample/)
   })
 })
