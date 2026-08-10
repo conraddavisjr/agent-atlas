@@ -1,7 +1,6 @@
 import { useRef, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { useQuality } from '@/art/useQuality'
-import type { QualitySettings } from '@/art/quality'
 import {
   AntennaLower,
   AntennaUpper,
@@ -128,8 +127,8 @@ export function RobotModel({
               <HeadShell quality={quality} />
               <Face pose={pose} detail={quality.visorDetail} />
 
-              <EarPodNode side="L" rigRef={rigRef} quality={quality} />
-              <EarPodNode side="R" rigRef={rigRef} quality={quality} />
+              <EarPodNode side="L" rigRef={rigRef} />
+              <EarPodNode side="R" rigRef={rigRef} />
 
               <group ref={(o) => void (rigRef.current!.antennaBase = o)} position={at(REST.antennaBase)}>
                 <AntennaLower />
@@ -193,21 +192,13 @@ function Face({
   )
 }
 
-function EarPodNode({
-  side,
-  rigRef,
-  quality,
-}: {
-  side: 'L' | 'R'
-  rigRef: RefObject<RigRefs | null>
-  quality: QualitySettings
-}) {
+function EarPodNode({ side, rigRef }: { side: 'L' | 'R'; rigRef: RefObject<RigRefs | null> }) {
   return (
     <group
       ref={(o) => void (side === 'L' ? (rigRef.current!.earPodL = o) : (rigRef.current!.earPodR = o))}
       position={at(side === 'L' ? REST.earPodL : REST.earPodR)}
     >
-      <EarPod quality={quality} />
+      <EarPod />
     </group>
   )
 }

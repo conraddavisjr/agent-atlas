@@ -194,6 +194,24 @@ export type ClusterOptions = {
   maxScale?: number
   /** Keep the middle of the island clear, for paths and set pieces. */
   minRadius?: number
+  /**
+   * Closest two placements in this layer may sit, in metres. Zero, the default,
+   * runs no separation test at all and costs nothing.
+   *
+   * Clustering and separation are opposite forces and both are wanted. A patch
+   * of grass wants its blades touching, so it leaves this at zero. Anything
+   * with real volume does not: the critique's F6 is that the token crystal
+   * shards "visibly interpenetrate one another", which is what a cluster
+   * sampler always does to solid objects, because nothing in it knows how wide
+   * the thing being placed is. One number is enough to fix that, and it belongs
+   * here rather than in a bespoke loop at each call site that wants it.
+   *
+   * Note that it can only ever *reduce* the count, exactly as `exclusions`
+   * does: a patch too small to hold what was asked for comes back with fewer
+   * rather than with overlaps. Ask for a separation larger than roughly a third
+   * of `clusterRadius` and the retry budget will start binding.
+   */
+  minSeparation?: number
 }
 
 /**
@@ -219,6 +237,7 @@ export function clusteredPlacements({
   minScale = 0.7,
   maxScale = 1.3,
   minRadius = 0,
+  minSeparation = 0,
 }: ClusterOptions): Placement[] {
   const out: Placement[] = []
 
@@ -236,6 +255,38 @@ export function clusteredPlacements({
     most of the noise literature use for exactly this.
   */
   const rand = mulberry32(seed ^ 0x9e3779b9)
+
+  /*
+    The separation test, as a uniform grid keyed on the separation itself.
+
+    Written this way rather than as a scan over everything placed so far
+    because the biggest caller of this function asks for 220,000 blades. A
+    quadratic test would be forty billion comparisons at load; with cells one
+    separation wide, any placement close enough to conflict is in one of the
+    nine cells around the candidate, so the work is constant per candidate and
+    the whole thing stays linear. The map is only built when a caller actually
+    asks for separation, so the grass path allocates nothing.
+  */
+  const grid = minSeparation > 0 ? new Map<string, [number, number][]>() : null
+  const cellOf = (x: number, z: number) =>
+    `${Math.floor(x / minSeparation)},${Math.floor(z / minSeparation)}`
+  const tooClose = (x: number, z: number) => {
+    if (grid === null) return false
+    const gx = Math.floor(x / minSeparation)
+    const gz = Math.floor(z / minSeparation)
+    for (let ox = -1; ox <= 1; ox++) {
+      for (let oz = -1; oz <= 1; oz++) {
+        const bucket = grid.get(`${gx + ox},${gz + oz}`)
+        if (bucket === undefined) continue
+        for (const [px, pz] of bucket) {
+          const dx = x - px
+          const dz = z - pz
+          if (dx * dx + dz * dz < minSeparation * minSeparation) return true
+        }
+      }
+    }
+    return false
+  }
 
   const perCluster = Math.ceil(count / centres.length)
 
@@ -264,6 +315,14 @@ export function clusteredPlacements({
       const distance = Math.hypot(x, z)
       if (distance > radius || distance < minRadius) continue
       if (isBlocked(x, z, exclusions)) continue
+      if (tooClose(x, z)) continue
+
+      if (grid !== null) {
+        const key = cellOf(x, z)
+        const bucket = grid.get(key)
+        if (bucket === undefined) grid.set(key, [[x, z]])
+        else bucket.push([x, z])
+      }
 
       placed++
       out.push({

@@ -1,7 +1,13 @@
 import { useMemo, useRef } from 'react'
 import { RigidBody, CuboidCollider, CylinderCollider } from '@react-three/rapier'
 import { useFrame } from '@react-three/fiber'
-import { TorusGeometry, type BufferGeometry, type Group } from 'three'
+import {
+  BufferAttribute,
+  Color,
+  TorusGeometry,
+  type BufferGeometry,
+  type Group,
+} from 'three'
 import { band, palette } from '@/art/palette'
 import { GLOW, crystal, emissive, mattePlastic, plastic } from '@/art/materials'
 import {
@@ -9,7 +15,6 @@ import {
   kerb,
   mergeProp,
   nodeCore,
-  nodeShell,
   pad,
   paintByFacing,
   pill,
@@ -33,6 +38,17 @@ import { isSceneAccessible, isLessonComplete } from '@/state/progression'
 import { Portal } from './Portal'
 import { LessonTotems, TOTEM, totemPlinth, type TotemPlacement } from './LessonTotem'
 import { Terrain, PLATEAU_RADIUS } from './Terrain'
+import {
+  TRACE,
+  arcsWithBothEnds,
+  assertDrawable,
+  monolithArc,
+  orthoTrace,
+  pathLength,
+  spurTraceCorners,
+  traceSegments,
+  trunkTraceCorners,
+} from './hubLayout'
 
 /**
  * The hub island: a single oversized compute die, with the course running on it.
@@ -94,11 +110,53 @@ import { Terrain, PLATEAU_RADIUS } from './Terrain'
  * relative to.
  *
  * They are palette entries now, and each one states the band it claims through
- * `band()`, which throws in development if the claim is false. That is the
- * point of the helper: the assertion travels with the call site instead of
- * living in a comment that quietly stops being true the next time someone
- * nudges a hex value.
+ * `band()`, which throws in development if the claim is false.
+ *
+ * **And that helper turned out to be checking the wrong thing, which is what
+ * the section below is about.** The assertion travelling with the call site is
+ * still right; asserting it on a hex is not, because a hex says nothing about
+ * what a surface facing away from the key will render.
  */
+
+/**
+ * Band 2 needs TWO values, and which one a surface gets depends on which way it
+ * faces. This is the correction the critique's headline verdict is about.
+ *
+ * **`band()` asserts on a hex. The bible's test is a statement about the frame.
+ * The gap between those two measurements is where the value structure went.**
+ *
+ * `palette.bandFrame` at `#3c465a` has a display luma of 0.272 and passes the
+ * midground assertion cleanly. Measured on the establishing shot, the pylons
+ * built from it render **0.085 on their shaded side and 0.182 on their lit
+ * side, a mean near 0.14** - outside all three bands entirely, and a delta of
+ * 0.78 against a 0.867 sky. That is the highest local contrast anywhere in the
+ * picture, higher than the core ring at 0.17 or the portal arch at 0.15, so
+ * eight evenly spaced near-black posts were the first thing the eye found and
+ * the last thing it left.
+ *
+ * The cause is facing, and it is measurable. The key is steeply overhead, so
+ * from the same frame: an up-facing deck renders at 0.81 of its albedo's LINEAR
+ * luminance, a lit vertical face at 0.54, and a shaded vertical face at 0.11.
+ * A single albedo cannot put both a post and its cap in one band, because the
+ * two differ by a factor of five in what they receive.
+ *
+ * So the dress batch is vertex painted by facing, exactly as the deck batch is,
+ * but with the ramp running the other way: dark on top, light on the sides.
+ *
+ * - `frameTop`, `#3c465a`, luma 0.272 - the existing palette value, which is
+ *   correct for an up-facing surface and renders about 0.24.
+ * - `frameSide`, `#6e7e9e`, luma 0.490 - a value no swatch would call band 2,
+ *   which is the point. Same hue (220 degrees) and same HSL saturation as the
+ *   value above, so only the lightness moves. Predicted render from the
+ *   measured ratios: shaded side 0.16, lit side 0.37, shaft mean **0.27**, with
+ *   the delta against sky falling from 0.78 to 0.59.
+ *
+ * `frameSide` is a local constant only because `palette.ts` belongs to another
+ * hand this pass; it wants to be `palette.bandFrameSide`, and it must not carry
+ * a `band()` assertion when it gets there.
+ */
+const FRAME_SIDE = '#6e7e9e'
+
 const BAND = {
   /** Band 1. Deck and puck tops. Luma 0.735. */
   deckTop: band(palette.bandDeckTop, 'gameplay'),
@@ -106,8 +164,10 @@ const BAND = {
   deckSide: band(palette.bandDeckSide, 'gameplay'),
   /** Band 2. Kerbs and trim. Luma 0.330. */
   trim: band(palette.bandTrim, 'midground'),
-  /** Band 2. Pylons, struts, arcs. Luma 0.272. */
-  frame: band(palette.bandFrame, 'midground'),
+  /** Band 2, up-facing: pylon caps, the Core collar, the crown of every tube. */
+  frameTop: band(palette.bandFrame, 'midground'),
+  /** Band 2 as MEASURED, vertical: pylon shafts, struts, the flanks of an arc. */
+  frameSide: FRAME_SIDE,
 } as const
 
 /**
@@ -331,50 +391,71 @@ const GROVES = [
 ] as const
 
 /**
- * The canonical spur trace, written for the NE spur and rotated for the other
- * three.
+ * The traces, rebuilt as printed circuitry rather than as cable.
  *
- * The height rule it obeys is absolute: a trace segment is either at or below
- * 0.12 m above the surface beneath it, or at or above 3.00 m above it, never
- * between. Below 0.12 the capsule steps over it without noticing; above 3.00 it
- * clears the capsule's 1.40 height plus the 1.40 jump apex plus margin.
- * Anything between would visually intersect the character, which is what makes
- * a decorative object read as a bug.
+ * **What they were.** A Catmull-Rom through diagonal waypoints, swept at radius
+ * 0.14 with its centreline 0.12 clear of the deck, given `emissive()`'s default
+ * clearcoat of 1.0 at roughness 0.10. In frame that is a 0.28 m glossy tube
+ * standing 0.26 m proud of the surface, wandering, carrying a single specular
+ * streak down its whole length, with nothing beneath it and a square cut at
+ * each end. It read as a rubber hose someone had left on the floor.
  *
- * A Catmull-Rom through these rounds the two step transitions into short
- * vertical arcs, which is exactly the read wanted: a wire that climbs a step
- * rather than a line painted onto one.
+ * **What the brief actually asks for.** The reference names PCB traces as this
+ * world's digital DNA, and names the three properties that make one: straight
+ * runs, right-angle turns, via pads. Not one of the three was present.
+ *
+ * So the routes below are corner lists, not curves. `orthoTrace` mitres every
+ * right angle at 45 degrees and resamples the result densely enough that the
+ * spline through it is the polyline - see `hubLayout.ts`, where the arithmetic
+ * and its tests live. The turns are right angles in the vertical plane too, so
+ * the route reads as one straight line stepping up four times rather than as
+ * something draped over four steps.
+ *
+ * The tubes are also half-buried. A centreline 0.04 above the surface with a
+ * radius of 0.075 puts the crown 0.115 up - inside the environment spec's
+ * absolute rule that a trace is at or below 0.12 above the surface beneath it
+ * or at or above 3.00, never between - and puts the underside 0.035 inside the
+ * deck. Buried is what removes the missing contact shadow: there is no gap left
+ * to light through.
+ *
+ * And both ends of every run terminate inside something. The spurs disappear
+ * under their totem plinths at the outer end and into the junction pad at the
+ * inner one; the trunk leaves the same junction pad and dies inside the
+ * threshold pad in front of the arch. There is no cut tube anywhere in the
+ * scene now.
  */
-const SPUR_TRACE: Array<[number, number, number]> = [
-  [4.6, 0.52, -4.6],
-  [4.1, 0.52, -4.1],
-  [3.1, 0.52, -3.1],
-  [2.83, 0.92, -2.83],
-  [2.05, 0.92, -2.05],
-  [1.56, 1.32, -1.56],
-  [0.85, 1.32, -0.85],
-]
+const SPUR_TRACE = orthoTrace(spurTraceCorners())
+const TRUNK_TRACE = orthoTrace(trunkTraceCorners())
 
 /**
- * The north trunk, thicker than the spurs because it is the main path made
- * visible and the player has to tell it from them at a glance.
+ * The far monolith arc's two ends of a value ramp, and why they are not in the
+ * palette.
  *
- * Follow the thick wire and you reach the gate. That sentence is this level's
- * answer to "make the main path unmistakable", expressed in the world's own
- * vocabulary rather than with an arrow.
+ * Band 3 is 0.76 to 0.86 as measured, and these are the numbers that get there
+ * through the tone curve and the fog rather than the numbers that read as 0.76
+ * to 0.86 on a swatch. `#9db6cf` is 0.700 and `#bccfe0` is 0.801 as albedo; the
+ * near slabs come out around 0.75 and the far ones around 0.85 once fog has
+ * lifted them toward the horizon colour, which is the aerial perspective the
+ * frame had none of.
+ *
+ * They stay here rather than in `palette.ts` until they have been measured on a
+ * capture, because the exact pair depends on the grade and the fog range, and a
+ * palette entry that has to be re-tuned twice is worse than a local constant
+ * that gets promoted once.
  */
-const TRUNK_TRACE: Array<[number, number, number]> = [
-  [0, 1.32, -1],
-  [0, 1.32, -2],
-  [0, 1.72, -2.6],
-  [0, 1.72, -5.8],
-  [0, 2.12, -6.8],
-  [0, 2.12, -10],
-  [0, 2.52, -11],
-  [0, 2.52, -12],
-  [0, 2.92, -12.8],
-  [0, 2.92, -14.1],
-]
+const BACKDROP_NEAR = '#9db6cf'
+const BACKDROP_FAR = '#bccfe0'
+
+/**
+ * Thirteen slabs, at every tier.
+ *
+ * Not gated, on the same principle as the kerbs: this is the frame's depth
+ * structure rather than polish, and a lower tier is meant to be a less
+ * decorated version of the same world rather than a different one. It is also
+ * genuinely free - one unlit merged draw with no shadow pass, which is cheaper
+ * than any single pylon.
+ */
+const BACKDROP_SLABS = 13
 
 /**
  * Where each hub lesson's totem stands, keyed by lesson id.
@@ -439,6 +520,16 @@ export function HubIsland() {
       quality.pylonDetail,
     ],
   )
+
+  /**
+   * The pylons this tier draws, resolved once.
+   *
+   * Four things key off it - the masts, the caps, the marker nodes and the
+   * overhead arcs - and the low-tier defects the critique found were both a
+   * disagreement between two of them. Deriving all four from one list is what
+   * makes that class of bug impossible rather than merely fixed.
+   */
+  const visiblePylons = useMemo(() => PYLONS.slice(0, gates.pylons), [gates.pylons])
 
   /*
     Generated surface detail, off at every tier today because `surfaceMapSize`
@@ -573,7 +664,7 @@ export function HubIsland() {
 
     parts.push({ geometry: puck(collarRadius, 0.3, 0.08), position: [0, collarY - 0.15, 0] })
 
-    for (const pylon of PYLONS.slice(0, gates.pylons)) {
+    for (const pylon of visiblePylons) {
       const [x, z] = pylonPosition(pylon.degrees)
       parts.push({ geometry: pill(0.34, pylon.height - 0.68), position: [x, 0, z] })
       if (gates.pylonDetail) {
@@ -581,7 +672,16 @@ export function HubIsland() {
       }
     }
 
-    for (const arc of ARCS) {
+    /*
+      Only the arcs whose two pylons the tier actually draws.
+
+      At low the ring is six posts, and the 300-to-330 arc was still being
+      built - so `low--hub-establishing` shows a cable hanging in empty sky at
+      the upper right, square cut at both ends, with no pylon at either. An arc
+      is a thing BETWEEN two posts; with a post missing it is not a shorter arc,
+      it is nothing. Filtered rather than clamped for that reason.
+    */
+    for (const arc of arcsWithBothEnds(ARCS, visiblePylons.map((p) => p.degrees))) {
       parts.push({ geometry: catenary(arc.from, arc.to, arc.apex, gates.traceSegments) })
     }
 
@@ -595,8 +695,26 @@ export function HubIsland() {
       seen against the ground it sits on, and the shards plus the planting
       exclusion already give a grove its footprint.
     */
-    return boxProjectUV(mergeProp(parts), DECAL_KINDS.trim.metresPerTile)
-  }, [gates.pylons, gates.pylonDetail, gates.traceSegments])
+    /*
+      Painted by facing, with the ramp running the opposite way to the deck's.
+
+      A deck is light on top and a step darker down its side, because that is
+      how a solid catches an overhead key and the eye expects it. Band 2 has the
+      opposite problem: the same key that keeps a deck top in band drives a
+      vertical post two bands below it. So the frame carries the light value on
+      its FLANKS, where the key barely reaches, and the dark one on its crown,
+      which takes the key almost in full. The result is one merged draw whose
+      posts, caps, struts and arcs all land inside 0.20 to 0.38 on the frame -
+      which is the only place the band was ever meant to be measured.
+    */
+    return assertDrawable(
+      paintByFacing(boxProjectUV(mergeProp(parts), DECAL_KINDS.trim.metresPerTile), {
+        up: BAND.frameTop,
+        side: BAND.frameSide,
+      }),
+      'the dress batch',
+    )
+  }, [visiblePylons, gates.pylonDetail, gates.traceSegments])
 
   /**
    * Spur traces, the trunk and every terminating pad, in one emissive batch.
@@ -607,28 +725,104 @@ export function HubIsland() {
   const traceBatch = useMemo(() => {
     const parts: PropPart[] = []
 
+    /*
+      Segment counts are derived from each path's length rather than shared,
+      because the trunk runs 13.8 m against the spur's 6.6 and a shared count
+      gave the trunk a ring every 0.14 m - which rounds a 0.12 m mitre straight
+      back into the curve the mitre was put there to remove. Sampled by distance
+      it is 294 rings on the trunk and 140 on each spur at high, and the whole
+      batch comes to about eleven thousand triangles: less than one percent of
+      the grass field, for the detail the whole finding is about.
+    */
     for (let i = 0; i < 4; i++) {
-      const yaw = (Math.PI / 2) * i
-      parts.push({ geometry: trace(SPUR_TRACE, 0.09, gates.traceSegments), rotation: [0, yaw, 0] })
-
-      const [px, , pz] = SPUR_TRACE[SPUR_TRACE.length - 1]
-      const cos = Math.cos(yaw)
-      const sin = Math.sin(yaw)
       parts.push({
-        geometry: pad(0.45),
-        // Rotated by hand rather than by another mergeProp pass, because the pad
-        // sits ON the surface at 1.20 while the trace it terminates runs 0.12
-        // above it.
-        position: [px * cos + pz * sin, 3 * STEP, -px * sin + pz * cos],
+        geometry: trace(
+          SPUR_TRACE,
+          TRACE.spurRadius,
+          traceSegments(pathLength(SPUR_TRACE), gates.traceSegments),
+        ),
+        rotation: [0, (Math.PI / 2) * i, 0],
       })
     }
 
-    parts.push({ geometry: trace(TRUNK_TRACE, 0.14, gates.traceSegments * 2) })
+    /*
+      One via pad at the Core instead of four, which is both better grammar and
+      one fewer thing to line up. Four separate pads at radius 1.2 said "four
+      wires that happen to stop near each other"; a single pad every spur runs
+      into and the trunk leaves from says "four inputs feed one node", which is
+      the sentence the whole layout is built around.
+    */
+    parts.push({ geometry: pad(TRACE.junctionRadius), position: [0, 3 * STEP, 0] })
+
+    parts.push({
+      geometry: trace(
+        TRUNK_TRACE,
+        TRACE.trunkRadius,
+        traceSegments(pathLength(TRUNK_TRACE), gates.traceSegments),
+      ),
+    })
     // The threshold pad in front of the arch, where the trunk stops.
     parts.push({ geometry: pad(0.9), position: [0, 7 * STEP, -14.1] })
 
-    return mergeProp(parts)
+    return assertDrawable(mergeProp(parts), 'the trace batch')
   }, [gates.traceSegments])
+
+  /**
+   * Layer B2: the far monolith arc, and the frame's third depth layer.
+   *
+   * **The scene had two layers, subject and sky.** The top half of the portal
+   * shot was empty, the establishing shot's island floated in a flat wash, and
+   * across thirty metres the far lawn measured 0.05 lighter than the near lawn
+   * and slightly MORE saturated - so there was no aerial perspective at all,
+   * in either value or chroma. The environment spec has specified this layer
+   * since its first draft and it was never built.
+   *
+   * Unlit, deliberately. A `meshBasicMaterial` takes no light, so its rendered
+   * value is its authored value less the tone curve, which is the only way to
+   * put a distant object in a measured band without guessing at how much key a
+   * 60 m slab at an unknown facing receives. It is also what the reference asks
+   * for on its own terms: background layers get progressively less material
+   * detail and frequently no shading at all, and flattening them is what pushes
+   * them back.
+   *
+   * The depth inside the layer comes from two things that cost nothing. The
+   * radius is jittered between 95 and 130 m, so fog - which starts at 40 and
+   * saturates at 150 - separates the near slabs from the far ones by a real
+   * amount. And each slab carries a flat vertex colour lerped by its own
+   * distance, so the arc has a value gradient across it without a second
+   * material.
+   *
+   * One draw call, no shadows cast or received, not tier gated. It costs less
+   * than a single pylon and it is the difference between a diorama on a table
+   * and a place.
+   */
+  const backdrop = useMemo(() => {
+    const random = mulberry32(31415926)
+    const near = new Color(BACKDROP_NEAR)
+    const far = new Color(BACKDROP_FAR)
+    const tint = new Color()
+    const parts: PropPart[] = []
+
+    for (const monolith of monolithArc(BACKDROP_SLABS, random)) {
+      const geometry = slab(monolith.width, monolith.height, monolith.depth, 0.5)
+      const vertices = geometry.getAttribute('position').count
+      const colors = new Float32Array(vertices * 3)
+      tint.copy(near).lerp(far, (monolith.distance - 95) / 35)
+      for (let i = 0; i < vertices; i++) {
+        colors[i * 3] = tint.r
+        colors[i * 3 + 1] = tint.g
+        colors[i * 3 + 2] = tint.b
+      }
+      geometry.setAttribute('color', new BufferAttribute(colors, 3))
+      parts.push({
+        geometry,
+        position: [monolith.x, monolith.baseY, monolith.z],
+        rotation: [0, monolith.yaw, 0],
+      })
+    }
+
+    return assertDrawable(mergeProp(parts), 'the background monolith arc')
+  }, [])
 
   /** The crystal groves, merged. */
   const shardBatch = useMemo(() => {
@@ -669,12 +863,21 @@ export function HubIsland() {
     return mergeProp(parts)
   }, [gates.groves, quality.propDensity])
 
-  /** The perimeter marker nodes: one merged core batch and one merged shell. */
+  /**
+   * The perimeter marker nodes: one merged core batch and one merged shell.
+   *
+   * **Gated on `pylonDetail`, not on `pylonCount`, and that was the bug.** The
+   * cap disc is a detail and was dropped at low; the lamp that sits 0.40 above
+   * the cap was keyed off the count instead, which low still satisfies. So low
+   * tier rendered eight orbs hanging in the sky with a visible gap beneath each
+   * one and nothing holding them up. A marker is part of a pylon's head, and
+   * whatever drops the head has to drop everything on it.
+   */
   const markers = useMemo(() => {
-    const visible = PYLONS.slice(0, gates.pylons)
+    const mounted = gates.pylonDetail ? visiblePylons : []
     const place = (build: (radius: number) => BufferGeometry, radius: number) =>
       mergeProp(
-        visible.map((pylon) => {
+        mounted.map((pylon) => {
           const [x, z] = pylonPosition(pylon.degrees)
           return {
             geometry: build(radius),
@@ -682,8 +885,9 @@ export function HubIsland() {
           }
         }),
       )
-    return { core: place(nodeCore, 0.26), shell: place(nodeShell, 0.35) }
-  }, [gates.pylons])
+    if (mounted.length === 0) return null
+    return { core: place(nodeCore, 0.26), shell: place(nodeCore, 0.35) }
+  }, [visiblePylons, gates.pylonDetail])
 
   const totems: TotemPlacement[] = hubLessons.map((lesson) => ({
     lesson,
@@ -695,6 +899,14 @@ export function HubIsland() {
 
   return (
     <group>
+      {/*
+        The background silhouette, drawn first because it is behind everything
+        and last in the eye's order of business.
+      */}
+      <mesh geometry={backdrop} frustumCulled={false}>
+        <meshBasicMaterial vertexColors />
+      </mesh>
+
       {/* Ground, and the field growing on it. */}
       <Terrain />
       <Grass radius={PLATEAU_RADIUS} exclusions={exclusions} />
@@ -733,24 +945,50 @@ export function HubIsland() {
       </mesh>
 
       <mesh geometry={dressBatch} castShadow receiveShadow>
-        <meshPhysicalMaterial {...mattePlastic(BAND.frame)} />
+        <meshPhysicalMaterial {...mattePlastic('#ffffff', { vertexColors: true })} />
       </mesh>
 
       {/*
         The traces, whose brightness is the hub's second reading of progress, on
         a surface the player is already walking along.
 
-        The completed state stops at `GLOW.source` rather than crossing the
-        threshold, because the art bible lets nothing in the ENVIRONMENT into the
-        bloom tier. Blue means ally and gold means reward; a glowing floor is
-        neither, and letting scenery bloom is what turns bloom from feedback into
-        weather.
+        The completed state stops well short of the bloom threshold, because the
+        art bible lets nothing in the ENVIRONMENT into the bloom tier. Blue means
+        ally and gold means reward; a glowing floor is neither, and letting
+        scenery bloom is what turns bloom from feedback into weather.
       */}
       <mesh geometry={traceBatch}>
         {completedCount === 0 ? (
           <meshPhysicalMaterial {...mattePlastic(palette.lockedDeep)} />
         ) : (
-          <meshPhysicalMaterial {...emissive(palette.circuit, 0.18 + 0.12 * completedCount)} />
+          /*
+            Two overrides on the emissive preset, and both are corrections the
+            critique measured.
+
+            `clearcoat` down from 1.0 and its roughness up from 0.10. A tube
+            with a mirror clearcoat carries one unbroken specular streak down
+            its entire length, which is the single strongest "rubber hose" cue
+            in the frame and reads as wet. A trace inlaid in a board is not wet.
+
+            And `color` split from `emissive`. `emissive()` sets both to the
+            same hex, so the trace's DIFFUSE was also `palette.circuit`, whose
+            display luma is 0.770 before any emission is added at all - which is
+            why it measured 0.85 against decks at 0.65. The emissive stays cyan,
+            because blue means ally and that is the game's vocabulary; the
+            diffuse drops to the dim cyan the palette already carries for
+            exactly this job, so the surface has somewhere to shade to. The glow
+            ramp comes down with it, from 0.18 + 0.12n to 0.12 + 0.07n, which
+            tops out at 0.40 rather than 0.66 - still well clear of the bloom
+            threshold, which nothing in the environment may cross.
+          */
+          <meshPhysicalMaterial
+            {...emissive(palette.circuit, 0.12 + 0.07 * completedCount, {
+              color: palette.visorDim,
+              clearcoat: 0.15,
+              clearcoatRoughness: 0.5,
+              roughness: 0.55,
+            })}
+          />
         )}
       </mesh>
 
@@ -770,19 +1008,22 @@ export function HubIsland() {
         <meshPhysicalMaterial {...crystal(palette.token, 0.34)} />
       </mesh>
 
-      <mesh geometry={markers.core}>
-        <meshPhysicalMaterial {...emissive(palette.nodeGlow, GLOW.source)} />
-      </mesh>
-      {gates.nodeShells && (
-        <mesh geometry={markers.shell}>
-          <meshPhysicalMaterial
-            {...plastic(palette.nodeGlow)}
-            flatShading
-            transparent
-            opacity={0.2}
-            depthWrite={false}
-          />
-        </mesh>
+      {markers && (
+        <>
+          <mesh geometry={markers.core}>
+            <meshPhysicalMaterial {...emissive(palette.nodeGlow, GLOW.source)} />
+          </mesh>
+          {gates.nodeShells && (
+            <mesh geometry={markers.shell}>
+              <meshPhysicalMaterial
+                {...plastic(palette.nodeGlow)}
+                transparent
+                opacity={0.2}
+                depthWrite={false}
+              />
+            </mesh>
+          )}
+        </>
       )}
 
       <CoreNode shells={gates.nodeShells} completed={completedCount} total={hubLessons.length} />
@@ -822,10 +1063,34 @@ export function HubIsland() {
 function CoreNode({ shells, completed, total }: { shells: boolean; completed: number; total: number }) {
   const group = useRef<Group>(null)
 
+  /**
+   * One shading language, and it is the smooth one.
+   *
+   * **What was wrong.** The core is `IcosahedronGeometry` at detail 2 with
+   * smooth normals, so it read as a perfect sphere. The shell was the same
+   * primitive at detail 1 with `flatShading`, so it read as a faceted low-poly
+   * hull - and because the shell is 0.40 m larger, its facets stuck out from
+   * behind the sphere with one saturated violet face catching the key. Two
+   * shading languages twenty pixels apart on one object, which reads as an LOD
+   * that failed to swap.
+   *
+   * Smooth wins rather than faceted, because the world rule is that everything
+   * here is moulded and never takes a hard corner - crystals are the single
+   * sanctioned exception and a neural node is not one - and because this is the
+   * frame's focal point, which is the last place to spend a stylistic argument.
+   * The shell moves to detail 2 so its silhouette is round at 1.55 m rather than
+   * a visible twenty-gon, and `flatShading` comes off. The result is a pale core
+   * inside a violet glass ball, which still says "an object with an inside and
+   * an outside" and no longer says "two objects".
+   *
+   * The same swap is applied to the eight perimeter markers, so the node grammar
+   * stays constant across all three sizes - which is the property that lets the
+   * pylons work as a depth ruler at all.
+   */
   const geometries = useMemo(
     () => ({
       core: nodeCore(1.15),
-      shell: nodeShell(1.55),
+      shell: nodeCore(1.55),
       ...arcPair(completed, total),
     }),
     [completed, total],
@@ -855,7 +1120,6 @@ function CoreNode({ shells, completed, total }: { shells: boolean; completed: nu
         <mesh geometry={geometries.shell}>
           <meshPhysicalMaterial
             {...plastic(palette.node)}
-            flatShading
             transparent
             opacity={0.34}
             depthWrite={false}

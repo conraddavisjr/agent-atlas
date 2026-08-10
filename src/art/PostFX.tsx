@@ -11,7 +11,7 @@ import {
 import { ToneMappingMode } from 'postprocessing'
 import { fxOverrides } from './fx'
 import { createGradeLut } from './lut'
-import { BLOOM_THRESHOLD } from './materials'
+import { BLOOM_INTENSITY, BLOOM_RADIUS, BLOOM_THRESHOLD } from './materials'
 import { useQuality } from './useQuality'
 
 /** Read once per session, as the tier table is. See `fx.ts`. */
@@ -212,13 +212,30 @@ export function PostFX() {
         between a guessed threshold and the values actually in the frame, and
         with the threshold measured there is no mismatch left to hide. A
         tighter ramp keeps what does cross compact rather than hazy.
+
+        THE THRESHOLD WAS NEVER THE WHOLE STORY. With it measured and every
+        emissive normalised against it, `hub-totem`'s completion ring renders a
+        genuine (246,235,178) - it is over the line - and the deck two pixels
+        behind it is unchanged. There was no halo to see, because `radius` and
+        `intensity` had been dialled down from their defaults and `radius` on a
+        mipmap bloom is a blend weight rather than a kernel width. At 0.6 the
+        wide mips that make a halo were carrying 12.8% of the bloom; at 0.85 they
+        carry 52.2%. Both numbers, and the arithmetic behind the pairing with
+        `intensity`, are in materials.ts beside the threshold, because they are
+        one budget and had already drifted apart once.
+
+        `levels` is left to the tier. It is the cheapest dial in the chain -
+        each level halves both dimensions, so one more costs a quarter of the one
+        before - and with `radius` at 0.85 the coarsest level carries
+        `0.85^(levels-1)` on its own, so a tier with fewer levels still gets a
+        wide glow rather than no glow.
       */}
       <Bloom
-        intensity={FX.bloomDebug ? 6 : 0.55}
+        intensity={FX.bloomDebug ? 6 : BLOOM_INTENSITY}
         luminanceThreshold={FX.bloomThreshold ?? BLOOM_THRESHOLD}
         luminanceSmoothing={FX.bloomDebug ? 0 : 0.25}
         mipmapBlur
-        radius={0.6}
+        radius={BLOOM_RADIUS}
         levels={quality.bloomLevels}
       />
 

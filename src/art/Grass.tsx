@@ -91,12 +91,77 @@ const BLADE = {
 } as const
 
 /**
- * How dark the root of a blade is, as a fraction of its tip.
+ * Contact shading at the blade's root: how dark, how far up, and how coloured.
  *
- * Anything flatter and the field reads as a bright mat; anything darker and it
- * reads as scorched.
+ * This replaces a ramp that ran the full length of every blade from 0.32 at the
+ * root to 1.0 at the tip. That ramp was the second largest cause of the lawn
+ * rendering at 0.22-0.46 display luma against a gameplay band of 0.56-0.74:
+ * integrated over the blade's own tapering width it averaged **0.5615**, so the
+ * field's effective albedo was a little over half its authored one before a
+ * single photon was traced.
+ *
+ * The critique asks for two things that sound contradictory and are not - the
+ * field's overall value UP into the band, and *more* darkening where a blade
+ * meets the ground. Confining the ramp to the bottom third does both at once.
+ * The same buffer now averages **0.8342**, a 1.49x lift on the field's albedo,
+ * while the very root goes from 0.32 to 0.24, which is darker than it has ever
+ * been. Value is an average and contact is a gradient; spending the darkening
+ * where the eye reads it as occlusion instead of spreading it over the whole
+ * blade is the entire trick.
+ *
+ * The blade has five rows of vertices, so at `height` 0.34 the darkening lands
+ * on the bottom two and reaches full brightness by the third. On a 0.16 to 0.45
+ * m blade that is a 4 to 11 cm band at the base, which is the right physical
+ * scale for the light a neighbouring blade blocks.
+ *
+ * `neutralise` is the third number and it exists because the old root was
+ * `grassDeep` normalised to its brightest channel, which put the red channel at
+ * 0.084 while green sat at 0.32. Occlusion is light that did not arrive, not a
+ * hue; a root that kills red four times harder than green is a green filter,
+ * and it showed up in the frame as a lawn whose red channel measured 8/255
+ * against a green of 68/255. Pulling the hue 45% back toward neutral keeps the
+ * deep-green cast that gives the field depth without the channel skew: across
+ * the three changes here the blade's effective albedo gains 1.61x in luma and
+ * **2.07x in red**, which is where the frame's colour cast was coming from.
  */
-const ROOT_SHADE = 0.32
+const CONTACT = {
+  /** Value at the very root, as a fraction of the blade's own tint. */
+  shade: 0.24,
+  /** How far up the blade the darkening reaches, as a fraction of its height. */
+  height: 0.34,
+  /** How far the root's hue is pulled back toward neutral, 0 to 1. */
+  neutralise: 0.45,
+} as const
+
+/**
+ * How far a blade's shading normal is bent toward world up, 0 to 1.
+ *
+ * **This is the single biggest lever on the lawn's rendered value and the whole
+ * of what fixes it.** A blade is authored with a near-horizontal normal -
+ * `(-0.35, 0.2, 0.9)` normalised has an up component of 0.20 - and the material
+ * is `DoubleSide`, so three flips that normal on every back face. At a grazing
+ * camera angle, which is the angle a lawn is seen from almost all of the time,
+ * most of what the camera sees is the half of each blade facing away from the
+ * key. Those fragments receive *no direct light at all*: their entire
+ * illumination is the hemisphere's sky term and the environment, both of which
+ * are blue. That is measurable in the baseline frame and it is not subtle - the
+ * near lawn in `hub-grazing` reads (8.7, 68.3, 26.9), a blue-lit green, where
+ * the ground plane beside it reads (116.6, 173.3, 89.9).
+ *
+ * Bending the shading normal toward up is the standard answer and it is an art
+ * decision rather than a cheat: a lawn is read as a *surface*, so it should
+ * shade like the surface it grows out of and take the key at the same angle the
+ * ground does. Both faces of a blade then light the same way, and the field
+ * gains its shape back from the contact ramp and the silhouette rather than
+ * from half of it being unlit.
+ *
+ * At 0.65 there is still a third of the real normal left, which is what keeps
+ * the key running along the blades in the direction of the wind instead of
+ * flattening the field into a green sheet. **0.65 is an estimate, not a
+ * measurement** - it is the one number in this file that has to be bisected
+ * against a captured frame, which is why it travels as a uniform.
+ */
+const UP_BIAS = 0.65
 
 /**
  * How far the player pushes blades aside, in metres.
@@ -183,6 +248,16 @@ const grassUniforms = {
   uTime: { value: 0 },
   /** The lagged player position, in world space. */
   uPlayerPos: { value: /*@__PURE__*/ new Vector3(0, -1000, 0) },
+  /**
+   * See `UP_BIAS`.
+   *
+   * A uniform rather than a compiled-in constant so the value can be bisected
+   * against a real frame without a rebuild - it stays reachable through the
+   * material's own `uniforms` at runtime. Not exported, because this file
+   * exports a component and the fast-refresh rule is right that mixing the two
+   * costs a full reload on every edit.
+   */
+  uUpBias: { value: UP_BIAS },
 }
 
 /**
@@ -203,6 +278,19 @@ const GRASS_TOKENS = [
   '#include <beginnormal_vertex>',
   '#include <color_vertex>',
 ] as const
+
+/**
+ * The one directive the fragment side replaces.
+ *
+ * Separate from the vertex list because the two shaders are guarded
+ * independently: a missing fragment token must leave the field lit the old way
+ * rather than skipping the placement patch and stacking every blade on the
+ * origin. `normal_fragment_begin` is the right hook because it is the point at
+ * which three has already applied `faceDirection` - the `DOUBLE_SIDED` flip -
+ * so the up bias lands on the normal that actually shades the fragment rather
+ * than on one that is about to be negated on half the field.
+ */
+const GRASS_FRAGMENT_TOKENS = ['#include <common>', '#include <normal_fragment_begin>'] as const
 
 /** The depth shader has no normals and no colour, so it patches two of the four. */
 const GRASS_DEPTH_TOKENS = ['#include <common>', '#include <begin_vertex>'] as const
@@ -288,6 +376,43 @@ const GRASS_VERTEX = /* glsl */ `
 `
 
 /**
+ * The blade's shading normal, bent toward world up. See `UP_BIAS`.
+ *
+ * `viewMatrix` is declared in three's own fragment prefix - `WebGLProgram`
+ * writes `uniform mat4 viewMatrix;` into every fragment shader it builds - so
+ * world up in view space is its second column and needs no varying and no
+ * uniform of ours. Doing it here rather than in the vertex shader is the whole
+ * point: `normal_fragment_begin` has already multiplied by `faceDirection`, so
+ * a back face arrives pointing *down* and a bias applied earlier would have
+ * been flipped along with everything else, which is exactly the half of the
+ * field that is dark today.
+ *
+ * `nonPerturbedNormal` is written too, because `lights_physical_fragment`
+ * derives its `geometryRoughness` from that vector's screen-space derivative.
+ * Leaving it as the raw per-blade normal would keep inflating roughness from
+ * geometry the lighting no longer sees, which is the sort of half-applied patch
+ * that reads as "the change did nothing" in a frame.
+ */
+const GRASS_NORMAL_FRAGMENT = /* glsl */ `
+  #include <normal_fragment_begin>
+  vec3 grassUp = normalize(viewMatrix[1].xyz);
+  normal = normalize(mix(normal, grassUp, uUpBias));
+  nonPerturbedNormal = normal;
+`
+
+/**
+ * The fragment side's declarations.
+ *
+ * A `uniform` cannot be declared inside `main()`, and `normal_fragment_begin`
+ * expands inside it, so the bias has to arrive through the fragment's own
+ * `<common>` even though nothing else on this side needs patching.
+ */
+const GRASS_FRAGMENT_COMMON = /* glsl */ `
+  #include <common>
+  uniform float uUpBias;
+`
+
+/**
  * Instancing, wind and player displacement, patched into the standard shader.
  *
  * All or nothing. A partial patch is worse than no patch here: if `<common>`
@@ -311,6 +436,27 @@ function patchGrassShader(shader: WebGLProgramParametersWithUniforms) {
 
   shader.uniforms.uTime = grassUniforms.uTime
   shader.uniforms.uPlayerPos = grassUniforms.uPlayerPos
+
+  /*
+    The fragment side is guarded and applied on its own, because the two halves
+    fail differently. A vertex patch that half-applies puts 220,000 blades on
+    the origin; a fragment patch that does not apply leaves the field lit the
+    way it is lit today, which is wrong but is not a black screen. So a missing
+    fragment token skips the up bias and lets the placement through, rather than
+    taking the whole material down with it.
+  */
+  if (GRASS_FRAGMENT_TOKENS.every((token) => shader.fragmentShader.includes(token))) {
+    shader.uniforms.uUpBias = grassUniforms.uUpBias
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', GRASS_FRAGMENT_COMMON)
+      .replace('#include <normal_fragment_begin>', GRASS_NORMAL_FRAGMENT)
+  } else if (import.meta.env.DEV) {
+    console.warn(
+      `Grass: the fragment shader is missing one of ${GRASS_FRAGMENT_TOKENS.join(', ')}, ` +
+        `so the blades keep their raw near-horizontal normals. The field will render ` +
+        `roughly half a stop dark and blue at grazing angles.`,
+    )
+  }
 
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', GRASS_COMMON)
@@ -492,6 +638,24 @@ export function Grass({
     const params = new Float32Array(n * 3)
     const colors = new Float32Array(n * 3)
 
+    /*
+      `palette.grass`, deliberately unchanged.
+
+      The blade albedo at 0.668 display luma is inside the gameplay band and the
+      critique this pass answers says so explicitly: "the albedo is already
+      correct at 0.668 - the loss is in the render". Every change in this file
+      is therefore aimed at what happens to that albedo between here and the
+      screen, and none of it is aimed at the number itself. There is a further
+      1.15x sitting in the difference between this and `groundBaseColor()` at
+      0.726, which is also inside the band, and it is the next lever if the
+      measured field still falls short - but reaching for it first would be
+      correcting a render fault in the palette, which is exactly the mistake the
+      critique's verdict is about.
+
+      The comment that used to sit here claimed blades "run lighter than the
+      ground they stand in". They do not and never did: 0.668 against the
+      ground's 0.726.
+    */
     const base = new Color(palette.grass)
     const tip = new Color(palette.grassTip)
     const deep = new Color(palette.grassDeep)
@@ -514,12 +678,19 @@ export function Grass({
       params[i3 + 2] = BLADE.minWidth + p.density * BLADE.densityWidth
 
       /*
-        Blades run lighter than the ground they stand in. Matching the ground
-        made the field disappear into it: a blade is thin, and at any distance
-        it survives by contrasting with what is behind it rather than by its
-        own shape.
+        Hue variation across a patch, at an amplitude that no longer moves the
+        field's value.
+
+        The pull toward `grassDeep` at the edge of a clump was 0.35 and is now
+        0.14. `grassDeep` is 0.405 display luma against a base of 0.668, so at
+        0.35 the thin outer blades - which is most of them, because a clump has
+        more edge than middle - were being dragged a third of the way to the
+        midground band by the placement sampler. Colour variation is worth
+        having and it is worth having as *hue* rather than as value; the value
+        variation the field needs comes from the contact ramp below, where it is
+        attached to a real cause.
       */
-      scratch.copy(base).lerp(tip, p.density * 0.6).lerp(deep, (1 - p.density) * 0.35)
+      scratch.copy(base).lerp(tip, p.density * 0.45).lerp(deep, (1 - p.density) * 0.14)
       colors[i3] = scratch.r
       colors[i3 + 1] = scratch.g
       colors[i3 + 2] = scratch.b
@@ -537,36 +708,51 @@ export function Grass({
     m.geometry.setAttribute('iColor', new InstancedBufferAttribute(colors, 3))
 
     /*
-      The root-to-tip ramp, baked into the shared geometry's vertex colours and
+      The contact ramp, baked into the shared geometry's vertex colours and
       multiplied by the per-instance tint. Doing it here rather than per
       instance keeps it to one small buffer instead of one per blade.
 
-      It is a ramp in hue as well as in value, and that is what stops a dense
-      field reading as a flat green top. A greyscale ramp darkens the root and
-      leaves it the same green as the tip, so from the camera's angle - which is
-      looking down at a field of tips - the whole island averages to one colour.
-      Ramping from a deep saturated green at the root to the instance's own tint
-      at the tip means the gaps between blades are a different green from the
-      blades themselves, and the field gains depth from a buffer of fifteen
-      vertices rather than from more geometry.
+      This is the ambient occlusion at the blade-to-ground contact that
+      `hub-grazing`'s own acceptance criterion names and that the frame does not
+      currently have: measured, ground between blades 0.646 and blade 0.234,
+      with no transition of any kind between them, so the field reads as dark
+      hair glued to a pale mat. A vertical gradient in the blade's own vertex
+      colour is very nearly free - fifteen vertices, shared by every instance -
+      and it is the only place a per-blade contact shadow can be had at this
+      instance count at all.
 
-      Smoothstepped rather than linear, which holds the same average value but
-      spends more of the blade at each end: a longer dark base and a longer lit
-      cap, with the transition in the middle where the eye reads it as shading.
+      It is a ramp in hue as well as in value, and that is what stops a dense
+      field reading as a flat green top: the gaps between blades are a different
+      green from the blades themselves, so the field gains depth from a buffer
+      rather than from more geometry. The hue is only pulled `CONTACT.neutralise`
+      of the way to full strength now - see `CONTACT` for why a fully saturated
+      root was quietly acting as a red filter over the biggest surface in the
+      level.
+
+      Smoothstepped over `CONTACT.height` rather than over the whole blade,
+      which is the change that lets the field be brighter overall and darker at
+      the contact at the same time.
     */
     const root = new Color(palette.grassDeep)
-    // Normalised to its own brightest channel first, so ROOT_SHADE is a value
-    // and the hue arrives at full strength rather than being pre-dimmed by
-    // however dark grassDeep happens to be.
+    // Normalised to its own brightest channel first, so `CONTACT.shade` is a
+    // value and the hue arrives at a known strength rather than being pre-dimmed
+    // by however dark grassDeep happens to be.
     const peak = Math.max(root.r, root.g, root.b)
-    root.multiplyScalar(ROOT_SHADE / Math.max(peak, 1e-6))
+    root.multiplyScalar(1 / Math.max(peak, 1e-6))
+    // Written channel by channel rather than through a Color setter, for the
+    // same reason the buffer below is: these are already in the renderer's
+    // linear working space and every setter has an opinion about that.
+    root.r = (root.r + (1 - root.r) * CONTACT.neutralise) * CONTACT.shade
+    root.g = (root.g + (1 - root.g) * CONTACT.neutralise) * CONTACT.shade
+    root.b = (root.b + (1 - root.b) * CONTACT.neutralise) * CONTACT.shade
 
     const vertexCount = m.geometry.getAttribute('position').count
     const shade = new Float32Array(vertexCount * 3)
     const uv = m.geometry.getAttribute('uv')
     for (let i = 0; i < vertexCount; i++) {
       const t = uv.getY(i)
-      const s = t * t * (3 - 2 * t)
+      const u = Math.min(t / CONTACT.height, 1)
+      const s = u * u * (3 - 2 * u)
       // Written straight into the buffer rather than through a Color, because
       // these are already in the renderer's linear working space and every
       // Color setter has an opinion about which space its arguments are in.

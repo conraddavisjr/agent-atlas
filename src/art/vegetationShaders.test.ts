@@ -41,10 +41,22 @@ const PATCHED = [
   { file: 'Flowers.tsx', token: '#include <begin_vertex>' },
 ] as const
 
+/** The fragment side, which only `Grass.tsx` patches. See `UP_BIAS` there. */
+const PATCHED_FRAGMENT = [
+  { file: 'Grass.tsx', token: '#include <common>' },
+  { file: 'Grass.tsx', token: '#include <normal_fragment_begin>' },
+] as const
+
 describe('vegetation shader patch points', () => {
   for (const { file, token } of PATCHED) {
     it(`${file} can still find "${token}" in the standard vertex shader`, () => {
       expect(ShaderLib.standard.vertexShader).toContain(token)
+    })
+  }
+
+  for (const { file, token } of PATCHED_FRAGMENT) {
+    it(`${file} can still find "${token}" in the standard fragment shader`, () => {
+      expect(ShaderLib.standard.fragmentShader).toContain(token)
     })
   }
 
@@ -79,5 +91,40 @@ describe('vegetation shader patch points', () => {
       render while it still reported every instance as visible.
     */
     expect(ShaderChunk.color_vertex).toContain('vColor')
+  })
+
+  it('still declares normal and nonPerturbedNormal inside normal_fragment_begin', () => {
+    /*
+      `Grass.tsx` appends to this chunk and then assigns to both names, which is
+      only legal while the chunk is what declares them. If three ever moves
+      either declaration the grass fragment shader stops compiling, and a
+      material whose program failed to build draws nothing while the mesh still
+      reports every instance and `visible: true` - the exact silent failure this
+      whole file exists to catch.
+    */
+    expect(ShaderChunk.normal_fragment_begin).toContain('vec3 normal')
+    expect(ShaderChunk.normal_fragment_begin).toContain('vec3 nonPerturbedNormal')
+  })
+
+  it('still applies faceDirection to the normal under DOUBLE_SIDED', () => {
+    /*
+      The up bias has to land AFTER this flip, which is the reason it is a
+      fragment patch rather than the cheaper vertex one. The grass material is
+      `DoubleSide`, so without the flip in front of it half of every blade would
+      be biased toward world *down* and stay exactly as dark as it is today.
+    */
+    expect(ShaderChunk.normal_fragment_begin).toContain('normal *= faceDirection')
+  })
+
+  it('still gives the fragment shader a viewMatrix to read world up out of', () => {
+    /*
+      The bias needs world up in view space, and takes it from `viewMatrix[1]`.
+      That uniform comes from `WebGLProgram`'s fragment prefix rather than from
+      any chunk, so it cannot be asserted directly - but `lights_fragment_begin`
+      is unconditionally part of every lit material and reads the same uniform,
+      so three cannot drop it from the prefix without breaking itself first.
+      This is the closest available proxy and it fails for the right reason.
+    */
+    expect(ShaderChunk.lights_fragment_begin).toContain('viewMatrix')
   })
 })

@@ -39,13 +39,127 @@ export const FACE_PLATE = {
   bevel: 0.01,
 } as const
 
-/** The ear pods, whose axis lies along X so they flap forward and back rather than up and down. */
+/**
+ * The head shell, as a block rather than as four literals in the component.
+ *
+ * Here because the ear pods have to be sized against it: a pod that does not
+ * clear the shell's side reads as a dent in the cheek rather than as a pod, and
+ * a pod that clears it by too much floats free of the head. Both of those are
+ * decided by arithmetic between this block and `EAR_POD_SHAPE`, and neither is
+ * visible in a screenshot until someone stares at the face.
+ *
+ * Corner radius 0.110 at smoothness 4 is six segments per corner arc and a 1.9
+ * degree facet. Going to 5 costs geometry for nothing visible at this size;
+ * below 4 puts steps on the terminator.
+ */
+export const HEAD_SHELL = {
+  width: 0.72,
+  height: 0.54,
+  depth: 0.62,
+  radius: 0.11,
+  smoothness: 4,
+} as const
+
+/**
+ * The ear pods, whose axis lies along X so they flap forward and back rather
+ * than up and down.
+ *
+ * `halfThickness` is 0.105 and not the 0.040 this shipped with, and the change
+ * is the fix for "there is a hole in the character's face" in
+ * `.critique/round1-findings.md`. At 0.040 the pod spans x 0.340 to 0.420
+ * against a head whose flat side is at 0.360, so five sixths of it is buried
+ * and the only part on screen is a 0.06 m crescent of its own rim, seen almost
+ * exactly edge on because the axis points at the camera's left. A dark crescent
+ * hugging the inside of the cheek's silhouette is a gouge, and both critique
+ * reviewers read it as one.
+ *
+ * The design spec disagrees with itself about which number is right. Its part
+ * table gives the pod as `0.08 x 0.21 x 0.21`, which is halfThickness 0.040.
+ * Two paragraphs later the same section computes the outer extent as
+ * `0.380 + 0.105 = 0.485` and builds the width ladder on it - "head including
+ * ear pods, 0.970, deliberately the widest thing on the character" - and its
+ * silhouette test draws the pods breaking the head's boxy top corners. That
+ * second number is the one three separate claims depend on, so it is the one
+ * taken: it uses the RADIUS as the extent along the pod's own axis, which is
+ * only true when the half-thickness equals the radius.
+ *
+ * So the pod becomes a filleted can 0.21 long and 0.21 across. It buries 0.085
+ * in the shell, which is what keeps it attached with no stalk to model, and
+ * stands 0.125 proud, which is what puts it outside the head's outline where it
+ * cannot be read as a hole in it.
+ *
+ * The fillet goes 0.022 to 0.030 with a step more of resolution for the same
+ * reason: at the old size it was the whole of what the eye read, and at this one
+ * a 0.022 chamfer on a 0.21 object is barely over a pixel at playing distance.
+ */
 export const EAR_POD_SHAPE = {
   radius: 0.105,
-  halfThickness: 0.04,
-  fillet: 0.022,
-  filletSteps: 4,
+  halfThickness: 0.105,
+  fillet: 0.03,
+  filletSteps: 5,
   radialSegments: 20,
+} as const
+
+/** The mitten hand. Here only because it is what fixes the character's width. */
+export const HAND = { radius: 0.14 } as const
+
+/**
+ * The backpack block, and the vent that says the thing is powered.
+ *
+ * Here because the cape's clearance is measured against its rear face, and that
+ * clearance is a number rather than a judgement: the back socket is deliberately
+ * coincident with this block, so a cape panel placed at the socket starts inside
+ * the pack and appears to grow out of the middle of it.
+ *
+ * The vent's corner radius is 0.008 and not the spec's 0.018 for the same reason
+ * the chest panel's is 0.020 and not 0.045: the vent is 0.02 deep, so 0.018 is
+ * over four times what fits. `RoundedBoxGeometry` silently clamps to half the
+ * smallest dimension, so the specified value would not have errored, it would
+ * have quietly produced a different shape.
+ */
+export const BACKPACK_BLOCK = {
+  width: 0.36,
+  height: 0.26,
+  depth: 0.14,
+  radius: 0.055,
+  vent: {
+    width: 0.22,
+    height: 0.04,
+    depth: 0.02,
+    radius: 0.008,
+    y: 0.03,
+    z: -0.075,
+  },
+} as const
+
+/**
+ * One cape panel.
+ *
+ * A solid slab and not the `PlaneGeometry` this shipped with, which is the fix
+ * for "a flat unlit magenta quad is attached to the character in every shot" in
+ * `.critique/round1-findings.md`. A zero-thickness double-sided quad has one
+ * normal over its whole area, so it takes exactly one lighting value however it
+ * is lit and reads as unlit paint however good the rig is; it has no edge to
+ * catch a bevel highlight; and seen anywhere near edge on it collapses to a
+ * coloured line, which is what put "a purple line on the floor" into
+ * `hub-character`.
+ *
+ * 0.030 thick with a 0.010 round leaves a 0.010 flat face between two bevels, so
+ * the panel is a moulded vinyl plate with a highlight down each long edge rather
+ * than a sheet of paper. The reference's world rule is that fabric is replaced
+ * with vinyl and that visible joins between rigid panels are the point; a panel
+ * with no thickness cannot have a join.
+ *
+ * `z` places the panel's FRONT face 0.010 clear of the pack's rear face, which
+ * is the invariant the plane version held at its own zero thickness and which
+ * `robotGeometry.test.ts` now checks rather than trusts.
+ */
+export const CAPE_PANEL = {
+  width: 0.34,
+  thickness: 0.03,
+  bevel: 0.01,
+  bevelSmoothness: 2,
+  z: -0.095,
 } as const
 
 /**
@@ -188,6 +302,10 @@ export function superellipsePoints(a: number, b: number, n: number, segments: nu
 
 /**
  * A disc lying on its side, with both rims filleted, as a lathe profile.
+ *
+ * "Disc" is the shape it was written for rather than a constraint: with
+ * `halfThickness` equal to `radius` the same profile produces a filleted can,
+ * which is what the ear pods are now.
  *
  * A bare `CylinderGeometry` has two 90 degree rims and the reference brief is
  * explicit that a moulded plastic object never has a 90 degree corner anywhere.

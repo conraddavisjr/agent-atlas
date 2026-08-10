@@ -1,18 +1,19 @@
 import { useMemo } from 'react'
 import { useThree } from '@react-three/fiber'
 import { RigidBody, CylinderCollider } from '@react-three/rapier'
-import { DoubleSide, Vector2 } from 'three'
-import { ground, mattePlastic } from '@/art/materials'
-import { usePbrTextures } from '@/art/textures'
+import { palette } from '@/art/palette'
+import { mattePlastic } from '@/art/materials'
+import { paintByFacing } from '@/art/geometry'
 import {
   createGroundRoughnessTexture,
   createGroundTexture,
   GROUND_METRES_PER_TILE,
   GROUND_ROUGHNESS_BIAS,
 } from '@/art/groundTexture'
+import { PLATEAU_RADIUS, islandSkirtLathe } from './hubLayout'
 
 /**
- * The island's ground.
+ * The island's ground, and the skirt that gives it thickness.
  *
  * **The walkable surface is deliberately flat, in both senses.**
  *
@@ -26,54 +27,72 @@ import {
  * highlight. The grass, the flowers and the scatter supply the relief, as
  * actual geometry.
  *
- * The rim below keeps its photographic material. It is a cliff face rather than
- * a lawn, it is never walked on, and it is the one place where real rock detail
- * is doing the right job.
+ * ## The island used to have a rim and no thickness, and those are compatible
  *
- * **What changed in the art pass is value, and it is the single most
- * consequential change in this file.** The acceptance test that outranks every
- * other is that a frame desaturated to greyscale must still read as where you
- * can stand, and this island failed it on its own rim: `palette.soil` at
- * `#b98a5e` has a Rec.709 luma of 0.568, which sits inside the 0.56 to 0.74
- * gameplay band, the same band as the lawn on top of it. So the island had a
- * full metre of rim geometry and no visible thickness at all, because the cliff
- * and the field it holds up were the same value. The rim and the underside move
- * down into the 0.20 to 0.38 midground band, which is what gives the island an
- * edge.
+ * The previous version drew three separate meshes below the lawn - a rim
+ * cylinder, a soil band and a root cone - each tapering INWARD from the plateau
+ * radius, each with a photographic dirt material, each casting and receiving
+ * shadows. Six draw calls with their shadow passes, and not one pixel of any of
+ * them ever reached a frame.
+ *
+ * The reason is the camera. Every vantage in this game looks DOWN at the
+ * island. The far rim is behind the lawn, the near rim is behind the camera,
+ * and the lateral rims face away, so a skirt that narrows as it descends is
+ * occluded by the disc above it from every angle the game is ever seen from.
+ * The critique measured the consequence exactly: the lawn ends against sky as a
+ * hard curve with nothing below it.
+ *
+ * So the fix is not more geometry. It is one lathe with an **overhanging lip**:
+ * the first stop below the lawn steps outward as well as down, so a band of
+ * soil projects past the plateau's silhouette all the way round and the island
+ * gains an edge from every elevated angle. The lip is up-facing, so it takes
+ * the steeply overhead key almost in full and lands in the midground band as a
+ * value measured on the frame rather than as an albedo that happens to be in
+ * range. Below it the cliff turns down and in and goes darker, which is correct
+ * and free: the lip overhangs it, so the cliff is largely hidden behind its own
+ * lip in exactly the shots where a near-black cliff against a pale sky would
+ * have been the frame's strongest edge.
+ *
+ * One mesh, one material, no shadow interaction. Three draw calls saved, and it
+ * is the first version of this that is visible at all.
+ *
+ * ## And the photograph is gone with it
+ *
+ * The dirt was defended on the grounds that the rim is background and a cliff
+ * is the one place a photograph does the right job. That argument was made
+ * about geometry nobody could see. Now that the lip is the island's silhouette
+ * in every wide shot, a photographic normal map on it would put a
+ * high-frequency real-world surface along a 100-pixel edge against a world with
+ * no surface detail anywhere else - which is the same defect the portal arch
+ * was just corrected for, on a much longer edge.
  */
 
-export const PLATEAU_RADIUS = 16
+export { PLATEAU_RADIUS }
 
 /** Enough that the rim reads as a circle rather than a polygon at this scale. */
 const RIM_SEGMENTS = 128
 
 /**
- * Band 2, the midground. The island's cliff face and the cone under it.
+ * Band 2, the midground, split by facing rather than by mesh.
  *
- * Local constants rather than palette entries, only because the palette is
- * being re-valued by another hand in this same pass and two edits to the same
- * twelve lines is a conflict rather than a decision. These are the values from
- * the environment spec's table and they belong in `palette.ts` as `soil` and
- * `soilDeep`: `#6b4d31` at luma 0.319 and `#452f1c` at 0.197, replacing
- * `#b98a5e` at 0.568 and `#7d5738` at 0.364.
- */
-const RIM_COLOR = '#6b4d31'
-const UNDERSIDE_COLOR = '#452f1c'
-
-/**
- * The rim's photograph, demoted.
+ * The lip takes `palette.soil` unchanged: display luma 0.319 on a surface whose
+ * normal Y is about 0.90, which takes the steeply overhead key almost in full
+ * and should render near 0.29, mid-band.
  *
- * It is background now rather than a feature. The brief's layering rule is that
- * background layers get progressively less material detail, and a cliff face
- * competing with the lawn for detail is what makes an island read as a model of
- * an island. Weaker normals, weaker occlusion, and a much smaller share of the
- * environment map, so the rim recedes instead of catching the sky.
+ * The cliff cannot take `palette.soilDeep`, and the reason is the whole lesson
+ * of the critique rather than an oversight. The band test is a statement about
+ * the frame. A surface facing down and outward receives a small fraction of
+ * that same key, so an albedo already sitting at the band's value renders far
+ * below it: `soilDeep` at 0.197 would come out near 0.06, which is darker than
+ * the pylons the critique named as the worst edge in the picture. 0.414 is the
+ * albedo that puts the rendered cliff at roughly 0.20 to 0.25.
+ *
+ * It is a local constant only because `palette.ts` belongs to the integrator
+ * this pass. It is the proposed new value for `palette.soilDeep`, which has no
+ * other call site in the project, and it must not carry a `band()` assertion
+ * when it lands there.
  */
-const RIM_DEMOTION = {
-  normalScale: new Vector2(1.1, 1.1),
-  aoMapIntensity: 1.2,
-  envMapIntensity: 0.55,
-}
+const CLIFF = '#8a6440'
 
 export function Terrain() {
   const gl = useThree((s) => s.gl)
@@ -110,7 +129,26 @@ export function Terrain() {
     return texture
   }, [gl])
 
-  const dirt = usePbrTextures('dirt', [10, 10])
+  /**
+   * The skirt: lip, cliff and root, as one lathe.
+   *
+   * The two values ride on a vertex colour rather than on two materials, the
+   * same trick `deckBatch` uses, so the whole underside of the world is one
+   * draw. The changeover threshold is high - 0.62 - because the lip's normal Y
+   * is 0.90 and the vertical face immediately below it is 0.32, and the line
+   * between them is meant to be the hard bottom edge of the lip rather than a
+   * gradient across it.
+   */
+  const skirt = useMemo(
+    () =>
+      paintByFacing(islandSkirtLathe(PLATEAU_RADIUS, RIM_SEGMENTS), {
+        up: palette.soil,
+        side: CLIFF,
+        threshold: 0.62,
+        softness: 0.12,
+      }),
+    [],
+  )
 
   return (
     <>
@@ -135,29 +173,17 @@ export function Terrain() {
         <CylinderCollider args={[0.5, PLATEAU_RADIUS]} position={[0, -0.5, 0]} />
       </RigidBody>
 
-      {/* The rim's vertical face, which is what gives the island thickness from
-          a low angle. Dirt rather than grass, so the plateau reads as a lid,
-          and two full bands darker than the lawn so the lid reads as a lid in a
-          desaturated frame as well as a coloured one. */}
-      <mesh position={[0, -0.5, 0]} receiveShadow castShadow>
-        <cylinderGeometry
-          args={[PLATEAU_RADIUS, PLATEAU_RADIUS * 0.97, 1, RIM_SEGMENTS, 1, true]}
-        />
-        <meshPhysicalMaterial {...ground(RIM_COLOR, dirt, RIM_DEMOTION)} side={DoubleSide} />
-      </mesh>
-
-      {/* Soil band and root cone beneath. Never walked on, so these are free to
-          be as irregular as they like. */}
-      <mesh position={[0, -1.8, 0]} castShadow receiveShadow>
-        <cylinderGeometry args={[PLATEAU_RADIUS * 0.97, 9, 2, RIM_SEGMENTS]} />
-        <meshPhysicalMaterial {...ground(RIM_COLOR, dirt, RIM_DEMOTION)} />
-      </mesh>
-      <mesh position={[0, -4.2, 0]} castShadow>
-        <coneGeometry args={[9, 4, 48]} />
-        {/* The deepest thing on the island and the furthest from the key, so it
-            takes the least environment of anything in the scene. */}
+      {/*
+        No shadow interaction at all, and it is a saving rather than a
+        compromise. The skirt hangs below a solid disc under a steeply overhead
+        key, so everything it would ever cast onto is already in the plateau's
+        own shadow and there is nothing under the island to receive anything.
+        Casting would put a second full pass over a 128-segment lathe to change
+        no pixel.
+      */}
+      <mesh geometry={skirt}>
         <meshPhysicalMaterial
-          {...mattePlastic(UNDERSIDE_COLOR, { envMapIntensity: 0.35 })}
+          {...mattePlastic('#ffffff', { vertexColors: true, envMapIntensity: 0.4 })}
         />
       </mesh>
     </>

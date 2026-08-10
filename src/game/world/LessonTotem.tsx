@@ -14,7 +14,7 @@ import {
 } from 'three'
 import { palette } from '@/art/palette'
 import { GLOW, crystal, emissive, mattePlastic, plastic } from '@/art/materials'
-import { mergeProp, nodeCore, nodeShell, puck } from '@/art/geometry'
+import { mergeProp, nodeCore, puck } from '@/art/geometry'
 import { useProximity } from '../interaction/useProximity'
 import type { Lesson } from '@/state/types'
 
@@ -219,7 +219,10 @@ export function LessonTotems({
   const geometries = useMemo(
     () => ({
       node: nodeCore(TOTEM.nodeRadius),
-      shell: nodeShell(TOTEM.shellRadius),
+      // `nodeCore` rather than `nodeShell`: same primitive, one subdivision
+      // higher, so the shell's silhouette is round instead of a visible
+      // twenty-gon and its shading matches the core it surrounds.
+      shell: nodeCore(TOTEM.shellRadius),
       /* A torus is entirely fillet, so this one shape needs no help from the kit. */
       ring: new TorusGeometry(TOTEM.ringRadius, 0.06, 8, 32),
     }),
@@ -346,11 +349,17 @@ export function LessonTotems({
         The shell, which is the same colour whatever the state and therefore one
         batch. It is what stops a node reading as a ball: an inner part and an
         outer part is the detail that makes these read as manufactured.
+
+        Smooth rather than flat shaded, matching the Core's hero node and the
+        eight perimeter markers. A faceted hull around a smooth sphere is two
+        shading languages on one object, which is what the critique found on the
+        Core node and called an unswapped LOD; the grammar only holds if every
+        node really is the same object at a different size, and that has to
+        include how it is shaded.
       */}
       <instancedMesh ref={shells} args={[geometries.shell, undefined, MAX_TOTEMS]}>
         <meshPhysicalMaterial
           {...plastic(palette.node)}
-          flatShading
           transparent
           opacity={0.3}
           depthWrite={false}

@@ -56,6 +56,110 @@ type MeshBasicMaterialProps = ThreeElements['meshBasicMaterial']
 export const BLOOM_THRESHOLD = 1.45
 
 /**
+ * How wide the glow is, and the dial that was doing the opposite of its name.
+ *
+ * `radius` on a mipmap bloom is NOT a kernel size. `MipmapBlurPass` downsamples
+ * `levels` times and then walks back up, and each upsampling step is
+ *
+ *     gl_FragColor = mix(supportBuffer, tentBlur(inputBuffer), radius)
+ *
+ * where `supportBuffer` is that level's own downsample and `inputBuffer` is
+ * everything coarser. So `radius` is the WEIGHT handed to the coarser mips at
+ * every rung of the ladder, and the final texture is a normalised blend whose
+ * per-level weights are `(1 - radius) * radius^k`, with `radius^(levels-1)` left
+ * over on the coarsest. It always sums to one, so raising it does not brighten
+ * the bloom - it moves the bloom's energy outward.
+ *
+ * That matters because the wide mips are the entire visible halo. At the 0.6
+ * this shipped with, mips 0 and 1 - the ones within a few pixels of the source -
+ * took 64% of the weight and mips 4 through 7 took 12.8%. Multiply by an
+ * intensity of 0.55 and the halo was carrying 0.071 of the source: an emissive
+ * correctly pushed past a correctly measured threshold, rendered as a
+ * two-pixel-wide bright edge with nothing around it. Which is paint.
+ *
+ * At 0.85, postprocessing's own default, mips 4 through 7 take 52.2%.
+ *
+ *   radius  intensity   near field (mips 0-1)   far field (mips 4-7)
+ *   0.60    0.55        0.352                   0.071
+ *   0.85    0.85        0.236                   0.444
+ *
+ * The pairing is the point and it is why the intensity moves at the same time.
+ * The far field goes up 6.2x, which is the fix for "nothing glows". The near
+ * field goes DOWN by a third, which is the opposite of what raising a bloom
+ * intensity normally does and is what stops this making `hub-backlit`'s clipped
+ * dome specular spill any harder than it already does. The two failures pull in
+ * opposite directions and this is the pair of numbers that serves both.
+ *
+ * 0.85 rather than higher because at 1.0 the mix discards `supportBuffer`
+ * entirely at every rung and the sharp core of the glow disappears with it.
+ */
+export const BLOOM_RADIUS = 0.85
+
+/** See `BLOOM_RADIUS`. Chosen with it; neither is meaningful alone. */
+export const BLOOM_INTENSITY = 0.85
+
+/**
+ * The per-mip weights `MipmapBlurPass` produces, as a pure function.
+ *
+ * Written out here rather than trusted because the whole finding above depends
+ * on `radius` being a blend weight rather than a kernel width, and that is the
+ * kind of claim this project has been wrong about before. `materials.test.ts`
+ * asserts the distribution sums to one and that the far field clears the
+ * fraction below.
+ */
+export function bloomMipWeights(radius: number, levels: number): number[] {
+  const weights: number[] = []
+  for (let k = 0; k < levels - 1; k++) weights.push((1 - radius) * Math.pow(radius, k))
+  weights.push(Math.pow(radius, levels - 1))
+  return weights
+}
+
+/**
+ * The share of the bloom that lands in mips 4 and coarser, times the intensity.
+ *
+ * This is the number that decides whether an emissive reads as a light or as a
+ * bright surface, because mips 0 to 3 all fall off inside about sixteen pixels
+ * and are indistinguishable from the object's own edge. Below about 0.25 there
+ * is no halo; the shipped rig was at 0.071.
+ */
+export function bloomFarFieldWeight(
+  radius: number = BLOOM_RADIUS,
+  intensity: number = BLOOM_INTENSITY,
+  levels = 8,
+): number {
+  return bloomMipWeights(radius, levels).slice(4).reduce((a, b) => a + b, 0) * intensity
+}
+
+/**
+ * The two-lobe rule, from the art bible's section 5.
+ *
+ * Moulded plastic is a slightly diffuse body under a smooth surface skin and the
+ * eye reads that as two separate specular lobes. GGX lobe width goes as
+ * roughness squared, so what has to separate is `baseRoughness^2 /
+ * clearcoatRoughness^2`, and below 8 the two resolve as one slightly odd
+ * highlight rather than as two.
+ */
+export const TWO_LOBE_MIN_RATIO = 8
+
+/**
+ * The bloom-safety rule, also from section 5.
+ *
+ * At `clearcoat: 1` the coat's Fresnel term owns the surface completely at
+ * grazing angles. That erases the body lobe at exactly the silhouette where form
+ * is read, and it drives raw HDR toward the environment's peak radiance along
+ * every edge in frame - which, with bloom running before tone mapping, is the
+ * likeliest place for unwanted bloom to appear and is precisely where
+ * `hub-backlit` found a white dome clipped to (255,252,243).
+ */
+export const MAX_CLEARCOAT = 0.85
+
+/** `baseRoughness^2 / clearcoatRoughness^2`, the quantity the two-lobe rule bounds. */
+export function lobeRatio(baseRoughness: number, clearcoatRoughness: number): number {
+  if (clearcoatRoughness <= 0) return Infinity
+  return (baseRoughness * baseRoughness) / (clearcoatRoughness * clearcoatRoughness)
+}
+
+/**
  * Below this linear luminance, an emissive colour must not be normalised.
  *
  * See `emissive()` for what that means and why. The number is the art bible's,
@@ -214,26 +318,62 @@ type PbrMaps = {
  * the cost is a little memory rather than a shader recompile per mesh.
  */
 
-/** Glossy moulded plastic. The default for almost everything in the world. */
+/**
+ * Glossy moulded plastic. The default for almost everything in the world.
+ *
+ * Rebuilt to the two rules in the art bible's section 5, both of which this
+ * preset was breaking and which the bible names it for.
+ *
+ * `0.35 / 0.25` is a lobe ratio of 1.96 where 8 is needed, so the body lobe and
+ * the coat lobe sat almost on top of each other and resolved as one broad
+ * specular wash. That is the "one specular wash and no second lobe" the critique
+ * measured on the hero, and it is why every manufactured surface reads as the
+ * same material regardless of what colour it is. `0.45 / 0.15` is a ratio of
+ * 9.0: a soft, wide body highlight with a tight bright coat highlight sitting
+ * inside it, which is what moulded ABS actually looks like.
+ *
+ * The base roughness rises rather than the coat roughness falling further,
+ * because 0.15 is where the lighting budget's own headroom arithmetic already
+ * assumed this preset was - "GGX D peaks near 629 at clearcoatRoughness 0.15" is
+ * written into `Lighting.tsx` and was computed against a value this file did not
+ * have. Now it does.
+ *
+ * And `clearcoat: 1` goes to 0.85, the bible's ceiling. A coat at 1.0 owns the
+ * surface completely at grazing angles, which both erases the body lobe at the
+ * silhouette and pushes raw HDR toward the environment's peak radiance along
+ * every edge. That is one of the two mechanisms behind the clipped, spilling
+ * dome highlight in `hub-backlit`; the other is the highlight strip's stale
+ * intensity, fixed in `Lighting.tsx`.
+ */
 export function plastic(color: string, overrides: MeshPhysicalMaterialProps = {}): MeshPhysicalMaterialProps {
   return {
     color,
-    roughness: 0.35,
+    roughness: 0.45,
     metalness: 0,
-    clearcoat: 1,
-    clearcoatRoughness: 0.25,
+    clearcoat: MAX_CLEARCOAT,
+    // 0.45^2 / 0.15^2 = 9.0, past the ratio of 8.
+    clearcoatRoughness: 0.15,
     ...overrides,
   }
 }
 
-/** Softer, chalkier plastic for large surfaces that would otherwise be too shiny. */
+/**
+ * Softer, chalkier plastic for large surfaces that would otherwise be too shiny.
+ *
+ * Same rule, same fix: `0.75 / 0.60` is a ratio of 1.56. The coat comes down to
+ * 0.26 for a ratio of 8.3. The clearcoat weight is unchanged at 0.4, which is
+ * what keeps this reading as matte - a chalky body with a faint crisp skin is a
+ * different material from a chalky body with a faint chalky skin, and only the
+ * first one is moulded.
+ */
 export function mattePlastic(color: string, overrides: MeshPhysicalMaterialProps = {}): MeshPhysicalMaterialProps {
   return {
     color,
     roughness: 0.75,
     metalness: 0,
     clearcoat: 0.4,
-    clearcoatRoughness: 0.6,
+    // 0.75^2 / 0.26^2 = 8.3.
+    clearcoatRoughness: 0.26,
     ...overrides,
   }
 }
@@ -290,7 +430,8 @@ export function emissive(
     emissiveIntensity: emissiveIntensityFor(color, glow),
     roughness: 0.3,
     metalness: 0,
-    clearcoat: 1,
+    // 0.85 rather than 1, per the bible's ceiling. The ratio was already 9.0.
+    clearcoat: MAX_CLEARCOAT,
     clearcoatRoughness: 0.1,
     ...overrides,
   }
@@ -324,7 +465,7 @@ export function emissiveRaw(
     emissiveIntensity: intensity,
     roughness: 0.3,
     metalness: 0,
-    clearcoat: 1,
+    clearcoat: MAX_CLEARCOAT,
     clearcoatRoughness: 0.1,
     ...overrides,
   }
@@ -407,7 +548,10 @@ export function gel(color: string, overrides: MeshPhysicalMaterialProps = {}): M
     color,
     roughness: 0.1,
     metalness: 0,
-    clearcoat: 1,
+    // The bible's ceiling applies here too, even though this preset is on its
+    // way out: a rule with a carve-out for a transmissive surface at a grazing
+    // angle has a carve-out for the exact case it exists to prevent.
+    clearcoat: MAX_CLEARCOAT,
     clearcoatRoughness: 0.1,
     transmission: 0.6,
     thickness: 0.5,

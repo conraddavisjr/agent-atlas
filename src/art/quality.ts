@@ -315,13 +315,27 @@ export type QualitySettings = {
 
 export const QUALITY: Record<QualityTier, QualitySettings> = {
   low: {
-    // Enough to read as ground cover close to the player without carpeting the
-    // island. Paired with the smaller radius, this is a ring around the robot
-    // rather than a field.
+    /*
+      Fifteen thousand blades over the WHOLE island rather than a dense ring
+      around the robot, and the change is a tier-parity fix rather than a
+      tuning preference.
+
+      The radius was 9 against an island of 16, which does not make low a
+      cheaper version of the same lawn - it makes it a different level. A
+      critique of the three tiers measured the lawn at 0.614 display luma on
+      low against 0.329 on high, because outside 9 m there is no grass at all
+      and what the camera sees is the bare ground mat. Both reviewers read it as
+      the art changing between tiers, which the art bible's section 7 forbids:
+      low loses grading effects and resolution, not content.
+
+      Blade count is deliberately unchanged, so the triangle cost is identical
+      and only the spacing differs. Low becomes a thin lawn instead of a bald
+      island with a rug on it.
+    */
     grassBlades: 15_000,
     flowers: 900,
     grassCastShadow: false,
-    grassRadius: 9,
+    grassRadius: 16,
     shadowMapSize: 1024,
     softShadows: false,
     ambientOcclusion: false,
@@ -351,6 +365,18 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
 
     // Materials and geometry.
     surfaceMapSize: 0,
+    /*
+      The sheen ladder, finally applied. `02-materials.md` specifies hero
+      false / true / true and world false / false / true, and all three tiers
+      shipped false for both - so `shell()`'s entire sheen block, the warm
+      grazing-angle lobe that is the hero's SECOND specular highlight, has never
+      rendered on any tier. A critique found the shell showing one broad wash
+      and no second lobe; this is half of why.
+
+      Low genuinely stays off. Sheen is a Charlie distribution plus two
+      IBLSheenBRDF calls plus energy compensation, and this is the tier that has
+      to get cheaper rather than more expensive.
+    */
     sheenHero: false,
     sheenWorld: false,
     anisotropy: false,
@@ -404,7 +430,9 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
 
     // Materials and geometry.
     surfaceMapSize: 0,
-    sheenHero: false,
+    // Hero only. The world's sheen showpiece is the ground cover, and 70,000
+    // blades of Charlie distribution is not a medium-tier cost.
+    sheenHero: true,
     sheenWorld: false,
     anisotropy: false,
     transmission: true,
@@ -457,8 +485,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
 
     // Materials and geometry.
     surfaceMapSize: 0,
-    sheenHero: false,
-    sheenWorld: false,
+    sheenHero: true,
+    sheenWorld: true,
     anisotropy: false,
     transmission: true,
     bevelSmoothness: 4,

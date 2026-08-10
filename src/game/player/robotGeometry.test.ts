@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { latheProfile } from '@/art/geometry'
 import {
+  BACKPACK_BLOCK,
+  CAPE_PANEL,
   EAR_POD_SHAPE,
   FACE_PLATE,
+  HAND,
+  HEAD_SHELL,
   roundedDiscProfile,
   superellipsePoints,
   sdRoundBox,
@@ -10,6 +14,8 @@ import {
   TORSO,
   VISOR,
 } from './robotGeometry'
+import { CAPE } from './animTuning'
+import { REST, REST_ROTATION } from './robotPose'
 
 describe('superellipsePoints', () => {
   it('is an exact ellipse at n = 2', () => {
@@ -333,5 +339,143 @@ describe('the visor SDF', () => {
   it('puts the slot low on the plate, which is the infantile placement', () => {
     // 57% down from the top of a plate spanning +-0.5.
     expect(0.5 - VISOR.y).toBeCloseTo(0.57, 9)
+  })
+})
+
+/*
+  The three blocks below cover `.critique/round1-findings.md` F4 and F12.
+
+  Both of those defects are pure arithmetic between two parts, and both of them
+  rendered a clean frame with a healthy triangle count while being wrong: an ear
+  pod buried in the head still draws its rim, and a cape panel growing out of the
+  middle of the backpack still draws a panel. Neither is visible in a counter and
+  neither errors, so the relationships get asserted here instead.
+*/
+
+describe('the ear pods stand proud of the head', () => {
+  const socketX = Math.abs(REST.earPodL.x)
+  const headSide = HEAD_SHELL.width / 2
+  const outer = socketX + EAR_POD_SHAPE.halfThickness
+
+  it('reaches the outer extent the width ladder is built on', () => {
+    // docs/design/05-character-vfx.md: "Ear pod outer extent is 0.380 + 0.105 =
+    // 0.485, so the head's total width including pods is 0.97 m. That is
+    // deliberately the widest thing on the character."
+    expect(outer).toBeCloseTo(0.485, 12)
+    expect(outer * 2).toBeCloseTo(0.97, 12)
+  })
+
+  /*
+    The regression this file exists to prevent. At the half-thickness this
+    shipped with, `outer` was 0.420 against a head side of 0.360, so the pod
+    stood 0.06 proud, was seen nearly end on, and read as a crescent-shaped hole
+    in the cheek rather than as a pod. Anything under about 0.10 puts it back
+    there.
+  */
+  it('protrudes far enough to read as a pod rather than as a hole in the cheek', () => {
+    expect(outer - headSide).toBeGreaterThan(0.1)
+  })
+
+  it('stays buried in the shell, so it cannot float free of the head', () => {
+    const inner = socketX - EAR_POD_SHAPE.halfThickness
+    expect(inner).toBeLessThan(headSide)
+    expect(headSide - inner).toBeGreaterThan(0.05)
+  })
+
+  /*
+    A RoundedBox is only flat away from its corner rounds. A pod straddling one
+    would leave a crescent gap between its own rim and the shell, which is the
+    same artefact by a different route.
+  */
+  it('lands entirely on the flat part of the shell side', () => {
+    expect(Math.abs(REST.earPodL.y) + EAR_POD_SHAPE.radius).toBeLessThanOrEqual(
+      HEAD_SHELL.height / 2 - HEAD_SHELL.radius,
+    )
+    expect(Math.abs(REST.earPodL.z) + EAR_POD_SHAPE.radius).toBeLessThanOrEqual(
+      HEAD_SHELL.depth / 2 - HEAD_SHELL.radius,
+    )
+  })
+
+  it('is mirrored, which is half of what the critique said it was missing', () => {
+    expect(REST.earPodL.x).toBeCloseTo(-REST.earPodR.x, 12)
+    expect(REST.earPodL.y).toBe(REST.earPodR.y)
+    expect(REST.earPodL.z).toBe(REST.earPodR.z)
+  })
+
+  /*
+    Builds the pod exactly as `robotParts.tsx` does and checks it is a solid of
+    the right size. A generator that returns an empty buffer is this codebase's
+    signature failure: the mesh vanishes, the frame looks clean and the counters
+    stay healthy.
+  */
+  it('lathes into a non-empty solid of the right extent', () => {
+    const g = latheProfile({
+      points: roundedDiscProfile(
+        EAR_POD_SHAPE.radius,
+        EAR_POD_SHAPE.halfThickness,
+        EAR_POD_SHAPE.fillet,
+        EAR_POD_SHAPE.filletSteps,
+      ),
+      radialSegments: EAR_POD_SHAPE.radialSegments,
+    })
+    g.rotateZ(Math.PI / 2)
+    g.computeBoundingBox()
+    const pos = g.getAttribute('position')
+    expect(pos.count).toBeGreaterThan(100)
+    for (let i = 0; i < pos.count * 3; i++) expect(Number.isFinite(pos.array[i])).toBe(true)
+
+    const box = g.boundingBox!
+    expect(box.max.x).toBeCloseTo(EAR_POD_SHAPE.halfThickness, 6)
+    expect(box.max.y).toBeCloseTo(EAR_POD_SHAPE.radius, 6)
+    expect(box.max.z).toBeCloseTo(EAR_POD_SHAPE.radius, 6)
+  })
+})
+
+/*
+  Three vantages were re-sited around the character's measured bounds, so a part
+  that widens the extreme x extent invalidates them silently: `__dev.framing()`
+  would report a different `heightFraction` and nothing would say why. The pods
+  moved outward, and this is the check that they did not become the widest thing
+  on the model while doing it.
+*/
+describe('the widest point of the character', () => {
+  const handX =
+    Math.abs(REST.shoulderL.x) +
+    Math.abs(REST.handSocketL.y) * Math.sin(Math.abs(REST_ROTATION.shoulderL!.z)) +
+    HAND.radius
+
+  it('is still the mittens and not the ear pods', () => {
+    const podX = Math.abs(REST.earPodL.x) + EAR_POD_SHAPE.halfThickness
+    expect(handX).toBeGreaterThan(podX)
+  })
+})
+
+describe('the cape panel', () => {
+  it('is a solid slab and not the zero-thickness quad the critique found', () => {
+    expect(CAPE_PANEL.thickness).toBeGreaterThan(0.02)
+  })
+
+  /*
+    `RoundedBoxGeometry` clamps its radius to half the smallest dimension
+    without complaining, so an over-large bevel does not error, it quietly
+    produces a pill. The same trap already cost this file the chest panel's
+    radius and the backpack vent's.
+  */
+  it('bevels within what RoundedBoxGeometry will actually honour', () => {
+    const smallest = Math.min(CAPE_PANEL.width, CAPE_PANEL.thickness, CAPE.segmentLength)
+    expect(CAPE_PANEL.bevel).toBeLessThanOrEqual(smallest / 2)
+    // And leaves a flat face between the two bevels rather than being all bevel.
+    expect(CAPE_PANEL.thickness - 2 * CAPE_PANEL.bevel).toBeGreaterThan(0)
+  })
+
+  it('hangs off a socket coincident with the pack, which is why clearance matters', () => {
+    expect(REST.capeRoot).toEqual(REST.backpack)
+  })
+
+  it('clears the rear face of the pack by 0.010 on its front face', () => {
+    const packRear = -BACKPACK_BLOCK.depth / 2
+    const panelFront = CAPE_PANEL.z + CAPE_PANEL.thickness / 2
+    expect(panelFront).toBeLessThan(packRear)
+    expect(packRear - panelFront).toBeCloseTo(0.01, 12)
   })
 })

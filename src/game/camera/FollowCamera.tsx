@@ -116,6 +116,22 @@ export function FollowCamera({
       The camera comes off the frame state rather than the one captured at
       render, because changing the field of view is a property assignment and
       the hooks lint rule rightly objects to mutating a render-scope binding.
+
+      **The yaw is published before the return, and leaving it out was expensive.**
+      The write at the bottom of this function is the only one there was, so a
+      pinned camera left `cameraFrame.yaw` frozen at whatever it last held -
+      zero, for a capture session that never moved the camera by hand. Every
+      consumer read that stale value for the whole of every screenshot.
+
+      The rim light is the one that mattered. It aims itself at
+      `cameraFrame.yaw` by design, because that is exactly the azimuth it needs
+      and it saves the lighting rig doing any camera maths. At `hub-backlit`,
+      whose entire purpose is to judge the rim and which is deliberately sited
+      on the key's own bearing, the rim should have been at 60.9 degrees and was
+      instead at 158.9: ninety-eight degrees off, a side light rather than a
+      backlight. Two independent reviewers then examined those screenshots and
+      both concluded the game had no rim light. It does; no shot ever contained
+      it. `camYaw` in the dev telemetry was reading zero for the same reason.
     */
     const override = cameraFrame.override
     if (override) {
@@ -126,6 +142,15 @@ export function FollowCamera({
         cam.fov = override.fov
         cam.updateProjectionMatrix()
       }
+      /*
+        Azimuth of the direction the camera is now looking, in the same
+        convention `stepCameraYaw` uses: measured from +Z toward +X, which is
+        `atan2(-forward.x, -forward.z)` for a camera whose local forward is -Z.
+      */
+      cameraFrame.yaw = Math.atan2(
+        override.position[0] - override.lookAt[0],
+        override.position[2] - override.lookAt[2],
+      )
       // Left false so releasing the pin does not immediately whip the camera
       // round to wherever the robot happens to be pointing.
       initialised.current = false

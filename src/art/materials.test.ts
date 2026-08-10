@@ -1,13 +1,35 @@
 import { describe, it, expect } from 'vitest'
 import {
+  BLOOM_INTENSITY,
+  BLOOM_RADIUS,
   BLOOM_THRESHOLD,
   GLOW,
   LOW_LUMA_FLOOR,
+  MAX_CLEARCOAT,
+  TWO_LOBE_MIN_RATIO,
+  bloomFarFieldWeight,
+  bloomMipWeights,
+  chrome,
+  crystal,
+  emissive,
   emissiveIntensityFor,
+  emissiveRaw,
+  flock,
+  gel,
+  ground,
   linearLuma,
   linearise,
+  lobeRatio,
   luma709,
+  mattePlastic,
+  metal,
+  plastic,
+  rubber,
+  shell,
   srgbToLinear,
+  stone,
+  vinyl,
+  visorPlate,
 } from './materials'
 import { palette } from './palette'
 
@@ -211,5 +233,173 @@ describe('GLOW tiers', () => {
     // Tier C exists so a surface does not go dead in shadow. If it ever creeps
     // up toward the threshold it has stopped being a floor and become a light.
     expect(GLOW.hold * BLOOM_THRESHOLD).toBeLessThan(0.25)
+  })
+})
+
+/*
+  The bloom budget's other two numbers.
+
+  The threshold above decides WHAT glows. These decide whether the thing that
+  glows has a halo, and they are tested here for the same reason the threshold
+  is: the failure is invisible in a still frame. A correctly normalised emissive
+  with the wide mips turned down renders as a bright two-pixel edge, which looks
+  exactly like a correctly normalised emissive that simply is not very bright.
+*/
+describe('bloomMipWeights', () => {
+  it('is a normalised blend, not a sum', () => {
+    // The upsampling step is mix(support, blur(coarser), radius) at every rung,
+    // so the level weights are a partition of one. Raising the radius moves the
+    // bloom outward; it does not brighten it. Getting this backwards is the
+    // whole reason the dial was set to 0.6.
+    for (const radius of [0, 0.25, 0.6, 0.85, 1]) {
+      for (const levels of [4, 6, 8]) {
+        const weights = bloomMipWeights(radius, levels)
+        expect(weights).toHaveLength(levels)
+        expect(weights.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 12)
+      }
+    }
+  })
+
+  it('reproduces the shipped and previous distributions exactly', () => {
+    expect(bloomMipWeights(0.6, 8).map((w) => Number(w.toFixed(4)))).toEqual([
+      0.4, 0.24, 0.144, 0.0864, 0.0518, 0.0311, 0.0187, 0.028,
+    ])
+    expect(bloomMipWeights(0.85, 8).map((w) => Number(w.toFixed(4)))).toEqual([
+      0.15, 0.1275, 0.1084, 0.0921, 0.0783, 0.0666, 0.0566, 0.3206,
+    ])
+  })
+
+  it('hands everything to the sharpest mip at radius zero and the coarsest at one', () => {
+    expect(bloomMipWeights(0, 8)[0]).toBe(1)
+    expect(bloomMipWeights(1, 8)[7]).toBe(1)
+  })
+})
+
+describe('the shipped bloom dials', () => {
+  it('puts enough of the glow in the wide mips to be a halo at all', () => {
+    /*
+      The acceptance number for "nothing glows". Mips 0 to 3 all fall off inside
+      about sixteen pixels and are indistinguishable from the object's own edge,
+      so the halo is entirely mips 4 and coarser. The shipped rig had 0.071 there
+      and produced a two-pixel transition with no halo on an emissive that was
+      genuinely over the threshold.
+    */
+    expect(bloomFarFieldWeight(0.6, 0.55)).toBeCloseTo(0.0713, 4)
+    expect(bloomFarFieldWeight()).toBeGreaterThan(0.25)
+    expect(bloomFarFieldWeight()).toBeCloseTo(0.4437, 4)
+  })
+
+  it('does not add near-field bloom while doing it', () => {
+    /*
+      The constraint that stops this fix breaking the other one. `hub-backlit`
+      already has a clipped white specular spilling into the sky, so the pair of
+      numbers has to raise the far field WITHOUT raising what lands within a few
+      pixels of a bright source. Because the radius redistributes rather than
+      scales, it does: the near field falls by a third even as the intensity
+      rises.
+    */
+    const near = (r: number, i: number) =>
+      bloomMipWeights(r, 8).slice(0, 2).reduce((a, b) => a + b, 0) * i
+    expect(near(0.6, 0.55)).toBeCloseTo(0.352, 3)
+    expect(near(BLOOM_RADIUS, BLOOM_INTENSITY)).toBeCloseTo(0.2359, 4)
+    expect(near(BLOOM_RADIUS, BLOOM_INTENSITY)).toBeLessThan(near(0.6, 0.55))
+  })
+
+  it('keeps a sharp core, which radius 1 would discard', () => {
+    // At 1.0 the mix drops supportBuffer entirely at every rung and the glow
+    // loses its centre.
+    expect(BLOOM_RADIUS).toBeLessThan(1)
+    expect(bloomMipWeights(BLOOM_RADIUS, 8)[0]).toBeGreaterThan(0.1)
+  })
+})
+
+/*
+  The two rules the art bible's section 5 puts on every material preset.
+
+  Both are pure arithmetic on numbers that are otherwise only visible as a
+  slightly-wrong highlight, which is to say invisible. `plastic()` shipped at a
+  lobe ratio of 1.96 and a clearcoat of 1.0 for the whole project, and the
+  clearcoat is one of the two mechanisms behind the clipped dome specular in
+  `hub-backlit`.
+*/
+describe('the two-lobe and clearcoat rules, across every preset', () => {
+  const maps = {
+    map: null,
+    normalMap: null,
+    roughnessMap: null,
+    aoMap: null,
+  } as unknown as Parameters<typeof stone>[1]
+
+  const presets = {
+    plastic: plastic('#ffffff'),
+    mattePlastic: mattePlastic('#ffffff'),
+    rubber: rubber('#ffffff'),
+    metal: metal('#ffffff'),
+    emissive: emissive(palette.visor),
+    emissiveRaw: emissiveRaw(palette.visor, 2),
+    stone: stone('#ffffff', maps),
+    ground: ground('#ffffff', maps),
+    gel: gel('#ffffff'),
+    shell: shell('#ffffff'),
+    vinyl: vinyl('#ffffff'),
+    flock: flock('#ffffff'),
+    chrome: chrome(),
+    crystal: crystal('#ffffff'),
+    visorPlate: visorPlate(),
+  }
+
+  /*
+    Named exemptions, with the reason, rather than a rule that quietly does not
+    apply everywhere. Anything not on this list has to pass.
+  */
+  const exemptFromTwoLobe: Record<string, string> = {
+    // The base lobe is not meant to be visible: a solid transparent body, not a
+    // coated opaque one. The bible grants this one by name.
+    crystal: 'one lobe by design',
+    // Clearcoat 0.15 - the second lobe carries 15% of the surface and the rule
+    // is about two lobes that both read. Owned by the environment stream, and
+    // the photographic albedo it wraps is being replaced anyway.
+    stone: 'clearcoat 0.15, and the preset is being retired',
+    // Being replaced wholesale by crystal(); changing it now would move thirteen
+    // objects that are about to move again.
+    gel: 'superseded by crystal()',
+  }
+
+  for (const [name, preset] of Object.entries(presets)) {
+    const base = preset.roughness as number
+    const coat = preset.clearcoat as number | undefined
+    const coatRoughness = (preset.clearcoatRoughness as number | undefined) ?? 0
+
+    it(`${name}: clearcoat never exceeds ${MAX_CLEARCOAT}`, () => {
+      expect(coat ?? 0).toBeLessThanOrEqual(MAX_CLEARCOAT)
+    })
+
+    it(`${name}: resolves as two lobes${exemptFromTwoLobe[name] ? ' (exempt)' : ''}`, () => {
+      if (!coat) return // no coat, no second lobe to separate
+      if (exemptFromTwoLobe[name]) {
+        expect(exemptFromTwoLobe[name].length).toBeGreaterThan(0)
+        return
+      }
+      expect(lobeRatio(base, coatRoughness)).toBeGreaterThanOrEqual(TWO_LOBE_MIN_RATIO)
+    })
+  }
+
+  it('pins the two presets the critique named', () => {
+    // plastic() was 0.35 / 0.25, a ratio of 1.96 where 8 is needed, and is what
+    // the character's dome and most of the world is made of.
+    expect(lobeRatio(0.35, 0.25)).toBeCloseTo(1.96, 2)
+    expect(lobeRatio(plastic('#fff').roughness as number, plastic('#fff').clearcoatRoughness as number))
+      .toBeCloseTo(9.0, 2)
+    expect(lobeRatio(0.75, 0.6)).toBeCloseTo(1.5625, 4)
+    expect(
+      lobeRatio(
+        mattePlastic('#fff').roughness as number,
+        mattePlastic('#fff').clearcoatRoughness as number,
+      ),
+    ).toBeGreaterThanOrEqual(TWO_LOBE_MIN_RATIO)
+  })
+
+  it('treats a mirror coat as infinitely separated rather than dividing by zero', () => {
+    expect(lobeRatio(0.4, 0)).toBe(Infinity)
   })
 })

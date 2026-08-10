@@ -35,6 +35,29 @@ const SIZE = 1024
 const METRES_PER_TILE = 8
 
 /**
+ * How far the ground's base colour is lifted toward white from `palette.grass`.
+ *
+ * At 0.12 the ground lands near a display luma of 0.71, which is the top of the
+ * gameplay band and below the 0.735 the deck tops sit at, so lawn, deck and sky
+ * read as three separate values in a desaturated frame.
+ */
+export const GROUND_BASE_LIFT = 0.12
+
+/**
+ * The ground's base colour, as a `Color` in the renderer's linear space.
+ *
+ * Exported so the number can be asserted rather than only described. It sits at
+ * `#95cb73`, display luma 0.7261, which is inside the gameplay band and just
+ * under the 0.735 the deck tops carry - and it is the value `Grass.tsx` names
+ * as the one remaining lever on the lawn's albedo if the render work in that
+ * file does not close the gap on its own. It has been wrong before, at 0.34,
+ * which put the lawn brighter than the deck standing on it, so it gets a test.
+ */
+export function groundBaseColor(): Color {
+  return new Color(palette.grass).lerp(new Color('#ffffff'), GROUND_BASE_LIFT)
+}
+
+/**
  * Resolution of the generated stone, and a deliberate step down from the 1024
  * the materials spec asks for.
  *
@@ -146,11 +169,10 @@ export function createGroundTexture(): CanvasTexture {
     not tell the raised platform from the lawn, which is the exact failure the
     acceptance test exists to catch.
 
-    At 0.12 the ground lands near 0.71. Still comfortably above the field
-    average of roughly 0.52, and now below the 0.735 the deck tops are moving
-    to, so the three surfaces read as three values in the right order.
+    At 0.12 the ground lands at 0.7261, below the 0.735 the deck tops sit at,
+    so the three surfaces read as three values in the right order.
   */
-  const base = new Color(palette.grass).lerp(new Color('#ffffff'), 0.12)
+  const base = groundBaseColor()
   ctx.fillStyle = `#${base.getHexString()}`
   ctx.fillRect(0, 0, SIZE, SIZE)
 

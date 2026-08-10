@@ -316,3 +316,86 @@ describe('the clear-middle thinning regression', () => {
     expect(naive.length).toBeLessThan(fixed.length * 0.8)
   })
 })
+
+describe('minimum separation', () => {
+  /*
+    The critique's F6: the token crystal shards "visibly interpenetrate one
+    another". Every cluster sampler does that to solid objects unless it is told
+    how wide they are, because the sampler places points and a point has no
+    width. One option fixes it for every layer that wants it.
+  */
+  const spec = {
+    count: 120,
+    radius: 15,
+    clusters: 6,
+    clusterRadius: 2.4,
+    seed: 41,
+  } as const
+
+  const closestPair = (placements: { x: number; z: number }[]) => {
+    let best = Infinity
+    for (let i = 0; i < placements.length; i++) {
+      for (let j = i + 1; j < placements.length; j++) {
+        const dx = placements[i].x - placements[j].x
+        const dz = placements[i].z - placements[j].z
+        best = Math.min(best, Math.hypot(dx, dz))
+      }
+    }
+    return best
+  }
+
+  it('never places two items closer than the separation asked for', () => {
+    const placements = clusteredPlacements({ ...spec, minSeparation: 0.5 })
+    expect(placements.length).toBeGreaterThan(20)
+    expect(closestPair(placements)).toBeGreaterThanOrEqual(0.5)
+  })
+
+  it('is doing real work, because the same request without it overlaps', () => {
+    // Without this the test above would pass on a layer that never happened to
+    // collide, which is the way a separation test quietly stops separating.
+    const placements = clusteredPlacements(spec)
+    expect(closestPair(placements)).toBeLessThan(0.5)
+  })
+
+  it('leaves the layout untouched when no separation is asked for', () => {
+    // Zero must be free as well as inert: the grass field runs 220,000
+    // placements through this function and allocates no grid at all.
+    const without = clusteredPlacements(spec)
+    const zero = clusteredPlacements({ ...spec, minSeparation: 0 })
+    expect(zero).toEqual(without)
+  })
+
+  it('thins the count rather than compromising, when a patch cannot hold them', () => {
+    /*
+      Same guarantee `exclusions` already gives. A caller that asks for more
+      than fits gets fewer, never a pair on top of each other, and the bounded
+      retry budget means it terminates rather than hunting for a gap that is not
+      there.
+    */
+    const crowded = clusteredPlacements({ ...spec, minSeparation: 2.0 })
+    expect(crowded.length).toBeLessThan(spec.count)
+    expect(crowded.length).toBeGreaterThan(0)
+    expect(closestPair(crowded)).toBeGreaterThanOrEqual(2.0)
+  })
+
+  it('separates across patch boundaries, not only inside one patch', () => {
+    /*
+      The grid is keyed on world position rather than reset per cluster, so two
+      overlapping patches cannot each place an item in the same spot. Two
+      centres deliberately close enough to overlap.
+    */
+    const placements = clusteredPlacements({
+      count: 200,
+      radius: 15,
+      centres: [
+        [0, 0],
+        [1.5, 0],
+      ],
+      clusterRadius: 2.4,
+      seed: 7,
+      minSeparation: 0.4,
+    })
+    expect(placements.length).toBeGreaterThan(30)
+    expect(closestPair(placements)).toBeGreaterThanOrEqual(0.4)
+  })
+})

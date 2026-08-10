@@ -509,6 +509,19 @@ export function Flowers({
         // Tighter than the daisies, so the domes pool at the hearts of the
         // patches instead of ringing them.
         clusterRadius: 2.4,
+        /*
+          The domes are the one ground-cover family with real volume - a solid
+          cap up to 0.12 m across rather than a strip or a ring of petals - so
+          they are the one that reads as interpenetrating when two land on top
+          of each other. 0.16 m is a little over the widest cap, which is the
+          smallest number that guarantees two never merge into a single lump
+          while still letting them pool tightly enough to read as a drift.
+
+          This is the same defect the critique's F6 raises against the token
+          crystal shards, which are placed by their own inline loop in
+          `HubIsland.tsx` and get no separation test at all.
+        */
+        minSeparation: 0.16,
         exclusions,
         seed: 41,
         minScale: 0.8,

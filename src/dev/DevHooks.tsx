@@ -77,6 +77,16 @@ export function DevHooks() {
     let referenceTriangles = 0
 
     /**
+     * Device pixel ratio the capture path holds the drawing buffer at, or null
+     * to leave it alone.
+     *
+     * Re-asserted every driven frame for the same reason `frameloop` is: `dpr`
+     * is a prop of `<Canvas>`, so `setDpr` survives exactly until the next
+     * render of that component and then reverts to `[1, quality.maxDpr]`.
+     */
+    let pinnedDpr: number | null = null
+
+    /**
      * Take the loop over, and keep it taken over.
      *
      * Called at the top of every driven frame rather than once, because both of
@@ -135,6 +145,7 @@ export function DevHooks() {
         driven = state.clock.elapsedTime
       }
       if (state.frameloop !== 'never') state.setFrameloop('never')
+      if (pinnedDpr !== null && state.viewport.dpr !== pinnedDpr) state.setDpr(pinnedDpr)
       /*
         Pin the clock to the previous driven timestamp, whether we just
         re-asserted or not. `setFrameloop` zeroes `elapsedTime` and starts the
@@ -563,6 +574,9 @@ export function DevHooks() {
       }
       const pixels = data.length / 4
       return {
+        /** The drawing buffer this was measured on. A capture set that changes
+         *  size mid-run is not a comparable set; see `pinDpr`. */
+        buffer: [canvas.width, canvas.height] as [number, number],
         min: +min.toFixed(1),
         max: +max.toFixed(1),
         mean: +(sum / pixels).toFixed(1),
@@ -653,6 +667,29 @@ export function DevHooks() {
      *
      * Coordinates are in canvas pixels from the top left.
      */
+    /**
+     * Pin the drawing buffer to one device pixel per CSS pixel.
+     *
+     * A vantage pins the camera, the player, the clock and the field of view so
+     * that "two captures differ only by what actually changed in the rendering".
+     * Resolution was not on that list and needed to be. `devicePixelRatio`
+     * changed from 1 to 2 partway through a critique session - the window moved
+     * to a different display - and the buffer went from 1660x934 to 2905x1634
+     * without anything reporting it. Two consequences, both silent: every
+     * `sample()` box, which is in canvas pixels, landed somewhere else entirely
+     * and returned confident measurements of the wrong surface; and the before
+     * and after frames were no longer comparable, since bloom and antialiasing
+     * both resolve differently at different resolutions.
+     *
+     * Pinned to 1 rather than to the tier's `maxDpr`, so the numbers are the
+     * same on any machine anyone runs this from.
+     */
+    const pinDpr = (value: number | null = 1) => {
+      pinnedDpr = value
+      if (value !== null) store.getState().setDpr(value)
+      return { buffer: [gl.domElement.width, gl.domElement.height], devicePixelRatio }
+    }
+
     const sample = (x: number, y: number, w = 24, h = 24) => {
       const probe = document.createElement('canvas')
       probe.width = w
@@ -715,6 +752,7 @@ export function DevHooks() {
       frameStats,
       framing,
       sample,
+      pinDpr,
       /**
        * Where the camera actually ended up, as opposed to where a vantage asked
        * it to go. The two are not the same question, and only one of them can

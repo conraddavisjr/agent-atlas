@@ -2,7 +2,6 @@ import { RoundedBox } from '@react-three/drei'
 import { palette } from '@/art/palette'
 import {
   GLOW,
-  chrome,
   emissive,
   mattePlastic,
   metal,
@@ -15,8 +14,12 @@ import {
 import { beveledExtrude, latheProfile } from '@/art/geometry'
 import type { QualitySettings } from '@/art/quality'
 import {
+  BACKPACK_BLOCK,
+  CAPE_PANEL,
   EAR_POD_SHAPE,
   FACE_PLATE,
+  HAND,
+  HEAD_SHELL,
   roundedDiscProfile,
   superellipsePoints,
   taperedSuperellipsoid,
@@ -69,10 +72,14 @@ const FACE_PLATE_GEOMETRY = beveledExtrude({
 })
 
 /**
- * An ear pod: a disc on its side with both rims filleted.
+ * An ear pod: a filleted can with both rims rounded.
  *
  * Lathed about Y and then turned so its axis lies along X, which is what makes
  * the pods flap forward and back rather than up and down when the head moves.
+ *
+ * The `rotateZ` is load-bearing and invisible if it goes: without it the pods
+ * are two cans lying on their sides through the top of the head, which still
+ * renders, still animates and still reports every triangle present.
  */
 const EAR_POD_GEOMETRY = latheProfile({
   points: roundedDiscProfile(
@@ -112,13 +119,19 @@ type Q = { quality: QualitySettings }
  * which is the same relationship the wrong way round, and it is why the
  * character read as a small robot instead of as a toy.
  *
- * Corner radius 0.110 at smoothness 4, which is six segments per corner arc and
- * a 1.9 degree facet. Going to 5 costs geometry for nothing visible at this
- * size; going below 4 puts steps on the terminator.
+ * Sized from `HEAD_SHELL` rather than from literals, because the ear pods are
+ * placed against its flat side and the arithmetic that keeps them proud of it
+ * has to be reachable from a test.
  */
 export function HeadShell({ quality }: Q) {
   return (
-    <RoundedBox args={[0.72, 0.54, 0.62]} radius={0.11} smoothness={4} castShadow receiveShadow>
+    <RoundedBox
+      args={[HEAD_SHELL.width, HEAD_SHELL.height, HEAD_SHELL.depth]}
+      radius={HEAD_SHELL.radius}
+      smoothness={HEAD_SHELL.smoothness}
+      castShadow
+      receiveShadow
+    >
       <meshPhysicalMaterial {...heroShell(quality)} />
     </RoundedBox>
   )
@@ -144,24 +157,25 @@ export function FacePlate() {
 }
 
 /**
- * An ear pod. The one chrome element on the character.
+ * An ear pod, at its own node's origin. The pair are the widest thing on the
+ * head and the only feature that breaks its boxy corners.
  *
- * The reference calls chrome the reflection showpiece, and there is nothing
- * chrome in this world yet. One small part on the character is the cheapest
- * possible demonstration that the environment map exists, and it is also the
- * fastest way to notice when the Lightformer rig breaks, because chrome shows
- * the rig literally rather than as a hint. Kept to the pods rather than the
- * head, because a chrome dome is the one silhouette this character is not
- * allowed to have.
+ * One material and not two. This used to pick `chrome()` on a tier with
+ * `sheenHero` and `plastic(palette.accentDeep)` otherwise, and describe itself
+ * as "the one chrome element on the character". No tier sets `sheenHero`: it is
+ * `false` on low, medium AND high in `quality.ts`, so the chrome branch had
+ * never once rendered and the claim in the comment was never true of any build.
+ * Deleted rather than repaired, because the reference brief puts its reflection
+ * showpiece on the dome plate and `Helmet` below now carries it.
+ *
+ * `accentDeep` rather than `accent`, per the spec's part table, so the pods
+ * group with the backpack as hardware and leave the head reading as mostly
+ * shell.
  */
-export function EarPod({ quality }: Q) {
+export function EarPod() {
   return (
     <mesh geometry={EAR_POD_GEOMETRY} castShadow receiveShadow>
-      {quality.sheenHero ? (
-        <meshPhysicalMaterial {...chrome({ envMapIntensity: 1.2 })} />
-      ) : (
-        <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
-      )}
+      <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
     </mesh>
   )
 }
@@ -247,9 +261,10 @@ export function Diaper({ quality }: Q) {
 
 /** The backpack, and the vent that says the thing is powered. */
 export function Backpack() {
+  const { width, height, depth, radius, vent } = BACKPACK_BLOCK
   return (
     <>
-      <RoundedBox args={[0.36, 0.26, 0.14]} radius={0.055} smoothness={3} castShadow receiveShadow>
+      <RoundedBox args={[width, height, depth]} radius={radius} smoothness={3} castShadow receiveShadow>
         <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
       </RoundedBox>
       {/*
@@ -257,11 +272,13 @@ export function Backpack() {
         it. The vent should read as powered without haloing: it faces away from
         the camera almost always, and a bloom there would rim-light the back of
         the head from behind.
-
-        Radius 0.008 rather than the table's 0.018, for the same reason as the
-        chest panel: the vent is 0.02 deep, so 0.018 is four times what fits.
       */}
-      <RoundedBox args={[0.22, 0.04, 0.02]} radius={0.008} smoothness={2} position={[0, 0.03, -0.075]}>
+      <RoundedBox
+        args={[vent.width, vent.height, vent.depth]}
+        radius={vent.radius}
+        smoothness={2}
+        position={[0, vent.y, vent.z]}
+      >
         <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
       </RoundedBox>
     </>
@@ -292,7 +309,7 @@ export function UpperArm() {
 export function Hand({ quality }: Q) {
   return (
     <mesh castShadow receiveShadow>
-      <sphereGeometry args={[0.14, 16, 12]} />
+      <sphereGeometry args={[HAND.radius, 16, 12]} />
       <meshPhysicalMaterial {...heroShell(quality)} />
     </mesh>
   )
@@ -328,13 +345,70 @@ export function Foot() {
 // Cosmetics
 // ---------------------------------------------------------------------------
 
-/** Earned after the first zone. Scaled to sit on the wider head. */
+/**
+ * Earned after the first zone, and scaled to sit on the wider head.
+ *
+ * ## The dome is metal, and that is the fix for a measured defect
+ *
+ * `.critique/round1-findings.md` F13: the same dome, the same rig and the same
+ * tier measure (0.895, 0.813, 0.510) pale gold in `hub-totem` and
+ * (0.522, 0.581, 0.244) olive in `hub-backlit`, a hue swing of about 22 degrees
+ * with GREEN above RED in the second. It is the largest single mass on the
+ * character's silhouette and it changes hue family between shots.
+ *
+ * The critique guesses at a green ambient picking up the lawn. It is not the
+ * lawn, and the arithmetic is worth writing down because the obvious fix would
+ * have chased the wrong light. `palette.unlocked` is #ffd45e, which is
+ * (1.000, 0.658, 0.112) in linear light - a green channel two thirds of red and
+ * a blue channel of almost nothing. `Lighting.tsx` runs
+ * `hemisphereLight('#7fbdf0', '#6fbe3d')`, and the SKY half of that, which is
+ * what an upward-facing dome sees most of, is (0.212, 0.509, 0.872) linear:
+ * green is 2.4 times red. Multiply the two and the diffuse term is
+ * (0.212, 0.335, 0.098) - green above red, olive, exactly what was measured.
+ * The grass ground colour and the green bounce card contribute; the cyan sky
+ * does most of it. Any illuminant on the cool side of the wheel does this to an
+ * albedo whose blue channel is 0.112, so the dome was always going to be
+ * unstable while it was painted.
+ *
+ * `metalness: 1` deletes the diffuse term outright, which is what makes the
+ * instability go rather than shrink. three's `hemisphereLight` contributes to
+ * irradiance and irradiance only, so a full metal receives nothing from it at
+ * all. What is left is the environment and the analytic speculars, tinted by
+ * gold's own F0 - and because the tint multiplies rather than mixes, a green
+ * reflection comes back through a 0.112 blue and a 0.658 green as gold.
+ *
+ * That also pays the debt in the reference brief's section 8, which asks for
+ * "a reflective chrome dome plate, used explicitly to show off environment
+ * reflections", and which nothing in this build has ever delivered:
+ * `EarPod` claimed the job behind a `sheenHero` flag that is false on every
+ * tier. Gold-tinted rather than white chrome, because the character is not
+ * allowed the white-and-blue livery and because the dome should stay the same
+ * colour it has always been in the shots where it already read correctly.
+ *
+ * Roughness 0.22 against a clearcoat at 0.02 is the bible's two-lobe rule met
+ * exactly (`ccRoughness <= baseRoughness - 0.20`), and the clearcoat is the
+ * second, uncoloured lobe - a metal with one lobe reads as a prop, and the
+ * white highlight from a lacquer coat is what says "moulded" rather than
+ * "machined". A tighter base lobe than the 0.35 the paint had should also
+ * shrink the clipped patch F15 measured at (255, 252, 243) on this surface,
+ * though it will make what is left hotter; that is a thing to measure, not a
+ * thing to claim.
+ */
 export function Helmet() {
   return (
     <group>
       <mesh castShadow>
         <sphereGeometry args={[0.42, 20, 14, 0, Math.PI * 2, 0, Math.PI / 2]} />
-        <meshPhysicalMaterial {...plastic(palette.unlocked)} side={2} />
+        <meshPhysicalMaterial
+          {...metal(palette.unlocked, {
+            metalness: 1,
+            roughness: 0.22,
+            clearcoat: 0.35,
+            clearcoatRoughness: 0.02,
+            envMapIntensity: 1.5,
+          })}
+          side={2}
+        />
       </mesh>
       <mesh position={[0, 0.15, 0]} castShadow>
         <boxGeometry args={[0.07, 0.2, 0.44]} />
@@ -345,40 +419,63 @@ export function Helmet() {
 }
 
 /**
- * One cape segment.
+ * One cape panel.
  *
- * `vinyl` rather than `mattePlastic`, because the reference's deepest world
- * rule is that when the team needed hair or cloth they replaced it with vinyl.
- * A chalky ABS plane is the exact thing that rule exists to prevent. Four rigid
- * segments with visible joins is the correct read for this world; a smooth
- * drape is not.
+ * ## Why this is a solid slab and not a quad
+ *
+ * `.critique/round1-findings.md` F4, which both reviewers led with and which
+ * one of them called the single thing that makes the set read as a hobby
+ * project. Four `PlaneGeometry` panels at `side: 2`, in `palette.token`
+ * magenta. A zero-thickness quad has one normal over its whole area, so it
+ * takes one lighting value however good the rig is and reads as unlit paint; it
+ * has no edge for a bevel highlight, which is the reference's stated tell for
+ * moulded plastic; and near edge on it collapses to a coloured line, which is
+ * literally what `hub-character` caught it doing on the floor beside his foot.
+ *
+ * `CAPE_PANEL` makes each one a 0.030 slab with a 0.010 round, so there is a
+ * flat face between two bevels and a lit edge down each side. That serves the
+ * world rule rather than fighting it: fabric is replaced with vinyl here, and
+ * four RIGID panels with visible joins is the correct read. A panel with no
+ * thickness cannot have a join to see.
+ *
+ * ## Why it is no longer magenta
+ *
+ * `palette.token` is a semantic hue and it is spoken for. `Flowers.tsx` uses it
+ * for the pink dome flowers and `HubIsland.tsx` for the token crystal, so it
+ * means "collectible" everywhere else in the world, and the bible's rule is
+ * that semantic hues are globally constant. It is also the same hue as the pink
+ * cones F6 is about, at a display luma of about 0.57, which puts the hero's
+ * cape squarely inside the walkable gameplay band.
+ *
+ * `accentDeep` is the character's own family: the pods, the backpack the cape
+ * literally hangs off, and this. It keeps the highest chroma in frame on the
+ * hero, which is the reference's separation mechanism, without borrowing a
+ * meaning from the props.
  */
 export function CapeSegment({ length }: { length: number }) {
   return (
     /*
-      Pushed 0.08 behind its node.
+      Pushed back behind its node by `CAPE_PANEL.z`.
 
       The back socket is deliberately coincident with the backpack block, which
-      is what the cape hangs off, but the backpack is 0.14 deep and spans
-      z -0.22 to -0.36 around that point. A quad at the socket itself therefore
-      starts INSIDE the pack and appears to grow out of the middle of it. This
-      clears its back face by 0.01 without moving the socket, whose position is
-      a contract the cosmetic system depends on.
+      is what the cape hangs off, but the pack is 0.14 deep and spans z -0.22 to
+      -0.36 around that point. A panel at the socket itself therefore starts
+      INSIDE the pack and appears to grow out of the middle of it. The offset
+      clears its rear face by 0.010 without moving the socket, whose position is
+      a contract the cosmetic system depends on - and now that the panel has a
+      thickness the clearance is measured from its FRONT face, which is the part
+      `robotGeometry.test.ts` exists to keep true.
     */
-    <mesh position={[0, -length / 2, -0.08]} castShadow>
-      <planeGeometry args={[0.34, length]} />
-      <meshPhysicalMaterial {...vinyl(palette.token)} side={2} />
-    </mesh>
-  )
-}
-
-/** The single static quad the cheapest tier gets instead of a simulated chain. */
-export function StaticCape() {
-  return (
-    <mesh position={[0, -0.32, -0.04]} rotation={[0.18, 0, 0]} castShadow>
-      <planeGeometry args={[0.34, 0.66]} />
-      <meshPhysicalMaterial {...vinyl(palette.token)} side={2} />
-    </mesh>
+    <RoundedBox
+      args={[CAPE_PANEL.width, length, CAPE_PANEL.thickness]}
+      radius={CAPE_PANEL.bevel}
+      smoothness={CAPE_PANEL.bevelSmoothness}
+      position={[0, -length / 2, CAPE_PANEL.z]}
+      castShadow
+      receiveShadow
+    >
+      <meshPhysicalMaterial {...vinyl(palette.accentDeep)} />
+    </RoundedBox>
   )
 }
 

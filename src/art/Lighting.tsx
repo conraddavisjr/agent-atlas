@@ -1,8 +1,7 @@
 import { memo, useMemo, useRef } from 'react'
 import { Cloud, Clouds, Environment, Lightformer } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
-import { MeshBasicMaterial, Object3D, Vector3, type DirectionalLight } from 'three'
-import { cameraFrame } from '@/game/camera/cameraFrame'
+import { MeshBasicMaterial, Object3D, Vector3, type Camera, type DirectionalLight } from 'three'
 import { useGame } from '@/game/GameContext'
 import { palette } from './palette'
 import { SkyDome } from './SkyDome'
@@ -90,16 +89,148 @@ const RIM_SMOOTH = 8
 /** Radians, 8 degrees. Low, so it grazes verticals rather than piling onto tops. */
 const FILL_ELEV = 0.14
 
+/**
+ * The hub's analytic rig, as data, so the budget below can be checked by a test
+ * rather than by re-reading the comment.
+ *
+ * Exported for `Lighting.test.ts`, which sums the intensities against the art
+ * bible's standing caps and integrates the whole rig onto a horizontal deck to
+ * prove the light arriving there is warm. Every one of these numbers was
+ * previously a literal in the JSX, where nothing could see them together, which
+ * is how a rig that added thirteen points of blue to every lit surface stayed
+ * invisible through a temperature commit that changed the albedo instead.
+ */
+export const HUB_RIG = {
+  /**
+   * The key.
+   *
+   * `#fff0d8` (255,240,216) was only 39 points of red over blue, and against a
+   * hemisphere at 113 points the other way it lost. `#ffe7bc` (255,231,188) is
+   * 67 points warm, which is a late-afternoon key rather than a warm white, and
+   * it is what puts the temperature axis the reference brief asks for onto the
+   * surfaces the player stands on.
+   *
+   * Up 1.50 to 1.55, which is where the sky fill's 0.05 went. The directional
+   * sum is unchanged at 2.55, and the key's total LUMINANCE actually falls 2.6%
+   * because the warmer hex carries less green and blue, so this does not spend
+   * any of the greyscale budget.
+   *
+   * The key's DIRECTION is shared with `SkyDome`'s sun and must not move. Its
+   * COLOUR is not shared, and `SkyDome` is owned by another stream: if the sun
+   * disc and the key ever visibly disagree in temperature, this is the number
+   * that moved and the sky is the thing to check against.
+   */
+  key: { color: '#ffe7bc', intensity: 1.55 },
+  /**
+   * The sky fill, lowered rather than merely dimmed.
+   *
+   * Its job, per its own comment below, is to give shadowed regions form. At
+   * (-11, 4.5, -7) it was 19 degrees up, so a horizontal deck top caught it at
+   * `N.L` 0.328 - almost as much as a vertical face in shadow caught, which is
+   * how the level's largest cool term ended up on the surfaces meant to be warm.
+   * At y 2.4 it is 10.4 degrees up: `N.L` on a deck top falls to 0.181 while
+   * `N.L` on a vertical facing it RISES from 0.950 to 0.984. The blue moves off
+   * the floor and onto the shadowed walls, which is the whole point of it.
+   */
+  skyFill: { color: '#9ec9f0', intensity: 0.25, position: [-11, 2.4, -7] as const },
+  /** The camera-relative rim. Unchanged; see the block comment on the element. */
+  rim: { color: '#bfeaff', intensity: 0.55, elevation: RIM_ELEV },
+  /** The camera-relative bounce fill. Unchanged. */
+  bounceFill: { color: '#ffe9cf', intensity: 0.2, elevation: FILL_ELEV },
+  /**
+   * The hemisphere, and the single largest cool term on any horizontal surface.
+   *
+   * For a deck top the hemisphere weight is 1.0, so the sky colour arrives
+   * undiluted. `#7fbdf0` (127,189,240) is 113 points of blue over red - three
+   * times the chroma of the sky dome it claims to be the average of. The
+   * measured sky in `hub-totem` and `hub-backlit` is (215,221,220) and
+   * (222,226,222): the dome the deck actually sees is a very pale blue-white,
+   * and the ambient was inventing a saturation the sky does not have.
+   *
+   * `#bcd6ee` (188,214,238) is 50 points blue: still clearly chromatic, per the
+   * brief's rule that ambient is saturated and never grey, but now in the same
+   * family as the dome instead of three times its chroma. This is the change
+   * that moves a lit deck from warmth 0 to warmth +15.
+   */
+  hemisphere: { sky: '#bcd6ee', ground: '#6fbe3d' },
+} as const
+
+/**
+ * The two environment cards whose bloom margin depends on `BLOOM_THRESHOLD`.
+ *
+ * A prefiltered cubemap lookup cannot exceed its own brightest texel, so the
+ * peak radiance a card writes - `max(linear(colour)) * intensity *
+ * environmentIntensity` - is a hard ceiling on any specular reflection of it.
+ * Both of these were sized to sit a fixed margin under a threshold of 1.75.
+ * That threshold has since been measured at 1.45 and neither was re-derived,
+ * which is what put a white shell over the line at a grazing angle.
+ *
+ * Exported so `Lighting.test.ts` can assert the margin against the measured
+ * constant, which is the only version of this rule that survives the threshold
+ * moving again.
+ */
+export const HUB_ENV = {
+  /** Peak radiance 0.952. 1.52x under the threshold, the margin it had at 1.75. */
+  keySoftbox: 1.12,
+  /** Peak radiance 1.088. 1.33x under, the margin it had at 1.75. Hottest card. */
+  highlightStrip: 1.28,
+  /** `scene.environmentIntensity`, which multiplies every card. */
+  intensity: 0.85,
+} as const
+
 /** Shortest signed angle, so a wrap never produces a spin. */
 function wrapPi(a: number) {
   return Math.atan2(Math.sin(a), Math.cos(a))
+}
+
+/** Scratch for `cameraAzimuth`, module scope so the per-frame call allocates nothing. */
+const CAM_FORWARD = /*@__PURE__*/ new Vector3()
+
+/**
+ * The azimuth of the camera AS SEEN FROM THE SUBJECT, read off the camera.
+ *
+ * This used to be `cameraFrame.yaw`, which `01-lighting.md` section 2.2 names as
+ * the quantity to use because "`FollowCamera` already publishes it". It does -
+ * except on the one code path that every acceptance shot in this project runs
+ * through. `FollowCamera` short-circuits on `cameraFrame.override` and returns
+ * BEFORE the line that writes `cameraFrame.yaw`, so while the screenshot harness
+ * has the camera pinned, the published yaw is frozen at whatever it was, which
+ * after `resetCameraFrame` on mount is zero. Every vantage was therefore
+ * captured with the rim aimed at world azimuth 159 degrees regardless of where
+ * the camera actually was; at `hub-backlit` the correct bearing is 61 degrees,
+ * so the rim was 98 degrees off - a side light, which is exactly the terminator
+ * the critique measured instead of a rim. The bounce fill was off by the same
+ * amount, which put the "camera-relative" fill back at the world-fixed +Z it was
+ * introduced to stop being.
+ *
+ * Reading the camera removes the dependency entirely: it is correct whether the
+ * yaw is being published or not, and it is what the viewer actually sees rather
+ * than what the follow spring is aiming at. The convention matches
+ * `FollowCamera`'s, where the camera sits at `lookAt + (sin yaw, ., cos yaw) * d`,
+ * so the camera's forward axis points along `yaw + PI` and the yaw is recovered
+ * by negating it.
+ *
+ * The quaternion is used rather than `getWorldDirection`, which reads
+ * `matrixWorld` and is therefore one frame stale inside `useFrame`. r3f's default
+ * camera has no parent, so its quaternion is already its world quaternion.
+ *
+ * Returns the previous azimuth when the camera is within about half a degree of
+ * straight up or down, where the horizontal component vanishes and `atan2`
+ * collapses to zero. That is a real bearing, so letting it through would swing
+ * the rig across the world in one frame.
+ */
+function cameraAzimuth(camera: Camera, previous: number): number {
+  CAM_FORWARD.set(0, 0, -1).applyQuaternion(camera.quaternion)
+  const horizontal = Math.hypot(CAM_FORWARD.x, CAM_FORWARD.z)
+  if (horizontal < 1e-2) return previous
+  return Math.atan2(-CAM_FORWARD.x, -CAM_FORWARD.z)
 }
 
 /**
  * The camera-relative rim, the bounce fill, and the player-following shadow
  * frustum: one `useFrame`, about twelve scalar operations and six trig calls.
  *
- * All three live together because they all read `cameraFrame.yaw` and the
+ * All three live together because they all read the camera's azimuth and the
  * player group, and because splitting them would mean three subscriptions to
  * the same two values.
  *
@@ -147,9 +278,9 @@ function HubRig({ quality }: { quality: QualitySettings }) {
   }
   const scratch = scratchRef.current
 
-  useFrame((_, delta) => {
+  useFrame((state, delta) => {
     const dt = Math.min(delta, 0.05)
-    const camAz = cameraFrame.yaw
+    const camAz = cameraAzimuth(state.camera, rimAz.current - Math.PI)
 
     // ---- The following, texel-snapped shadow frustum ----------------------
     const key = keyRef.current
@@ -258,8 +389,8 @@ function HubRig({ quality }: { quality: QualitySettings }) {
         ref={keyRef}
         castShadow
         target={keyTarget}
-        intensity={1.5}
-        color="#fff0d8"
+        intensity={HUB_RIG.key.intensity}
+        color={HUB_RIG.key.color}
         shadow-mapSize={[quality.shadowMapSize, quality.shadowMapSize]}
         /*
           -0.0004 rather than -0.0005 because the frustum is 1.5x tighter, so a
@@ -301,8 +432,18 @@ function HubRig({ quality }: { quality: QualitySettings }) {
         the surface normal there. A hemisphere light cannot do this job: its
         variation is with world up, so it lifts a shadowed sphere uniformly
         instead of describing it.
+
+        Lowered from y 4.5 to y 2.4 and trimmed 0.30 to 0.25. See `HUB_RIG` for
+        the derivation: at 19 degrees of elevation this light was depositing
+        almost as much blue on deck tops as on the shadowed verticals it exists
+        for, and it was the second largest cool term in the rig after the
+        hemisphere.
       */}
-      <directionalLight position={[-11, 4.5, -7]} intensity={0.3} color="#9ec9f0" />
+      <directionalLight
+        position={HUB_RIG.skyFill.position}
+        intensity={HUB_RIG.skyFill.intensity}
+        color={HUB_RIG.skyFill.color}
+      />
 
       {/*
         The camera-relative rim, and the most recognisable missing element in
@@ -310,11 +451,23 @@ function HubRig({ quality }: { quality: QualitySettings }) {
 
         Its two jobs are split across two mechanisms with different bloom
         characteristics, which is the whole design. The diffuse wrap is this
-        light, provably bounded at 0.119 luminance against a threshold of 1.75,
+        light, provably bounded at 0.119 luminance against a threshold of 1.45,
         and that is the part that actually separates the figure from the
         background. The hot specular streak is the environment's strip card,
         which is bounded by construction because a prefiltered cubemap lookup
         cannot exceed its own brightest texel.
+
+        A KNOWN ASYMMETRY, stated because it decides what the strip can do. The
+        wrap is camera-relative and the strip is world-fixed, so they only agree
+        from some bearings. At `hub-backlit` the wrap sits at azimuth 61 degrees
+        and the strip at -45, which is 106 degrees apart: from that camera the
+        strip is a high front-left card and contributes nothing to the
+        silhouette. The strip cannot follow the camera - `frames={1}` is the
+        whole reason the environment is affordable, and rebuilding the cubemap
+        per frame is exactly what it exists to prevent - so the streak at any
+        given vantage comes from this light's own GGX lobe rather than from the
+        card. That is why the wrap being aimed correctly is load-bearing for the
+        specular half as well as the diffuse half.
 
         The colour is deliberately NOT `palette.visor`. The emissive cyan has to
         keep meaning "this is powered", and spraying it across every silhouette
@@ -323,7 +476,13 @@ function HubRig({ quality }: { quality: QualitySettings }) {
         against, and it separates from the sky on value rather than on hue,
         which is why it is bright rather than saturated.
       */}
-      {quality.rimLight && <directionalLight ref={rimRef} intensity={0.55} color="#bfeaff" />}
+      {quality.rimLight && (
+        <directionalLight
+          ref={rimRef}
+          intensity={HUB_RIG.rim.intensity}
+          color={HUB_RIG.rim.color}
+        />
+      )}
 
       {/*
         The bounce fill, replacing the old world-fixed front fill at (2, 3, 12).
@@ -339,7 +498,13 @@ function HubRig({ quality }: { quality: QualitySettings }) {
         absorb it. That keeps `low` at three directionals, the same count it has
         today, so its GPU cost lands within noise of current.
       */}
-      {quality.bounceFill && <directionalLight ref={fillRef} intensity={0.2} color="#ffe9cf" />}
+      {quality.bounceFill && (
+        <directionalLight
+          ref={fillRef}
+          intensity={HUB_RIG.bounceFill.intensity}
+          color={HUB_RIG.bounceFill.color}
+        />
+      )}
 
       {/*
         The ambient, and there is no `ambientLight` here on purpose.
@@ -352,8 +517,10 @@ function HubRig({ quality }: { quality: QualitySettings }) {
         Neither colour is a palette entry and that is deliberate.
         `palette.skyTop` is the colour of the ZENITH, while what a surface
         actually receives is the whole dome, which averages toward the horizon;
-        `#7fbdf0` is that average pushed more saturated, per the brief's rule
-        that ambient is saturated and never grey. And `palette.grassDeep` is the
+        `#bcd6ee` is that average, saturated enough to satisfy the brief's rule
+        that ambient is never grey and no more. It replaces `#7fbdf0`, which was
+        three times the chroma of the dome the frames actually render - see
+        `HUB_RIG.hemisphere`. And `palette.grassDeep` is the
         colour of grass IN SHADOW, whereas light bouncing off a sunlit lawn is
         brighter and more saturated than that, because the grass has already
         darkened it once on the way out. `#6fbe3d` is what puts a green kick on
@@ -361,7 +528,9 @@ function HubRig({ quality }: { quality: QualitySettings }) {
         plateau, which is the only bounce in this scene worth modelling and it
         costs one mix and one dot.
       */}
-      <hemisphereLight args={['#7fbdf0', '#6fbe3d', quality.hemisphereIntensity]} />
+      <hemisphereLight
+        args={[HUB_RIG.hemisphere.sky, HUB_RIG.hemisphere.ground, quality.hemisphereIntensity]}
+      />
     </>
   )
 }
@@ -395,7 +564,7 @@ function HubRig({ quality }: { quality: QualitySettings }) {
  */
 const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution: number }) {
   return (
-    <Environment frames={1} resolution={resolution} environmentIntensity={0.85}>
+    <Environment frames={1} resolution={resolution} environmentIntensity={HUB_ENV.intensity}>
       {/*
         The ambient floor, and the card that was missing entirely.
 
@@ -413,8 +582,17 @@ const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution
       {/* Key softbox, at the key directional's own bearing. It has to be at the
           same bearing or the reflections in the clearcoat disagree with where
           the shadows fall, which reads as wrong immediately even though nobody
-          can name it. */}
-      <Lightformer intensity={1.35} position={[7, 7.5, 4]} scale={[10, 10, 1]} color="#fff3e2" />
+          can name it.
+
+          1.35 to 1.12, for the reason given on the highlight strip below: both
+          cards were sized against a threshold of 1.75 that has since been
+          measured at 1.45, and neither was re-derived when it moved. */}
+      <Lightformer
+        intensity={HUB_ENV.keySoftbox}
+        position={[7, 7.5, 4]}
+        scale={[10, 10, 1]}
+        color="#fff3e2"
+      />
 
       {/*
         The highlight strip. The card the brief names explicitly, and the single
@@ -425,12 +603,27 @@ const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution
         highlight. 16 m by 0.55 m at 10 m out subtends exactly the narrow band a
         real strip softbox draws across a moulded curve.
 
-        Its 1.55 is chosen to sit just under the bloom threshold after
-        `environmentIntensity`: peak radiance 1.32 against 1.75. That is
-        deliberate - it should be the brightest thing on a shell without ever
-        being a bloom source, because bloom is reserved for emissives.
+        THE NUMBER THAT WENT STALE. 1.55 was chosen to sit just under the bloom
+        threshold after `environmentIntensity`: peak radiance 1.32 against 1.75,
+        a margin of 1.33x. The threshold was then MEASURED at 1.45 and this card
+        was never re-derived, so its margin quietly fell to 1.10x. A clearcoat at
+        a grazing angle reflects very nearly the whole of it, which is how a
+        white dome came to clip to (255,252,243) and spill into the sky in
+        `hub-backlit` - the one shot whose stated criterion is whether anything
+        other than an emissive has crossed the threshold.
+
+        1.28 restores the margin the design chose: peak radiance
+        `1.0 * 1.28 * 0.85 = 1.088`, which is 1.33x under 1.45. It is still the
+        hottest card in the rig and still the brightest thing a shell can
+        reflect. Fixing this here rather than by dimming the emissives is
+        deliberate: the emissives are the things that are meant to bloom.
       */}
-      <Lightformer intensity={1.55} position={[-4, 9, 4]} scale={[16, 0.55, 1]} color="#ffffff" />
+      <Lightformer
+        intensity={HUB_ENV.highlightStrip}
+        position={[-4, 9, 4]}
+        scale={[16, 0.55, 1]}
+        color="#ffffff"
+      />
 
       {/* Cool sky wrap: large, low, opposite the key. This is the environment
           half of the coloured-shadow story - a surface turned away from the key
@@ -477,14 +670,14 @@ const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution
   re-check the whole block, because the caps are on sums, not on individuals.
 
   DIRECTIONAL                                    intensity   running total
-    key            #fff0d8  dir (9, 9.5, 5)         1.50          1.50
-    sky fill       #9ec9f0  world (-11, 4.5, -7)    0.30          1.80
+    key            #ffe7bc  dir (9, 9.5, 5)         1.55          1.55
+    sky fill       #9ec9f0  world (-11, 2.4, -7)    0.25          1.80
     rim / kicker   #bfeaff  camera-relative         0.55          2.35
     bounce fill    #ffe9cf  camera-relative         0.20          2.55
                                                    -------------------
                                         CAP 2.60   TOTAL 2.55   SPARE 0.05
 
-  HEMISPHERE       sky #7fbdf0 / ground #6fbe3d     0.55   CAP 0.60
+  HEMISPHERE       sky #bcd6ee / ground #6fbe3d     0.55   CAP 0.60
                    (0.60 at the low tier, which drops the bounce fill)
 
   RIM SUB-CAP                                      0.55   CAP 0.60
@@ -500,16 +693,48 @@ const HubEnvironment = memo(function HubEnvironment({ resolution }: { resolution
                    brightest texel. This is why the env is provably bloom-safe
                    and an analytic light is not.
 
-                                       intensity      peak radiance
-    ambient floor  #243a52  background      -             0.074
-    key softbox    #fff3e2  [7, 7.5, 4]     1.35          1.15
-    highlight strip #ffffff [-4, 9, 4]      1.55          1.32   <- hottest
-    cool sky wrap  #8ec8f0  [-8, 3, -6]     0.60          0.43
-    ground bounce  #9ecf6a  [1, -4.5, -1]   0.30          0.20
-    negative fill  #0b0f1a  [3, -0.5, 7]    1.00          0.009  <- darkest
-    rim card       #cfeeff  [-2, 5, -9]     0.80          0.68
-                                       ----------------------------
-                          CAP 1.60 each   MAX 1.55    PEAK 1.32 vs 1.35
+                                       intensity   peak radiance   margin
+    ambient floor  #243a52  background      -          0.074        19.6x
+    key softbox    #fff3e2  [7, 7.5, 4]     1.12       0.952         1.52x
+    highlight strip #ffffff [-4, 9, 4]      1.28       1.088         1.33x  <- hottest
+    cool sky wrap  #8ec8f0  [-8, 3, -6]     0.60       0.444         3.26x
+    ground bounce  #9ecf6a  [1, -4.5, -1]   0.30       0.159         9.11x
+    negative fill  #0b0f1a  [3, -0.5, 7]    1.00       0.009       165x     <- darkest
+    rim card       #cfeeff  [-2, 5, -9]     0.80       0.680         2.13x
+                                       -------------------------------------
+                          CAP 1.60 each   MAX 1.28   PEAK 1.088 vs 1.45
+
+    The margin column is against BLOOM_THRESHOLD, and it is a column rather
+    than a sentence because the threshold moved once already, from a guessed
+    1.75 to a measured 1.45, and these two cards were not re-derived when it
+    did. Their margins silently fell to 1.10x and 1.26x, which is how a white
+    dome came to clip and spill at a grazing angle in `hub-backlit`.
+    `Lighting.test.ts` now recomputes this column from BLOOM_THRESHOLD.
+
+  TEMPERATURE, on a horizontal deck (albedo #bfbbb4, display warmth +11)
+
+    Total irradiance R-B, by term, N = +Y:
+
+      key            +0.339      hemisphere     -0.114
+      key softbox    +0.041      rim            -0.115
+      bounce fill    +0.011      background     -0.038
+                                 cool wrap      -0.032
+                                 sky fill       -0.026
+                                 rim card       -0.008
+                                       ------------------
+                                       TOTAL    +0.058 (was -0.229)
+
+    Rendered, through ACES and the grade: a lit deck lands near (174,170,159),
+    display luma 0.667, warmth +15. It was (169,171,169), luma 0.668, warmth 0 -
+    an eleven-point warm albedo cancelled exactly by a thirteen-point cool rig.
+    A deck with the key occluded lands near warmth -18 and a shadowed vertical
+    facing the fill near -31, so the axis now runs +15 to -31 instead of 0 to
+    -45. Cool shadows against warm highlights, which is the thing the reference
+    brief asks for and the thing this rig had only half of.
+
+    The rim's -0.115 is unavoidable and is not a defect: a camera-relative rim
+    at 26 degrees deposits `sin(26) * 0.55` of cool light on every horizontal
+    surface in the level. It is the price of the rim and it is paid knowingly.
 
   MEASURED / DERIVED HEADROOM
     peak lit diffuse on the shell   ~0.54 luminance

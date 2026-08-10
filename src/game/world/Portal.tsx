@@ -4,7 +4,7 @@ import { Billboard, RoundedBox, Text } from '@react-three/drei'
 import type { Group } from 'three'
 import { palette } from '@/art/palette'
 import { GLOW, emissive, mattePlastic, metal, plastic, rubber, stone } from '@/art/materials'
-import { usePbrTextures } from '@/art/textures'
+import { useMouldedStone } from '@/art/textures'
 import { createDecalMaps, ventGrille, DECAL_KINDS } from '@/art/decalTextures'
 import { useQuality } from '@/art/useQuality'
 import { PortalShimmer } from '@/art/PortalShimmer'
@@ -39,11 +39,22 @@ export function Portal({
   const triggered = useRef(false)
 
   /*
-    Tiled tightly. The arch pieces are under a metre across, so a low repeat
-    would stretch a single stone over the whole leg and read as a photograph
-    pasted on rather than as masonry.
+    Moulded stone, not a photograph of granite.
+
+    This was the project's last call site for the ambientCG rock, and it was the
+    one place it did the most damage. The arch is the only object in the hub
+    with any legible surface at all: every deck, puck, kerb, pylon and totem
+    beside it is flat-shaded plastic with no texture whatsoever, so a
+    high-frequency photographic normal map with visible tiling met untextured
+    plastic across a two-pixel edge. Two art styles touching, and the eye goes
+    to the one object that is wrong because it is the only one carrying detail.
+
+    `useMouldedStone` is generated in `groundTexture.ts` and has the identical
+    shape, so this is a one-import change. The tiling stays at the same density:
+    the arch pieces are under a metre across, and a low repeat stretches one
+    stone over a whole leg.
   */
-  const archStone = usePbrTextures('stone', [1.4, 3])
+  const archStone = useMouldedStone([1.4, 3])
 
   /*
     Panel lines and a vent group on the sealed slab.
