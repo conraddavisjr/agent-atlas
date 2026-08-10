@@ -181,3 +181,42 @@ Measured against the bands, the original values were not merely close together, 
 
 A deck you stand on was reading as sky, and a cliff you cannot climb was reading as floor.
 That is the whole "I cannot tell where I am allowed to go" failure, in two hex values.
+
+### 8.1 A surface is a distribution, not a value
+
+**Amended after round 3, which is the third round to fail this test for a different reason than the round before it.**
+
+Round 1 found the lawn in the wrong band and was right.
+Round 2 found the world had no shadow end and was right.
+Round 3 added the darks, moved the lawn's mean to 0.561 which is technically inside the gameplay band, and the test still failed.
+The reason is that the lawn is not a value. Its 5th to 95th percentile spans **0.363 to 0.731**, a width of 0.368, so one surface reads simultaneously as walkable stone, as the gap between bands that is meant to be empty, and as the cliff you cannot climb.
+Ten per cent of the frame was grass sitting inside the 0.38-0.56 gap.
+
+Every acceptance row written about the lawn for three rounds asked for a "clean patch" to land inside 0.56-0.74.
+**A clean patch is the wrong statistic** for a surface made of two hundred thousand blades whose own tip-to-root ramp is wider than the band it has to occupy. The mean was never the thing.
+
+So the rule gains a second half:
+
+> **Band membership is judged on a surface's mean AND its spread.**
+> A surface belongs to a band when its **p5 to p95 range fits inside that band**, not when some patch of it does.
+
+### 8.2 And therefore: pattern inside a band is allowed
+
+The first version of this rule was read, reasonably, as "keep every surface at one value", and that reading was enforced in code.
+`decalTextures.ts` states it outright: surface marks were *"cut as relief rather than printed as albedo… instead of relying on a value difference that band discipline is separately trying to remove."*
+
+That was the wrong trade and it cost the world its surface.
+Relief alone cannot read in a world lit this softly, so the walkable platforms carried panel-line normal maps and looked like blank plastic, while the reference art this project is aimed at gets almost all of its richness from **printed value**: panels at slightly different tones, perforation grids, hazard fills, chip-trace print, glowing inset strips. Its geometry is discs and boxes.
+
+> **A surface may carry albedo pattern of any kind, provided the pattern's own p5 to p95 stays inside the surface's band.**
+
+Roughly plus or minus 0.06 of value inside a band 0.18 wide, which is enough for every mark in the reference vocabulary.
+The two halves of this amendment are the same idea: 8.1 says a surface whose spread crosses bands is illegible, and 8.2 says a surface whose spread stays inside one is free.
+
+**What was never banned, and has now been misread twice.** Photographic grunge was banned, on two specific asset sets, because a photograph of real granite is the clearest violation available of the "everything is a manufactured object" world rule. Surface detail was not banned. `00-references.md` section 3(b) *demands* a roughness map and a low-amplitude normal map and says perfectly uniform roughness "kills it instantly", and round 1's F10 named "decks with literally zero surface detail" as half of its own finding. Only the arch half was ever fixed.
+
+Measure it with `tools/critique/frame.mjs spread <png> x y w h`, which reports p5/p25/p50/p75/p95 for a box and is the tool this section is written against.
+
+**One trap in that tool, and it bites immediately.** Spread measures whatever is in the box, so a box straddling a cast shadow or an object's contact reports that as the surface's own spread: a stone deck sampled across a strut shadow reads p5 0.299 and a width of 0.42, wider than the lawn, and none of it is the deck's pattern. Sample inside one lighting condition. Where a surface genuinely has two, measure them separately and expect the pair to straddle bands, because that is what a cast shadow is for.
+
+**The known outstanding violation is the lawn**, and it is deliberately not fixed in the same change as this amendment. Its lever is `CONTACT.shade` in `Grass.tsx`, currently 0.24, which puts the rendered root near 0.377 against a gameplay floor of 0.56. It is left until after the generated surface maps are switched on, because those move the lawn too and sizing the ramp before them means sizing it twice. Measured on a real frame, a cleanly-sampled lit deck spans 0.039 of luma inside a band 0.18 wide, so roughly 0.14 of variation is available and unspent.

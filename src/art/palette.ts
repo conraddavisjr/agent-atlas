@@ -241,6 +241,32 @@ export type ValueBand = 'anchor' | 'gameplay' | 'midground' | 'background'
  * cast shadow, and recessed apertures - and no repeated vertical object may
  * enter it.
  *
+ * ## A band is a range for a DISTRIBUTION, not a target for a value
+ *
+ * Amended after round 3, and this is the half of the rule that had been missing
+ * for three rounds. See `00-art-bible.md` section 8.1.
+ *
+ * Membership is judged on a surface's mean AND its spread: a surface belongs to
+ * a band when its p5 to p95 range fits inside that band, not when some patch of
+ * it does. The lawn is why. Round 3 moved its mean to 0.561, technically inside
+ * gameplay, and the greyscale test still failed, because its p5 to p95 spans
+ * 0.363 to 0.731 - one surface reading as walkable stone, as the gap that is
+ * meant to be empty, and as the cliff you cannot climb. Every acceptance row
+ * written about the lawn for three rounds asked for a "clean patch", and a clean
+ * patch is the wrong statistic for a surface made of two hundred thousand blades
+ * whose own root-to-tip ramp is wider than the band it has to occupy.
+ *
+ * The consequence that matters for these hex values: **a surface may carry
+ * albedo pattern of any kind as long as the pattern's own p5 to p95 stays inside
+ * the band.** That is roughly plus or minus 0.06 in a band 0.18 wide, which is
+ * enough for every mark in the reference vocabulary - panel fills at slightly
+ * different tones, perforation grids, chip-trace print, hazard fills.
+ *
+ * These entries are therefore the CENTRE of a surface's distribution rather than
+ * the whole of it, and a generated map is expected to vary around them. Measured
+ * on a real frame, a lit deck currently spans 0.039 of luma inside a band 0.18
+ * wide, so there is about 0.14 of variation available and unspent.
+ *
  * **`band()` refuses this one, and that refusal is the point.** Round 1's
  * verdict was that the value structure had been applied to the palette table
  * rather than to the frame, because `band()` asserts on an albedo hex while the
