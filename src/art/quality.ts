@@ -239,8 +239,20 @@ export type QualitySettings = {
    * which is what makes `low` genuinely zero-cost rather than merely cheap: no
    * canvas work, no extra texture uploads, no extra shader variants.
    *
-   * Spec ladder: 0 / 512 / 1024. Zero everywhere until `surfaceTexture.ts`
-   * exists.
+   * Spec ladder: 0 / 512 / 1024, and **now actually applied.**
+   *
+   * This sat at 0 on all three tiers with the note "zero everywhere until
+   * `surfaceTexture.ts` exists". No file by that name was ever written, because
+   * the module arrived under a different name: `decalTextures.ts`, complete with
+   * 30 tests and four tuned kinds. So the blocker named in this comment had been
+   * satisfied for two rounds and the flag was simply never flipped, while
+   * `HubIsland.tsx` carried a matching comment saying the maps were "wired rather
+   * than deferred so that enabling it is a one-line diff in that file".
+   *
+   * The consequence was the whole of "the platforms have no texture": the deck
+   * batch, the kerb batch, all four hub totem plinths and the portal's locked slab
+   * were box-projected with world-scale UVs, handed a material with three map
+   * slots, and then given null in every one of them.
    */
   surfaceMapSize: 0 | 512 | 1024
   /**
@@ -472,7 +484,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     aoHalfRes: true,
 
     // Materials and geometry.
-    surfaceMapSize: 0,
+    surfaceMapSize: 512,
     // Hero only. The world's sheen showpiece is the ground cover, and 70,000
     // blades of Charlie distribution is not a medium-tier cost.
     sheenHero: true,
@@ -532,7 +544,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     aoHalfRes: true,
 
     // Materials and geometry.
-    surfaceMapSize: 0,
+    surfaceMapSize: 1024,
     sheenHero: true,
     sheenWorld: true,
     anisotropy: false,

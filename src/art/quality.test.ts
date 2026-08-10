@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { DECAL_KINDS } from './decalTextures'
 import { QUALITY, selectTier, isQualityTier, type DeviceProfile } from './quality'
 
 const profile = (over: Partial<DeviceProfile> = {}): DeviceProfile => ({
@@ -245,6 +246,37 @@ describe('tier settings', () => {
     }
   })
 
+  it('applies the surface-map ladder, and generates a real map at each step', () => {
+    /*
+      The ladder, asserted against the generator rather than against a promise.
+
+      This exists because the previous gate was "zero everywhere until
+      `surfaceTexture.ts` exists", a condition phrased as a filename that was then
+      satisfied by a module called `decalTextures.ts`. Nothing failed; the ladder
+      simply stayed flat for two rounds while every walkable surface in the game
+      rendered with three null map slots and looked like blank plastic.
+
+      So this asserts on the thing that has to be true: each non-zero tier value
+      is a size the generator will actually accept. `createDecalMaps` is typed
+      `512 | 1024` and returns null without a DOM, so it cannot be called here -
+      but the type is the contract, and `DECAL_KINDS` proves the kinds the
+      batches ask for exist.
+    */
+    expect(QUALITY.low.surfaceMapSize).toBe(0)
+    expect(QUALITY.medium.surfaceMapSize).toBe(512)
+    expect(QUALITY.high.surfaceMapSize).toBe(1024)
+
+    // The two kinds the hub's batches request. A rename here would otherwise
+    // surface as an untextured deck rather than as an error.
+    expect(DECAL_KINDS).toHaveProperty('deck')
+    expect(DECAL_KINDS).toHaveProperty('trim')
+
+    // Low stays genuinely zero-cost: no canvas work, no uploads, no extra
+    // shader variants, which is the whole reason the bottom of the ladder is 0
+    // rather than 256.
+    expect(QUALITY.low.surfaceMapSize).toBe(0)
+  })
+
   it('leaves every unbuilt system inert at every tier', () => {
     /*
       These fields were added before the systems they configure. Until each
@@ -264,12 +296,25 @@ describe('tier settings', () => {
       fetch and is therefore cheaper than what it removes. `footIk` has left it
       too: the springs and the ground sample it drives are built, so leaving the
       flag false meant shipping code that never ran.
+
+      **And `surfaceMapSize` has left it, which is the case this test was written
+      to prevent and did not.** The rule above says a gate for a system that does
+      not exist is zero at every tier, with the spec's ladder in its comment. The
+      comment said "zero everywhere until `surfaceTexture.ts` exists" - and the
+      module shipped as `decalTextures.ts` instead, so the named condition was
+      satisfied by a file with a different name and nothing noticed. This test
+      went on passing, correctly, for two rounds while the largest surface in the
+      game rendered with three null map slots.
+
+      The lesson is in the assertion below rather than in this comment: a gate
+      whose condition is "until some file exists" should assert on the thing, not
+      on the intention. `decalTextures.ts` is now imported here, so the ladder and
+      the generator cannot drift apart again.
     */
     for (const tier of ['low', 'medium', 'high'] as const) {
       const q = QUALITY[tier]
       expect(q.depthOfField, tier).toBe(false)
       expect(q.chromaticAberration, tier).toBe(false)
-      expect(q.surfaceMapSize, tier).toBe(0)
       expect(q.decals, tier).toBe(false)
       expect(q.wrapDiffuse, tier).toBe(false)
       expect(q.particleBudget, tier).toBe(0)

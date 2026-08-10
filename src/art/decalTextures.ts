@@ -292,6 +292,31 @@ export type ChevronSpec = {
 }
 
 /**
+ * MEASURED, AFTER THE LADDER WAS FINALLY SWITCHED ON: relief alone is invisible
+ * on a horizontal surface in this world, and that is geometry rather than tuning.
+ *
+ * With `surfaceMapSize` at 1024 on high, a deck patch measured p5-p95 of 0.039
+ * against 0.0387 with the maps off, and high-frequency detail of 1.36 against
+ * 1.37. Zero change, and the crops are indistinguishable.
+ *
+ * The reason is the key's elevation. Perturbing a normal that already points
+ * almost straight at the light barely changes `N.L`, so a 2.4-strength normal map
+ * on an up-facing deck under a key 42.7 degrees up produces almost no shading.
+ * The roughness break has nothing to break, because `mattePlastic` is roughness
+ * 0.75 and carries no specular to modulate. And the occlusion channel is floored
+ * at 0.55 and multiplies a surface already lit mostly by ambient.
+ *
+ * The same maps DO read on vertical faces, where the key arrives at a grazing
+ * angle: the kerb faces moved from 16.78 to 17.75 on the same metric in the same
+ * frame. So the ladder is worth keeping for the frame and the trim, and it is
+ * not what makes a platform read.
+ *
+ * That is the physical reason the reference art prints value instead of cutting
+ * it, and it is why an albedo channel is the whole fix rather than a refinement
+ * of this one.
+ */
+
+/**
  * A run of directional chevrons.
  *
  * Used only on things that move or that mark a direction, which in this world
@@ -758,6 +783,24 @@ function byteTexture(bytes: Uint8ClampedArray, size: number): Texture {
   texture.colorSpace = LinearSRGBColorSpace
   texture.wrapS = RepeatWrapping
   texture.wrapT = RepeatWrapping
+  /*
+    Anisotropic filtering, which this function was missing while every other
+    generated texture in the project set it.
+
+    It matters here more than anywhere else. These maps go onto the deck batch,
+    whose largest member is a twelve-metre disc seen at a grazing angle from a
+    camera 4.3 m up - which is the exact condition trilinear filtering handles
+    worst. A 0.6 m panel pitch at that angle aliases into a moire that crawls as
+    the camera moves, and the effect is far more visible than the panel lines it
+    is made of.
+
+    16 is the ceiling on every GPU this runs on, and it is clamped to the device
+    maximum by three, so it is safe to ask for flatly rather than plumbing the
+    renderer's capability object into a pure texture builder. `textures.ts` reads
+    `getMaxAnisotropy()` because it already has the renderer to hand; this file
+    does not and should not need it.
+  */
+  texture.anisotropy = 16
   texture.needsUpdate = true
   return texture
 }

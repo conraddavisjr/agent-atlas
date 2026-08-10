@@ -803,10 +803,16 @@ export function HubIsland() {
   const visiblePylons = useMemo(() => PYLONS.slice(0, gates.pylons), [gates.pylons])
 
   /*
-    Generated surface detail, off at every tier today because `surfaceMapSize`
-    is 0 everywhere until the stream that owns the tier table turns it on. It is
-    wired rather than deferred so that enabling it is a one-line diff in that
-    file, which is what the rollout discipline asks for.
+    Generated surface detail. **On now**, at 512 on medium and 1024 on high,
+    which is the ladder that was specified from the start.
+
+    It sat at zero on all three tiers for two rounds behind a note in
+    `quality.ts` reading "zero everywhere until `surfaceTexture.ts` exists" -
+    while the module it was waiting for had already shipped under a different
+    name, as `decalTextures.ts`, with thirty tests and four tuned kinds. So the
+    largest continuous surface in the game was box-projected with world-scale
+    UVs, handed a material with three map slots, and given null in all of them,
+    and the deck looked like blank plastic because it was.
 
     It can be applied to a merged batch at all only because the batches are box
     projected. A merge holds a 12 m deck, a 6 m puck and a 0.7 m plinth, each
@@ -1276,8 +1282,26 @@ export function HubIsland() {
         />
       </mesh>
 
+      {/*
+        The frame: pylons, struts, the collar and the overhead arcs.
+
+        Takes the `trim` maps, and it had been box projected against exactly that
+        kind at the top of this file and then handed a bare material. Eight pylons
+        are the strongest framing element in the scene and the only surfaces in it
+        with a 0.4 m panel pitch already solved for them.
+      */}
       <mesh geometry={dressBatch} castShadow receiveShadow>
-        <meshPhysicalMaterial {...mattePlastic('#ffffff', { vertexColors: true })} />
+        <meshPhysicalMaterial
+          {...mattePlastic('#ffffff', { vertexColors: true })}
+          {...(trimMaps
+            ? {
+                normalMap: trimMaps.normalMap,
+                roughnessMap: trimMaps.roughnessMap,
+                aoMap: trimMaps.aoMap,
+                roughness: trimMaps.roughness,
+              }
+            : {})}
+        />
       </mesh>
 
       {/*
