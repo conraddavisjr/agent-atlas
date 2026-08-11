@@ -20,6 +20,9 @@ import {
   DIAPER,
   EAR_POD_SHAPE,
   FACE_PLATE,
+  FINGER,
+  fingerCentreY,
+  FOOT,
   HAND,
   HEAD_CAP,
   HEAD_SHELL,
@@ -191,6 +194,43 @@ const EAR_POD_GEOMETRY = latheProfile({
   radialSegments: EAR_POD_SHAPE.radialSegments,
 })
 EAR_POD_GEOMETRY.rotateZ(Math.PI / 2)
+/*
+  Then squash Z, which is what turns the disc into the narrow fin.
+
+  Order matters and is silent if it is wrong: before the `rotateZ` the lathe's
+  radial plane is X-Z, so scaling Z here would thin the pod on a diameter and then
+  the rotate would carry that thinning into the pod's HEIGHT. After the rotate, Z is
+  the fore-aft axis and this is the fin's depth. `EAR_POD_SHAPE.depthScale` carries
+  which axis is which and why it is Z rather than Y - the short version is that
+  `pose.earPodL.rx` sweeps the Y-Z plane, so a pod round in Y-Z had an invisible
+  flap.
+
+  `BufferGeometry.scale` routes through `applyMatrix4`, which puts the normals
+  through the inverse transpose and renormalises them, so the shading is correct
+  under the non-uniform scale.
+*/
+EAR_POD_GEOMETRY.scale(1, 1, EAR_POD_SHAPE.depthScale)
+
+/** The mitten's oblong body. See `HAND` for why it is a superellipsoid at `taperTop` 1. */
+const HAND_GEOMETRY = taperedSuperellipsoid(HAND)
+
+/**
+ * One finger, and where along Y it sits.
+ *
+ * `FINGER_CENTRE_Y` is DERIVED rather than authored, and that is the whole defence
+ * against the failure mode this part is shaped like. The hand's lower surface is not
+ * flat: at the finger's own centreline `|x| = 0.052` it sits at y -0.1508, while the
+ * hand's bottom pole is at -0.1600. Authoring the finger against the pole - which is
+ * the number you get by reading `HAND.b` - would place it 0.009 too low and leave a
+ * gap under the palm on both sides. So the root is solved on the surface at the
+ * finger's own x with `superellipsoidY`, and `FINGER.embed` is how far above that
+ * surface the box's top goes.
+ *
+ * The sign: `superellipsoidY` returns the positive `|y|`, and the fingers hang off
+ * the -Y end, so the surface is at its negation.
+ */
+const FINGER_GEOMETRY = taperedSuperellipsoid(FINGER)
+const FINGER_CENTRE_Y = fingerCentreY()
 
 /**
  * The two rings on the upper arm, lathed from the same profile as the ear pods.
@@ -595,11 +635,16 @@ export function UpperArm({ quality }: Q) {
 }
 
 /**
- * A mitten hand, at the hand socket's origin.
+ * A mitten hand with two fingers, at the hand socket's origin.
  *
- * 0.28 across against a 0.72 head is 0.39 head-widths, inside the reference's
- * 0.35 to 0.45. Hidden when a prop is socketed, so a held object replaces the
- * mitten rather than growing out of it.
+ * The oblong body is 0.23 x 0.32 x 0.20 where it was a 0.28 sphere, and the two
+ * fingers stand 0.090 clear of its palm end. `HAND` and `FINGER` in
+ * `robotGeometry.ts` carry the sizing, the reason the hand narrowed rather than
+ * widened, and the measurement of the sphere hand's interpenetration with the hips
+ * that paid for it.
+ *
+ * Hidden when a prop is socketed, so a held object replaces the mitten rather than
+ * growing out of it.
  *
  * `shellShadow` rather than `shell`, so the hand is a different colour from the
  * arm, which is one of the reference marks. It was already different when the arm
@@ -609,15 +654,33 @@ export function UpperArm({ quality }: Q) {
  * a glove moulded in a second shot of the same plastic, which is what the
  * reference's hands look like. Still `shell()` and not `mattePlastic`, so it keeps
  * the hero clearcoat and sheen.
+ *
+ * One material across body and fingers, deliberately. A finger in a second colour
+ * would read as a glove over a hand, and the whole part is one moulding.
  */
 export function Hand({ quality }: Q) {
+  const material = shell(palette.shellShadow, quality.sheenHero ? {} : { sheen: 0 })
   return (
-    <mesh castShadow receiveShadow>
-      <sphereGeometry args={[HAND.radius, 16, 12]} />
-      <meshPhysicalMaterial
-        {...shell(palette.shellShadow, quality.sheenHero ? {} : { sheen: 0 })}
-      />
-    </mesh>
+    <>
+      <mesh geometry={HAND_GEOMETRY} castShadow receiveShadow>
+        <meshPhysicalMaterial {...material} />
+      </mesh>
+      {/*
+        Two fingers, mirrored. Both use the same geometry instance, which is safe
+        because neither is ever mutated - the mirror is a position, not a scale.
+      */}
+      {[-1, 1].map((side) => (
+        <mesh
+          key={side}
+          geometry={FINGER_GEOMETRY}
+          position={[side * FINGER.x, FINGER_CENTRE_Y, 0]}
+          castShadow
+          receiveShadow
+        >
+          <meshPhysicalMaterial {...material} />
+        </mesh>
+      ))}
+    </>
   )
 }
 
@@ -632,17 +695,38 @@ export function Shin() {
 }
 
 /**
- * A foot, at the foot node's origin.
+ * A boot, at the foot node's origin.
  *
- * 0.44 long against a 1.36 body is 32% of body height, and the pair span 0.70
- * against a 0.72 head. A wide planted stance under a heavy head is what says
- * "low centre of gravity, stable, controllable", and it is the half of the read
- * that the previous model already had right.
+ * 0.14 x 0.13 x 0.20 where it was 0.32 x 0.17 x 0.44. `FOOT` carries the sizing and
+ * the two measurements that say a literal 80% linear reduction detaches the boot from
+ * the leg; the short version is that the shin's bottom tip is at world y 0.115, so the
+ * boot's top has to reach past it, and that is what fixes the height at 0.13.
+ *
+ * ## The stance survives the shrink, which is the thing worth protecting
+ *
+ * "A wide planted stance under a heavy head is what says low centre of gravity,
+ * stable, controllable" was written about the 0.70 span of the old pair, and the pair
+ * now span 0.52 against a 0.72 head. What carries that read is the leg SEPARATION,
+ * `REST.legL/R.x` at +-0.19, and it has not moved. The old feet were so long that they
+ * nearly touched - the gap between them was 0.060, exactly at the floor
+ * `robotPose.test.ts` asserts - so most of that 0.70 was foot rather than stance. The
+ * gap is now 0.240.
+ *
+ * The boot is also CENTRED on the leg now. `REST.footL.z` was 0.06, which put the box
+ * 0.06 forward of the shin's axis, and because `REST_ROTATION.legL.ry` splays the leg
+ * by -0.1 rad that forward offset also threw the boot 0.0060 sideways off the axis.
+ * Both go with the z.
  */
 export function Foot() {
   return (
     <>
-      <RoundedBox args={[0.32, 0.17, 0.44]} radius={0.065} smoothness={3} castShadow receiveShadow>
+      <RoundedBox
+        args={[FOOT.width, FOOT.height, FOOT.depth]}
+        radius={FOOT.radius}
+        smoothness={3}
+        castShadow
+        receiveShadow
+      >
         <meshPhysicalMaterial {...rubber(palette.lockedDeep)} />
       </RoundedBox>
       {/*
@@ -650,10 +734,15 @@ export function Foot() {
 
         It PROTRUDES below the sole plane rather than sitting flush with it or
         recessed above it, and that is not a preference. The foot is a solid
-        `RoundedBox` spanning y -0.085 to 0.085, so the first version of this pad -
-        placed a millimetre "above the sole plane" to avoid z-fighting with the
-        ground - sat entirely inside opaque rubber and could not be seen at any
-        time from any angle. See `SOLE_LIGHT`.
+        `RoundedBox` spanning y -FOOT.height/2 to +FOOT.height/2, so the first version
+        of this pad - placed a millimetre "above the sole plane" to avoid z-fighting
+        with the ground - sat entirely inside opaque rubber and could not be seen at
+        any time from any angle. See `SOLE_LIGHT`.
+
+        The y below is derived from `FOOT.height` and not the literal -0.085 it was.
+        That literal was half the old height, so shrinking the boot without touching
+        this line would have left the pad floating 0.020 under the sole: the same
+        defect as the original, arrived at from the opposite direction.
 
         GLOW.source and not GLOW.bloom, and this is the one place on the character
         where the choice is genuinely arguable. The reference's sole lights do
@@ -670,7 +759,7 @@ export function Foot() {
         matrix.
       */}
       <mesh
-        position={[0, -0.085 - SOLE_LIGHT.proud + SOLE_LIGHT.thickness / 2, 0]}
+        position={[0, -FOOT.height / 2 - SOLE_LIGHT.proud + SOLE_LIGHT.thickness / 2, 0]}
         scale={[1, 1, SOLE_LIGHT.stretchZ]}
       >
         <cylinderGeometry

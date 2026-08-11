@@ -25,6 +25,10 @@ import {
 } from './robotAnim'
 import { BODY, WADDLE } from './tuning'
 import { CAPE, IDLE, SHADOW, TURN_ANIM } from './animTuning'
+// The boot's dimensions, so the sole-plane and feet-gap assertions read them rather
+// than copying them. Both had the old literals inline and both would have gone on
+// passing while describing a boot the game no longer draws.
+import { FOOT } from './robotGeometry'
 
 const DT = 1 / 60
 
@@ -107,9 +111,36 @@ describe('proportions', () => {
     // The contact shadow, the foot IK and the VFX emitters all assume this, and
     // it is the reason they can share one coordinate convention.
     expect(PROPORTIONS.soleY).toBe(0)
-    // Foot centre plus half the foot's 0.17 height lands on it.
+    /*
+      Boot centre minus half `FOOT.height` lands on it.
+
+      That half-height was the literal 0.085 and is now read from `FOOT`. It is the
+      binding constraint between the boot's SIZE and `REST.footL.y`: the boot shrank
+      from 0.17 tall to 0.13 in this pass, and without moving the node from -0.165 to
+      -0.185 the character would have stood 0.020 off the ground with every other
+      assertion in this file still passing. Two numbers that have to move together
+      should not be typed out separately.
+    */
     const footWorldY = REST.hips.y + REST.legL.y + REST.kneeL.y + REST.footL.y
-    expect(footWorldY - 0.085).toBeCloseTo(PROPORTIONS.soleY, 9)
+    expect(footWorldY - FOOT.height / 2).toBeCloseTo(PROPORTIONS.soleY, 9)
+  })
+
+  /*
+    And the boot is CENTRED on the leg it hangs from, which is the third clause of the
+    foot note and was not true.
+
+    `REST.footL.z` was 0.06, so the box sat 0.06 forward of the shin's axis. Worse,
+    `REST_ROTATION.legL.ry` splays the leg by -0.1 rad and that rotation carries a z
+    offset into x, so the left boot's centre measured world x -0.1960 against a shin
+    axis at -0.1900: the offset was throwing the boot sideways off its own leg as well
+    as forward of it. Both vanish at z 0, and this asserts the z directly because the
+    sideways error is a consequence of it rather than an independent value.
+  */
+  it('centres each boot on the leg it hangs from', () => {
+    expect(REST.footL.z).toBe(0)
+    expect(REST.footR.z).toBe(0)
+    expect(REST.footL.x).toBe(0)
+    expect(REST.footR.x).toBe(0)
   })
 
   it('stays symmetric left to right', () => {
@@ -151,10 +182,19 @@ describe('proportions', () => {
   })
 
   it('keeps a gap between the feet at rest', () => {
-    // Feet are 0.32 wide, so a 0.19 half-separation leaves 0.06 of daylight.
-    // Feet that touch read as a pedestal rather than as legs.
-    const gap = (REST.legR.x - REST.legL.x) - 0.32
+    /*
+      Feet that touch read as a pedestal rather than as legs.
+
+      This was `- 0.32` with the boot width written out, and it sat EXACTLY on its own
+      floor: 0.38 of separation minus 0.32 of boot is 0.060 against a minimum of 0.060.
+      A test at its boundary tells you nothing about which way the margin is going. The
+      boot is 0.14 now, so the gap is 0.240, and the width comes from `FOOT` so the two
+      cannot drift apart again.
+    */
+    const gap = REST.legR.x - REST.legL.x - FOOT.width
     expect(gap).toBeGreaterThanOrEqual(0.06)
+    // And it is no longer scraping that floor.
+    expect(gap).toBeGreaterThan(0.15)
   })
 
   it('keeps the antenna off centre', () => {

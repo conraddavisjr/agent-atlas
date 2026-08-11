@@ -11,6 +11,9 @@ import {
   DIAPER,
   EAR_POD_SHAPE,
   FACE_PLATE,
+  FINGER,
+  fingerCentreY,
+  FOOT,
   HAND,
   HEAD_CAP,
   HEAD_SHELL,
@@ -170,20 +173,36 @@ describe('taperedSuperellipsoid', () => {
     widest. So the true maximum is `a * mix(1, taperTop, 0.5)`, and the number
     is pinned here so a future edit to `a` or `taperTop` has to look at it.
   */
-  it('is narrower than its half-extent because the taper reaches the equator', () => {
+  it('is wider than its half-extent because the taper reaches the equator', () => {
     const box = torso().boundingBox!
-    // Strictly inside the untapered half-extent, and strictly outside the fully
-    // tapered one, because the widest latitude sits just below the equator
-    // where the taper has not finished but the rim term is already near its own
-    // maximum.
-    expect(box.max.x).toBeLessThan(TORSO.a)
-    expect(box.max.x).toBeGreaterThan(TORSO.a * TORSO.taperTop)
+    /*
+      The direction of this assertion FLIPPED with the taper.
+
+      With `taperTop` below 1 the widest latitude sat just below the equator and the
+      solid came out narrower than `a`. `taperTop` is now 1.25, so the taper
+      MULTIPLIES the widest latitude and the solid is wider than `a` instead. The
+      bracket is still the same two bounds, just the other way round: strictly
+      outside the untapered half-extent, strictly inside the fully tapered one,
+      because the widest latitude is above the equator but below the crown where the
+      rim term has begun to close.
+    */
+    expect(box.max.x).toBeGreaterThan(TORSO.a)
+    expect(box.max.x).toBeLessThan(TORSO.a * TORSO.taperTop)
     // Pinned, so an edit to `a` or `taperTop` has to come and look at it.
-    expect(box.max.x * 2).toBeCloseTo(0.578, 2)
-    expect(box.max.z * 2).toBeCloseTo(0.484, 2)
+    expect(box.max.x * 2).toBeCloseTo(0.58, 2)
+    expect(box.max.z * 2).toBeCloseTo(0.485, 2)
+    // And it is the number `PROPORTIONS` publishes, which the diaper used to own.
+    expect(box.max.x * 2).toBeCloseTo(PROPORTIONS.torsoWidthMax, 3)
   })
 
-  it('is wider at the base than at the crown', () => {
+  it('is wider at the shoulders than at the base, which is the reverse of what shipped', () => {
+    /*
+      The note is "one flowing torso, starting wide at the shoulders and narrowed
+      down by the waist", and what shipped was a pear: `taperTop` 0.84 made the torso
+      widest at its BASE, and the test here asserted exactly that. Both the shape and
+      this assertion are inverted, and the old direction is recorded so nobody
+      "restores" it as a regression fix.
+    */
     const g = torso()
     const pos = g.getAttribute('position')
     const box = g.boundingBox!
@@ -198,7 +217,9 @@ describe('taperedSuperellipsoid', () => {
       if (f > 0.2 && f < 0.4) lowerMax = Math.max(lowerMax, x)
       if (f > 0.6 && f < 0.8) upperMax = Math.max(upperMax, x)
     }
-    expect(lowerMax).toBeGreaterThan(upperMax)
+    expect(upperMax).toBeGreaterThan(lowerMax)
+    // A taper worth having, not a rounding difference.
+    expect(upperMax - lowerMax).toBeGreaterThan(0.01)
   })
 
   it('collapses both poles to a single point', () => {
@@ -475,6 +496,15 @@ const earPodGeometry = () => {
     radialSegments: EAR_POD_SHAPE.radialSegments,
   })
   g.rotateZ(Math.PI / 2)
+  /*
+    The depth squash, in the same order `robotParts.tsx` applies it.
+
+    This helper used to stop at the `rotateZ`, which meant every ear pod assertion
+    below was measuring a shape the game does not draw. That is the failure mode this
+    whole file exists against, so the helper follows the component exactly and the
+    ordering note lives on `EAR_POD_SHAPE.depthScale`.
+  */
+  g.scale(1, 1, EAR_POD_SHAPE.depthScale)
   return g
 }
 
@@ -492,15 +522,28 @@ describe('the lathed parts are wound outward, which the ear pods were not', () =
   it('gives the ear pod a positive volume and outward normals', () => {
     const g = earPodGeometry()
     /*
-      A can of radius 0.105 and length 0.21 is 0.007274 before the fillet takes
-      material off the two rims, so the expected answer is a little under that. The
-      descending profile measured -0.006906 for the same shape: same magnitude,
-      opposite sign, which is the whole signature of an inverted winding.
+      The bound is derived from the shape constants rather than from the literals
+      0.105 and 0.21 it used to hardcode, because those literals silently stopped
+      describing the part when the pod became a thin fin.
+
+      An elliptical can of semi-axes `radius` by `radius * depthScale` and length
+      `2 * halfThickness` is `PI * radius^2 * depthScale * 2 * halfThickness` before
+      the fillet takes material off the two rims, so the answer sits a little under
+      that. The descending profile measured -0.006906 against +0.006906 at the old
+      size: same magnitude, opposite sign, which is the whole signature of an inverted
+      winding, and the sign is the assertion that matters here.
     */
+    const solid =
+      Math.PI *
+      EAR_POD_SHAPE.radius *
+      EAR_POD_SHAPE.radius *
+      EAR_POD_SHAPE.depthScale *
+      2 *
+      EAR_POD_SHAPE.halfThickness
     const v = signedVolume(g)
     expect(v).toBeGreaterThan(0)
-    expect(v).toBeLessThan(Math.PI * 0.105 * 0.105 * 0.21)
-    expect(v).toBeGreaterThan(0.8 * Math.PI * 0.105 * 0.105 * 0.21)
+    expect(v).toBeLessThan(solid)
+    expect(v).toBeGreaterThan(0.8 * solid)
 
     const sense = radialNormalSense(g)
     expect(sense.in).toBe(0)
@@ -531,12 +574,66 @@ describe('the lathed parts are wound outward, which the ear pods were not', () =
     the world was ever affected.
   */
   it('builds its profile from the bottom up', () => {
-    const pts = roundedDiscProfile(0.105, 0.105, 0.055, 6)
-    expect(pts[0].y).toBeCloseTo(-0.105, 12)
-    expect(pts[pts.length - 1].y).toBeCloseTo(0.105, 12)
+    const pts = roundedDiscProfile(
+      EAR_POD_SHAPE.radius,
+      EAR_POD_SHAPE.halfThickness,
+      EAR_POD_SHAPE.fillet,
+      EAR_POD_SHAPE.filletSteps,
+    )
+    expect(pts[0].y).toBeCloseTo(-EAR_POD_SHAPE.halfThickness, 12)
+    expect(pts[pts.length - 1].y).toBeCloseTo(EAR_POD_SHAPE.halfThickness, 12)
     for (let i = 1; i < pts.length; i++) {
       expect(pts[i].y).toBeGreaterThanOrEqual(pts[i - 1].y - 1e-12)
     }
+  })
+})
+
+/*
+  Which authored ear pod number lands on which world axis.
+
+  This is here because it was UN-TESTABLE for three rounds and nobody noticed. The pod
+  shipped with `radius` and `halfThickness` both 0.105, so the built bounding box was a
+  cube and every assertion about its extents passed identically with the two swapped.
+  `robotParts.tsx` and `EAR_POD_SHAPE` between them make three claims about which axis
+  is which - the extrusion, the flap plane, and which one the 66% note applies to - and
+  a cube can support none of them.
+
+  So the mapping is probed with deliberately DISTINCT values, in the same build order
+  the component uses. A future edit that reorders the rotate and the scale, or that
+  flips which axis the depth squash lands on, fails here.
+*/
+describe('the ear pod lathe maps its parameters onto the axes the model assumes', () => {
+  it('puts halfThickness on x, radius on y, and the squashed radius on z', () => {
+    const probeRadius = 0.1
+    const probeHalfThickness = 0.03
+    const probeDepthScale = 0.5
+    const g = latheProfile({
+      points: roundedDiscProfile(probeRadius, probeHalfThickness, 0.01, 4),
+      radialSegments: 16,
+    })
+    g.rotateZ(Math.PI / 2)
+    g.scale(1, 1, probeDepthScale)
+    g.computeBoundingBox()
+    const box = g.boundingBox!
+    expect(box.max.x).toBeCloseTo(probeHalfThickness, 6)
+    expect(box.max.y).toBeCloseTo(probeRadius, 6)
+    expect(box.max.z).toBeCloseTo(probeRadius * probeDepthScale, 6)
+  })
+
+  /*
+    And the flap has something to move, which it did not before.
+
+    `stepAnim` writes the pods' spring onto `pose.earPodL.rx`, and a rotation about X
+    applied to a solid of revolution ABOUT X is invisible. With `radius` on both y and
+    z the pod was exactly that, so `EAR_POD.counterRoll` and `EAR_POD.landImpulse` had
+    never drawn a frame of motion. The depth squash is what makes rx a real rotation,
+    and this is the assertion that keeps it one.
+  */
+  it('is not a solid of revolution about its own animation axis', () => {
+    const g = earPodGeometry()
+    g.computeBoundingBox()
+    const box = g.boundingBox!
+    expect(box.max.y / box.max.z).toBeGreaterThan(2)
   })
 })
 
@@ -1055,7 +1152,7 @@ describe('the copper cap on the back of the head', () => {
     than the cap's own footprint ever reaches.
   */
   it('does not intersect the ear pods', () => {
-    const podZFront = REST.earPodL.z + EAR_POD_SHAPE.radius
+    const podZFront = REST.earPodL.z + EAR_POD_SHAPE.radius * EAR_POD_SHAPE.depthScale
     let capZNearest = -Infinity
     for (const p of capOutline()) {
       const z = superellipsoidZ(p.x, HEAD_CAP.y + p.y, superellipsoidOffset(HEAD_SHELL, HEAD_CAP.rise))
@@ -1069,14 +1166,21 @@ describe('the copper cap on the back of the head', () => {
 
 describe('the blue oval under each sole', () => {
   /*
-    The foot is a RoundedBox 0.32 x 0.17 x 0.44 at radius 0.065, so its bottom
-    face is flat only over the inner box. A pad wider than that straddles a corner
-    round and leaves a crescent gap between itself and the sole, which is the same
-    artefact both critique reviewers read as "there is a hole in the character`s
-    face" when the ear pods did it.
+    The boot is a RoundedBox of `FOOT.width` by `FOOT.height` by `FOOT.depth` at
+    `FOOT.radius`, so its bottom face is flat only over the inner box. A pad wider than
+    that straddles a corner round and leaves a crescent gap between itself and the
+    sole, which is the same artefact both critique reviewers read as "there is a hole
+    in the character`s face" when the ear pods did it.
+
+    These two came off `FOOT` and were `0.32 / 2 - 0.065` and `0.44 / 2 - 0.065`
+    written out by hand. That is not a style point. The boot shrank by more than half
+    in this pass, the flat region went from 0.095 to 0.040 of half-width, and the
+    shipped `SOLE_LIGHT.radius` of 0.085 was more than twice what would fit - so a
+    hand-copied constraint would have gone on passing while the pad wrapped over both
+    corner rounds. The whole block is about a light that was invisible once already.
   */
-  const flatX = 0.32 / 2 - 0.065
-  const flatZ = 0.44 / 2 - 0.065
+  const flatX = FOOT.width / 2 - FOOT.radius
+  const flatZ = FOOT.depth / 2 - FOOT.radius
 
   it('lands entirely on the flat part of the sole', () => {
     expect(SOLE_LIGHT.radius).toBeLessThan(flatX)
@@ -1084,6 +1188,17 @@ describe('the blue oval under each sole', () => {
     // With real margin rather than by a thousandth.
     expect(flatX - SOLE_LIGHT.radius).toBeGreaterThan(0.005)
     expect(flatZ - SOLE_LIGHT.radius * SOLE_LIGHT.stretchZ).toBeGreaterThan(0.005)
+  })
+
+  /*
+    And the pad still reads as an oval of useful SIZE relative to the sole it is on,
+    which is the thing shrinking its radius could quietly have destroyed. It covers
+    82% of the flat width and 75% of the flat depth, so it is a sole light rather than
+    a dot in the middle of a boot.
+  */
+  it('still fills the sole it sits on', () => {
+    expect(SOLE_LIGHT.radius / flatX).toBeGreaterThan(0.6)
+    expect((SOLE_LIGHT.radius * SOLE_LIGHT.stretchZ) / flatZ).toBeGreaterThan(0.6)
   })
 
   it('is an oval along the foot rather than a circle', () => {
@@ -1104,9 +1219,15 @@ describe('the blue oval under each sole', () => {
     A recess only reads if something is cut out of the housing, and nothing here
     cuts. So the pad must break the foot's own surface, and that is what is asserted
     now - against the foot's real extent rather than against a tolerance.
+
+    `soleY` reads `FOOT.height` rather than the -0.17/2 it had. The component's own
+    position expression had the same 0.085 hardcoded in it, so shrinking the boot to
+    0.13 without touching either would have left the pad floating 0.020 clear of the
+    sole: the identical defect approached from the opposite side, and this test would
+    have passed through it.
   */
   it('protrudes through the sole rather than being buried inside the foot', () => {
-    const soleY = -0.17 / 2
+    const soleY = -FOOT.height / 2
     const padBottom = soleY - SOLE_LIGHT.proud
     const padTop = padBottom + SOLE_LIGHT.thickness
     // Below the foot's own surface, so it can be seen at all.
@@ -1267,12 +1388,27 @@ describe('the ear pods stand proud of the head', () => {
   const socketX = Math.abs(REST.earPodL.x)
   const outer = socketX + EAR_POD_SHAPE.halfThickness
 
-  it('reaches the outer extent the width ladder is built on', () => {
-    // docs/design/05-character-vfx.md: "Ear pod outer extent is 0.380 + 0.105 =
-    // 0.485, so the head's total width including pods is 0.97 m. That is
-    // deliberately the widest thing on the character."
-    expect(outer).toBeCloseTo(0.485, 12)
-    expect(outer * 2).toBeCloseTo(0.97, 12)
+  /*
+    This test used to read "reaches the outer extent the width ladder is built on"
+    and pinned `outer` to 0.485 and `outer * 2` to 0.97, quoting
+    `05-character-vfx.md`: "the head's total width including pods is 0.97 m. That is
+    deliberately the widest thing on the character."
+
+    Both halves of that were wrong. The pods never were the widest thing - the
+    mittens reach 0.524 at rest for a span of 1.048, which the block at the bottom of
+    this file has been asserting all along, so the file contained the contradiction.
+    And a ladder rung nothing else depends on is not a constraint; it is a number
+    being kept warm.
+
+    What is a constraint is the pods' clearance off the cheek, which is what the
+    "reduce its extrusion by 66%" note is about and what the test below now pins.
+  */
+  it('stands off the cheek by the reduced extrusion the note asked for', () => {
+    const cheekX = superellipsoidX(REST.earPodL.y, REST.earPodL.z, HEAD_SHELL)
+    // 0.125 was the shipped clearance; 66% off it is 0.0425.
+    expect(outer - cheekX).toBeCloseTo(0.0425, 2)
+    // Still positive by a real margin, or the pod is a decal on the cheek.
+    expect(outer - cheekX).toBeGreaterThan(0.03)
   })
 
   /*
@@ -1286,9 +1422,12 @@ describe('the ear pods stand proud of the head', () => {
     gap between its rim and the cheek, which is the exact artefact both round 1
     reviewers read as "there is a hole in the character's face".
 
-    Measured: 0.0727 to 0.0809 all the way round, a tighter spread than the flat box
-    gave, because the pod's footprint is small enough that the cheek is locally
-    almost flat over it.
+    Measured: 0.0707 to 0.0819 all the way round, and the socket moving inboard to
+    0.340 is what keeps it that deep while the pod itself got thinner. The rim now
+    sweeps an ELLIPSE rather than a circle, 0.105 in y by 0.042 in z, so the loop
+    below walks the ellipse and not a circle - walking a circle of radius 0.105 would
+    sample points in z where the pod has no material and report a burial the part does
+    not have.
 
     ## The condition is against the FILLET, not against zero
 
@@ -1308,12 +1447,12 @@ describe('the ear pods stand proud of the head', () => {
     for (let i = 0; i < 256; i++) {
       const th = (i / 256) * Math.PI * 2
       const y = REST.earPodL.y + EAR_POD_SHAPE.radius * Math.sin(th)
-      const z = REST.earPodL.z + EAR_POD_SHAPE.radius * Math.cos(th)
+      const z = REST.earPodL.z + EAR_POD_SHAPE.radius * EAR_POD_SHAPE.depthScale * Math.cos(th)
       const surfaceX = superellipsoidX(y, z, HEAD_SHELL)
       expect(Number.isFinite(surfaceX)).toBe(true)
       shallowest = Math.min(shallowest, surfaceX - innerFace)
     }
-    expect(shallowest).toBeCloseTo(0.0727, 3)
+    expect(shallowest).toBeCloseTo(0.0707, 3)
     // The full-radius section has to START inside the shell, everywhere round the rim.
     expect(shallowest).toBeGreaterThan(EAR_POD_SHAPE.fillet)
     // And the pod must not be so deep that its far face pokes out the other cheek.
@@ -1321,15 +1460,38 @@ describe('the ear pods stand proud of the head', () => {
   })
 
   /*
-    The regression this file exists to prevent. At the half-thickness the pods
-    shipped with, `outer` was 0.420 against a cheek at 0.360, so five sixths of the
-    pod was buried and the only thing on screen was a 0.06 m crescent of its own rim,
-    seen almost end on. Anything under about 0.10 of protrusion puts it back there.
+    The regression this file exists to prevent, restated for a pod that is now
+    deliberately shallow.
+
+    The original defect was a pod at half-thickness 0.040 whose `outer` was 0.420
+    against a cheek at 0.360: five sixths buried, and the only thing on screen a
+    0.06 m crescent of its own rim seen almost end on, which two reviewers read as a
+    gouge. The old guard was "more than 0.10 of protrusion", and the 66% note has
+    deliberately spent that margin down to 0.0421.
+
+    So the guard moves to what actually distinguishes a shallow pod from a gouge,
+    which is not how far it stands out but whether its rim is CONTINUOUSLY outside the
+    shell all the way round. A crescent appears when part of the rim is proud and part
+    of it is not. This walks the rim ellipse and requires every point of it to clear
+    the cheek, which the 0.040 pod would have failed and this one passes with the
+    protrusion varying only between 0.0421 and 0.0533.
   */
-  it('protrudes far enough to read as a pod rather than as a hole in the cheek', () => {
-    const cheekX = superellipsoidX(REST.earPodL.y, REST.earPodL.z, HEAD_SHELL)
-    expect(outer - cheekX).toBeGreaterThan(0.1)
-    expect(outer - cheekX).toBeCloseTo(0.1251, 3)
+  it('keeps its whole rim proud of the cheek, so no crescent can open', () => {
+    let least = Infinity
+    let most = -Infinity
+    for (let i = 0; i < 256; i++) {
+      const th = (i / 256) * Math.PI * 2
+      const y = REST.earPodL.y + EAR_POD_SHAPE.radius * Math.sin(th)
+      const z = REST.earPodL.z + EAR_POD_SHAPE.radius * EAR_POD_SHAPE.depthScale * Math.cos(th)
+      const proud = outer - superellipsoidX(y, z, HEAD_SHELL)
+      least = Math.min(least, proud)
+      most = Math.max(most, proud)
+    }
+    expect(least).toBeGreaterThan(0.02)
+    expect(least).toBeCloseTo(0.0421, 3)
+    expect(most).toBeCloseTo(0.0533, 3)
+    // Nearly uniform round the rim, which is what stops it reading as a crescent.
+    expect(most - least).toBeLessThan(0.02)
   })
 
   /*
@@ -1347,7 +1509,11 @@ describe('the ear pods stand proud of the head', () => {
   it('cannot break the head`s profile outline, which is why the fix is shading', () => {
     expect(EAR_POD_SHAPE.radius).toBeLessThan(HEAD_SHELL.b)
     expect(Math.abs(REST.earPodL.y) + EAR_POD_SHAPE.radius).toBeLessThan(HEAD_SHELL.b - 0.1)
-    expect(Math.abs(REST.earPodL.z) + EAR_POD_SHAPE.radius).toBeLessThan(HEAD_SHELL.c - 0.1)
+    // z uses the SQUASHED radius, because that is the pod's real reach fore and aft.
+    // The narrowing pulls it a further 0.063 inside the outline, so the note that
+    // narrowed the ears also moved them further from ever breaking this silhouette.
+    const podZ = EAR_POD_SHAPE.radius * EAR_POD_SHAPE.depthScale
+    expect(Math.abs(REST.earPodL.z) + podZ).toBeLessThan(HEAD_SHELL.c - 0.1)
   })
 
   /*
@@ -1385,7 +1551,12 @@ describe('the ear pods stand proud of the head', () => {
     const box = g.boundingBox!
     expect(box.max.x).toBeCloseTo(EAR_POD_SHAPE.halfThickness, 6)
     expect(box.max.y).toBeCloseTo(EAR_POD_SHAPE.radius, 6)
-    expect(box.max.z).toBeCloseTo(EAR_POD_SHAPE.radius, 6)
+    expect(box.max.z).toBeCloseTo(EAR_POD_SHAPE.radius * EAR_POD_SHAPE.depthScale, 6)
+    // Absolute, so the fin's actual dimensions are on the record and not only its
+    // ratios: 0.124 of extrusion, 0.210 of height, 0.084 of depth.
+    expect(box.max.x * 2).toBeCloseTo(0.124, 6)
+    expect(box.max.y * 2).toBeCloseTo(0.21, 6)
+    expect(box.max.z * 2).toBeCloseTo(0.084, 6)
   })
 })
 
@@ -1470,22 +1641,61 @@ describe('the diaper is a cushion and not a pillow', () => {
   })
 
   /*
-    The width and depth are unchanged, and that matters more than it looks:
-    `PROPORTIONS.torsoWidthMax` is 0.62, the head-over-torso inversion is the thing
-    that makes this character read as an infant rather than as a short adult, and the
-    silhouette test in `05-character-vfx.md` compares scanlines against it.
+    The hips no longer OWN `PROPORTIONS.torsoWidthMax` and that is the change.
 
-    Measured on the built geometry, because `a` is 0.2871 rather than 0.31: the taper
-    multiplies every latitude including the equator, so the solid's widest half-width
-    is `a * max(taper * rim)`, which is a numeric maximum and not a closed form. A
-    comment claiming the factor would be exactly the kind of thing this file keeps
-    finding wrong.
+    This test asserted the diaper's width against `torsoWidthMax` because the diaper
+    was the widest band below the neck at 0.62 while the torso measured 0.578. With the
+    torso's taper inverted the ordering reverses: the torso is 0.580 and the diaper
+    narrows to 0.496. So the assertion becomes the ordering itself, which is the thing
+    the "one flowing torso" note is actually about, plus the built dimensions pinned so
+    an edit to `a`, `b`, `c` or `taperTop` has to come and look at them.
+
+    Measured on the built geometry, because `a` is 0.240 rather than 0.2478: the taper
+    multiplies every latitude including the equator, so the solid's widest half-width is
+    `a * max(taper * rim)`, which is a numeric maximum and not a closed form. A comment
+    claiming the factor would be exactly the kind of thing this file keeps finding
+    wrong.
   */
-  it('keeps the hip width and depth the proportion ladder is built on', () => {
+  it('is narrower than the torso above it, which is what makes it one unit', () => {
     const box = diaper().boundingBox!
-    expect(box.max.x - box.min.x).toBeCloseTo(PROPORTIONS.torsoWidthMax, 3)
-    expect(box.max.z - box.min.z).toBeCloseTo(0.52, 3)
-    expect(box.max.y - box.min.y).toBeCloseTo(0.28, 3)
+    const torsoBox = taperedSuperellipsoid(TORSO).boundingBox!
+    expect(box.max.x).toBeLessThan(torsoBox.max.x)
+    // The torso is now the widest band below the neck, so it is the one that has to
+    // match what `PROPORTIONS` publishes.
+    expect(torsoBox.max.x * 2).toBeCloseTo(PROPORTIONS.torsoWidthMax, 3)
+    // Built dimensions, pinned.
+    expect(box.max.x - box.min.x).toBeCloseTo(0.496, 3)
+    expect(box.max.z - box.min.z).toBeCloseTo(0.416, 3)
+    expect(box.max.y - box.min.y).toBeCloseTo(0.31, 3)
+  })
+
+  /*
+    The note is "the current waist unit to become narrowed by 50%", and the literal
+    value detaches both legs from the body. This records the measurement so the
+    decision is auditable rather than a remembered judgement.
+
+    There is no thigh mesh on this character - `Leg` in `RobotModel.tsx` is a bare node,
+    then the knee, and the shin capsule is the first geometry - so this garment is the
+    entire pelvis and the only thing covering the top of each leg. At `a * 0.5` the
+    solid's widest half-width is 0.1549 and at the shin's top it reaches 0.1065,
+    against a leg axis at 0.19. The axis would be 0.0835 outside the garment and the
+    shin's inner edge would clear it by 0.0015, which is a graze rather than an
+    attachment.
+  */
+  it('records why the literal 50% narrowing was not shipped', () => {
+    const half = taperedSuperellipsoid({ ...DIAPER, a: DIAPER.a * 0.5 })
+    const pos = half.getAttribute('position')
+    // Half-width at the shin's top, which is hips-local y -0.135.
+    let atShinTop = 0
+    for (let i = 0; i < pos.count; i++) {
+      if (pos.getY(i) > -0.13) continue
+      atShinTop = Math.max(atShinTop, Math.abs(pos.getX(i)))
+    }
+    const legAxis = Math.abs(REST.legL.x)
+    expect(atShinTop).toBeLessThan(legAxis)
+    expect(legAxis - atShinTop).toBeGreaterThan(0.05)
+    // And what shipped instead does enclose it. Asserted properly below.
+    expect(half.boundingBox!.max.x).toBeLessThan(legAxis)
   })
 
   /*
@@ -1496,9 +1706,9 @@ describe('the diaper is a cushion and not a pillow', () => {
   it('is widest above its own middle and tucks under below it', () => {
     /*
       Measured per latitude RING rather than by bucketing on a height, because
-      `taperedSuperellipsoid` samples v uniformly and `e1` 0.50 then clusters the rows
-      toward the poles: there is no row within 6 mm of y 0.060 to bucket. The rings
-      are what the generator actually emits, so they are what gets measured.
+      `taperedSuperellipsoid` samples v uniformly and a low `e1` then clusters the rows
+      toward the poles: there is no row within 6 mm of the widest band to bucket. The
+      rings are what the generator actually emits, so they are what gets measured.
     */
     const pos = diaper().getAttribute('position')
     const rings = new Map<string, number>()
@@ -1518,30 +1728,463 @@ describe('the diaper is a cushion and not a pillow', () => {
 
     const at = (y: number) => rows.reduce((m, r) => (Math.abs(r.y - y) < Math.abs(m.y - y) ? r : m), rows[0])
     expect(at(0).w).toBeLessThan(widest.w)
-    // The box held 80.4% of its width at y -0.12, so this is a real tuck and not a
-    // rounding difference.
-    expect(at(-0.12).w / widest.w).toBeLessThan(0.804)
+    /*
+      The tuck is now shallower than the 0.804 this asserted, and deliberately.
+
+      `e1` went 0.50 to 0.35 because a squarer vertical section holds width nearer the
+      poles, and that is exactly what lets `a` come down for the waist while the pelvis
+      still reaches the legs. A hard tuck and a narrow waist are the same parameter
+      pulling in opposite directions, and the legs win: the test below is the one with
+      a defect behind it. So this checks there is still a real tuck rather than pinning
+      how deep it is.
+    */
+    expect(at(-0.12).w / widest.w).toBeLessThan(0.96)
+    expect(at(-0.145).w / widest.w).toBeLessThan(0.85)
   })
 
   /*
-    The shin has to emerge from the garment rather than from beside it. Its top is at
-    hips-local y -0.135 spanning |x| 0.105 to 0.275, and the diaper has to still be
-    wide enough there to overlap it. `DIAPER.z` is not in this arithmetic because both
-    parts are near z 0 at their closest and the overlap that matters is lateral.
+    THE LEG ATTACHMENT, and this test was passing over a real gap.
+
+    It asserted that the garment reaches the shin's INNER edge at `|x| 0.105`. That is
+    much too weak: 0.105 passes comfortably while the thing that matters, whether the
+    garment encloses the leg's AXIS at 0.19, was failing. Measured on the shipped
+    build, the diaper reached 0.1718 at the shin's top against an axis at 0.19, and
+    covered the axis only down to world 0.3916 while the shin's top is at 0.3850 - so
+    the top 6.6 mm of each shin was outside the garment with daylight between the
+    underside of the hip and the top of the leg. There is no thigh mesh to hide it.
+    `DIAPER.b` went 0.14 to 0.155 to fix it, and the assertion is now the strong one.
+
+    `DIAPER.z` is not in this arithmetic because both parts are near z 0 at their
+    closest and the overlap that matters is lateral.
   */
-  it('still meets the top of the shin, so no leg floats free', () => {
+  it('encloses the leg axis at the top of the shin, so no leg floats free', () => {
     const pos = diaper().getAttribute('position')
     let w = 0
     for (let i = 0; i < pos.count; i++) {
       if (pos.getY(i) > -0.13) continue
       w = Math.max(w, Math.abs(pos.getX(i)))
     }
-    const shinInnerX = Math.abs(REST.legL.x) - 0.085
-    expect(w).toBeGreaterThan(shinInnerX)
+    const legAxis = Math.abs(REST.legL.x)
+    expect(w).toBeGreaterThan(legAxis)
+    // With margin, so the leg emerges from the garment rather than tangent to it.
+    expect(w - legAxis).toBeGreaterThan(0.015)
+    // The old, too-weak condition, kept so it is clear it was never the binding one.
+    expect(w).toBeGreaterThan(legAxis - 0.085)
   })
 
   it('is a closed solid wound outward', () => {
     expect(signedVolume(diaper())).toBeGreaterThan(0)
+  })
+})
+
+/*
+  THE TORSO AND THE HIPS AS ONE FLOWING UNIT.
+
+  The note is "the waist should look like it's part of the same unit as the chest... one
+  flowing torso, starting wide at the shoulders and narrowed down by the waist", and it
+  is a relationship between two meshes on two different rig nodes rather than a property
+  of either one. So it is asserted here, on the visible SILHOUETTE, which is
+  `max(torsoHalfWidth, diaperHalfWidth)` at each world height.
+
+  The two meshes cannot be merged into one. `chest` and `hips` carry genuinely different
+  motion - the gait's bob, shift, roll, lean and yaw are on `hips`, and
+  `SPRINGS.chestYaw` is the torso's lag against them, a real waist twist - and one mesh
+  on `chest` would twist the pelvis while the legs, which hang off `hips`, stayed put. So
+  the unity has to be built in the profiles, and these are the three properties that
+  make two solids read as one form.
+
+  What shipped failed all three: the silhouette widened monotonically DOWNWARD from the
+  shoulders, the diaper overtook the torso while rising as the torso fell, and the
+  resulting crease at the waist is what "looks like a separate unit" was.
+*/
+describe('the torso and the hips read as one flowing unit', () => {
+  /*
+    Half-width per latitude ring, in WORLD y, off the built meshes. Rings rather than
+    height buckets for the same reason the diaper block gives: the generator samples v
+    uniformly and a low `e1` clusters rows toward the poles.
+  */
+  const ladder = (
+    opts: Parameters<typeof taperedSuperellipsoid>[0],
+    worldY: number,
+  ): { y: number; hx: number }[] => {
+    const pos = taperedSuperellipsoid(opts).getAttribute('position')
+    const rings = new Map<string, number>()
+    for (let i = 0; i < pos.count; i++) {
+      const key = pos.getY(i).toFixed(6)
+      rings.set(key, Math.max(rings.get(key) ?? 0, Math.abs(pos.getX(i))))
+    }
+    return [...rings.entries()]
+      .map(([y, hx]) => ({ y: worldY + Number(y), hx }))
+      .sort((a, b) => b.y - a.y)
+  }
+  // The spine, from `REST`, so a change to it comes through here.
+  const chestY = REST.hips.y + REST.chest.y
+  const hipsY = REST.hips.y
+  const torsoLadder = () => ladder(TORSO, chestY)
+  const diaperLadder = () => ladder(DIAPER, hipsY)
+  /** Linear interpolation between rings, and 0 outside the solid's own span. */
+  const at = (rows: { y: number; hx: number }[], y: number): number => {
+    if (y > rows[0].y || y < rows[rows.length - 1].y) return 0
+    for (let i = 0; i < rows.length - 1; i++) {
+      if (rows[i].y >= y && y >= rows[i + 1].y) {
+        const t = (y - rows[i + 1].y) / (rows[i].y - rows[i + 1].y || 1)
+        return rows[i + 1].hx + t * (rows[i].hx - rows[i + 1].hx)
+      }
+    }
+    return 0
+  }
+
+  it('is widest at the shoulders and not at the hips', () => {
+    const T = torsoLadder()
+    const D = diaperLadder()
+    const widest = [...T, ...D].reduce((m, r) => (r.hx > m.hx ? r : m), T[0])
+    // The widest band belongs to the torso, and sits above the chest's own centre.
+    expect(widest.y).toBeGreaterThan(chestY)
+    // Near the shoulder joint rather than up at the neck.
+    expect(widest.y).toBeLessThan(REST.hips.y + REST.chest.y + REST.shoulderL.y + 0.02)
+    // And it is the torso's, not the garment's.
+    expect(at(T, widest.y)).toBeGreaterThan(at(D, widest.y))
+  })
+
+  /*
+    The property that makes it "one flowing torso" rather than two stacked solids: from
+    the widest band down to the pelvis the visible outline never grows again. A
+    re-widening is a bulge, and a bulge below a narrowing is exactly what reads as a
+    separate unit bolted on.
+
+    The tolerance is 4 mm over a 5 mm step. What shipped re-widened by 0.0211 across the
+    waist; this holds to 0.0011, which is one millimetre spread over 8 cm.
+  */
+  it('never re-widens below the shoulders, so there is no bulge at the waist', () => {
+    const T = torsoLadder()
+    const D = diaperLadder()
+    const widest = [...T, ...D].reduce((m, r) => (r.hx > m.hx ? r : m), T[0])
+    let prev = Infinity
+    let worstRise = 0
+    for (let y = widest.y; y >= hipsY - DIAPER.b + 0.015; y -= 0.005) {
+      const visible = Math.max(at(T, y), at(D, y))
+      // Skip the collapsing pole rings, which are not silhouette.
+      if (visible < 0.05) continue
+      worstRise = Math.max(worstRise, visible - prev)
+      prev = visible
+    }
+    expect(worstRise).toBeLessThan(0.004)
+  })
+
+  /*
+    And the two surfaces cross rather than step. Where the garment overtakes the torso
+    their widths have to match, or the garment's edge stands proud as a lip and the
+    junction reads as a seam between two parts.
+
+    What shipped crossed with the diaper 0.0085 wider AND rising while the torso fell.
+  */
+  it('hands over from torso to garment with no step in width', () => {
+    const T = torsoLadder()
+    const D = diaperLadder()
+    let crossover = 0
+    for (let y = chestY; y >= hipsY; y -= 0.001) {
+      if (at(D, y) > at(T, y) && at(T, y) > 0.05) {
+        crossover = y
+        break
+      }
+    }
+    expect(crossover).toBeGreaterThan(0)
+    expect(Math.abs(at(T, crossover) - at(D, crossover))).toBeLessThan(0.002)
+    // The crossover happens at the waist, below the chest and above the leg line.
+    expect(crossover).toBeLessThan(chestY)
+    expect(crossover).toBeGreaterThan(hipsY)
+  })
+
+  /*
+    The waist is narrower than the shoulders, which is the note's own description of the
+    shape and the one thing the shipped build had backwards: it measured 2.9% WIDER at
+    the waist than at the shoulders.
+  */
+  it('narrows from the shoulders to the waist', () => {
+    const T = torsoLadder()
+    const D = diaperLadder()
+    const widest = [...T, ...D].reduce((m, r) => (r.hx > m.hx ? r : m), T[0]).hx
+    const waist = Math.max(at(T, 0.62), at(D, 0.62))
+    expect(waist).toBeLessThan(widest)
+    // A taper you can see, not a rounding difference.
+    expect(1 - waist / widest).toBeGreaterThan(0.1)
+  })
+
+  /*
+    Both solids still share a material and a rear profile close enough to read as one
+    moulding. The garment stands further back than the torso - the reference's puffy
+    diaper rear, and deliberate - but the ledge that step creates at the junction was
+    0.0477 and is now 0.0226.
+  */
+  it('keeps the puffy rear without a ledge across the junction', () => {
+    /*
+      Measured at the JUNCTION HEIGHT and not on the bounding boxes, which is a trap
+      this test fell into on the first attempt. The two solids reach their deepest z at
+      different heights - the torso near its widest band up at world 0.83, the garment
+      down near the hips - so comparing `boundingBox.min.z` compares two rings that are
+      nowhere near each other and reports the torso as the deeper part. What the eye
+      sees at the seam is the two rings that meet there.
+    */
+    const rearAt = (
+      opts: Parameters<typeof taperedSuperellipsoid>[0],
+      worldY: number,
+      zOffset: number,
+      target: number,
+    ): number => {
+      const pos = taperedSuperellipsoid(opts).getAttribute('position')
+      const rings = new Map<string, number>()
+      for (let i = 0; i < pos.count; i++) {
+        const key = pos.getY(i).toFixed(6)
+        rings.set(key, Math.min(rings.get(key) ?? Infinity, pos.getZ(i) + zOffset))
+      }
+      let best = Infinity
+      let bestDy = Infinity
+      for (const [y, z] of rings) {
+        const dy = Math.abs(worldY + Number(y) - target)
+        if (dy < bestDy) {
+          bestDy = dy
+          best = z
+        }
+      }
+      return best
+    }
+    // The waist, where the two parts hand over.
+    const junction = 0.626
+    const torsoRear = rearAt(TORSO, chestY, 0, junction)
+    const diaperRear = rearAt(DIAPER, hipsY, DIAPER.z, junction)
+    // Still a puffy rear: the garment stands further back than the torso at the seam.
+    expect(diaperRear).toBeLessThan(torsoRear)
+    // But not a shelf. It was 0.0477 and is now 0.0226.
+    expect(torsoRear - diaperRear).toBeLessThan(0.03)
+    expect(torsoRear - diaperRear).toBeGreaterThan(0.01)
+  })
+})
+
+/*
+  THE MITTEN AND ITS TWO FINGERS.
+
+  The note is "generate two fingers that should be rectangles extruding from the hand,
+  and update the hand from a sphere to an oblong shape". The fingers are the reason this
+  block is long: a stub extruding from the blob it grows out of is the exact shape of
+  part this project has shipped fully enclosed twice - a sole light authored "recessed
+  1 mm above the sole plane" that sat inside opaque rubber, and a three-ring port whose
+  inner rings were inside a solid disc - and in both cases a test existed and pinned the
+  defect rather than catching it.
+
+  So the exposure is measured on the BUILT geometry of both parts against each other,
+  not on the authoring numbers. `HAND.taperTop` is 1 specifically so that
+  `superellipsoidField` is a valid inside/outside test on the hand, which is what makes
+  that possible at all.
+*/
+describe('the mitten hand and its fingers', () => {
+  const hand = () => taperedSuperellipsoid(HAND)
+  const finger = () => taperedSuperellipsoid(FINGER)
+
+  it('is an oblong along the arm rather than a sphere', () => {
+    const box = hand().boundingBox!
+    // Longest on y, which is the axis the arm hangs down and the fingers point.
+    expect(box.max.y).toBeGreaterThan(box.max.x)
+    expect(box.max.y).toBeGreaterThan(box.max.z)
+    // Oblong by a margin that reads, not by a rounding difference. A sphere is 1.0.
+    expect(box.max.y / box.max.x).toBeGreaterThan(1.25)
+    // Built dimensions pinned: 0.23 x 0.32 x 0.20, where the sphere was 0.28 across.
+    expect(box.max.x * 2).toBeCloseTo(0.23, 3)
+    expect(box.max.y * 2).toBeCloseTo(0.32, 3)
+    expect(box.max.z * 2).toBeCloseTo(0.198, 3)
+  })
+
+  it('keeps the mitten inside the reference band on its longest axis', () => {
+    const box = hand().boundingBox!
+    // 00-references.md gives hands at 0.35 to 0.45 head-widths. The band is quoted for
+    // a round mitten, so for an oblong it is the long axis that carries the mass.
+    const longest = (box.max.y * 2) / PROPORTIONS.headWidth
+    expect(longest).toBeGreaterThan(0.35)
+    expect(longest).toBeLessThan(0.45)
+  })
+
+  it('builds two fingers with a real gap between them', () => {
+    // Two, mirrored about the hand's centreline, so neither sits on it.
+    expect(FINGER.x).toBeGreaterThan(FINGER.a)
+    const gap = 2 * (FINGER.x - FINGER.a)
+    expect(gap).toBeGreaterThan(0.02)
+    // And they are not so wide that the pair leaves no palm around them.
+    expect(FINGER.x + FINGER.a).toBeLessThan(HAND.a)
+  })
+
+  it('reads as a rectangle rather than as a capsule', () => {
+    /*
+      `e1` 0.25 is what makes it a block. Measured on the built mesh: it has to still be
+      near its full width well up toward its own tip, which a capsule is not. At 80% of
+      the half-height a capsule of this aspect holds about 60% of its width; this holds
+      over 90%.
+    */
+    const pos = finger().getAttribute('position')
+    let full = 0
+    let high = 0
+    for (let i = 0; i < pos.count; i++) {
+      const x = Math.abs(pos.getX(i))
+      full = Math.max(full, x)
+      if (pos.getY(i) > 0.8 * FINGER.b) high = Math.max(high, x)
+    }
+    expect(high / full).toBeGreaterThan(0.85)
+  })
+
+  /*
+    THE VISIBILITY PROOF, and the reason this block exists.
+
+    Every vertex of the built finger is tested against the built hand's own field. A
+    finger that is swallowed fails here; so does a finger that has floated off the palm,
+    because the root has to stay inside.
+  */
+  it('extrudes from the hand rather than being swallowed by it', () => {
+    const pos = finger().getAttribute('position')
+    const centreY = fingerCentreY()
+    let outside = 0
+    let inside = 0
+    for (let i = 0; i < pos.count; i++) {
+      const field = superellipsoidField(
+        pos.getX(i) + FINGER.x,
+        pos.getY(i) + centreY,
+        pos.getZ(i),
+        HAND,
+      )
+      expect(Number.isFinite(field)).toBe(true)
+      if (field > 1) outside++
+      else inside++
+    }
+    // Most of the finger is out in the open, so it is a finger and not a bump.
+    expect(outside).toBeGreaterThan(pos.count * 0.4)
+    // And some of it is still in, so it is attached with no stalk to model.
+    expect(inside).toBeGreaterThan(0)
+  })
+
+  it('stands clear of the hand at every point across its own footprint', () => {
+    const centreY = fingerCentreY()
+    const tip = centreY - FINGER.b
+    /*
+      The hand's surface is deepest nearest x 0, so the finger's INNER edge is the worst
+      corner and the one that decides whether the exposure is real all the way across.
+      Checked at the inner edge, the centreline and the outer edge.
+    */
+    for (const x of [FINGER.x - FINGER.a, FINGER.x, FINGER.x + FINGER.a]) {
+      const surface = -superellipsoidY(x, 0, HAND)
+      expect(Number.isFinite(surface)).toBe(true)
+      expect(surface - tip).toBeGreaterThan(0.04)
+    }
+    // The worst corner is the inner one, which is the claim the loop above rests on.
+    const innerClear = -superellipsoidY(FINGER.x - FINGER.a, 0, HAND) - tip
+    const outerClear = -superellipsoidY(FINGER.x + FINGER.a, 0, HAND) - tip
+    expect(innerClear).toBeLessThan(outerClear)
+  })
+
+  it('extends the hand silhouette past the hand own lowest point', () => {
+    const tip = fingerCentreY() - FINGER.b
+    // Below the hand's bottom pole, so the pair change the outline rather than
+    // decorating a surface. This is the assertion a swallowed finger fails hardest.
+    expect(tip).toBeLessThan(-HAND.b)
+    expect(-HAND.b - tip).toBeGreaterThan(0.03)
+  })
+
+  it('keeps its root buried, so it cannot float off the palm', () => {
+    const centreY = fingerCentreY()
+    const root = centreY + FINGER.b
+    // The block's top face is inside the hand solid at the finger's own x.
+    expect(superellipsoidField(FINGER.x, root, 0, HAND)).toBeLessThan(1)
+    // By the amount `FINGER.embed` claims, measured off the surface rather than assumed.
+    expect(root - -superellipsoidY(FINGER.x, 0, HAND)).toBeCloseTo(FINGER.embed, 9)
+  })
+
+  it('is a closed solid wound outward', () => {
+    expect(signedVolume(hand())).toBeGreaterThan(0)
+    expect(signedVolume(finger())).toBeGreaterThan(0)
+  })
+})
+
+/*
+  THE BOOT AND THE LEG IT HANGS FROM.
+
+  The note is "the feet should be far more narrow, reduce the overall size of the feet by
+  80% and ensure it's centered on the legs". A literal 80% on every axis breaks the leg
+  in two measurable ways, and both are asserted here so the decision to shrink by less on
+  the height is auditable rather than remembered.
+
+  The shin is a `capsuleGeometry(0.085, 0.1)` on the knee node, so it spans knee-local
+  y +-0.135 and is at full radius between +-0.05. In world terms, with the knee at
+  y 0.25: the bottom tip is at 0.115 and the capsule is at its full 0.085 down to 0.20.
+*/
+describe('the boot and the leg it hangs from', () => {
+  const SHIN_RADIUS = 0.085
+  const SHIN_HALF_LENGTH = 0.05
+  const kneeY = REST.hips.y + REST.legL.y + REST.kneeL.y
+  const shinTip = kneeY - SHIN_HALF_LENGTH - SHIN_RADIUS
+  const shinFullTo = kneeY - SHIN_HALF_LENGTH
+  /** The capsule's radius at a world height, on the lower hemisphere. */
+  const shinRadiusAt = (y: number): number => {
+    if (y >= shinFullTo) return SHIN_RADIUS
+    if (y <= shinTip) return 0
+    return Math.sqrt(SHIN_RADIUS ** 2 - (shinFullTo - y) ** 2)
+  }
+
+  /*
+    The literal value, recorded rather than shipped.
+
+    At 20% of every axis the boot is 0.064 x 0.034 x 0.088. Its top would be at world
+    0.034 with the sole on the ground, so the shin's tip at 0.115 would float 0.081 above
+    it with nothing joining them, and 0.064 of width against a leg 0.170 across leaves
+    the leg overhanging its own boot by 0.053 per side. That is not "narrow", it is two
+    disconnected parts.
+  */
+  it('records why a literal 80% linear reduction was not shipped', () => {
+    const literal = { width: 0.32 * 0.2, height: 0.17 * 0.2, depth: 0.44 * 0.2 }
+    expect(literal.height).toBeLessThan(shinTip)
+    expect(shinTip - literal.height).toBeGreaterThan(0.05)
+    expect(literal.width / 2).toBeLessThan(SHIN_RADIUS)
+  })
+
+  it('honours the note on overall size even though it could not on linear scale', () => {
+    const oldVolume = 0.32 * 0.17 * 0.44
+    const newVolume = FOOT.width * FOOT.height * FOOT.depth
+    // The bounding volume falls 84.8%, past the 80% the note asked for.
+    expect(1 - newVolume / oldVolume).toBeGreaterThan(0.8)
+    // And the plan footprint, which is what "the feet are too big" is about when you
+    // are looking down at a character, falls 80.1%.
+    expect(1 - (FOOT.width * FOOT.depth) / (0.32 * 0.44)).toBeGreaterThan(0.8)
+    // Narrower is the note's first clause, and the width falls by more than the height.
+    expect(FOOT.width / 0.32).toBeLessThan(FOOT.height / 0.17)
+  })
+
+  /*
+    The constraint that fixes the height. The boot has to swallow the end of the shin,
+    or the leg stops in mid air above it.
+  */
+  it('swallows the end of the shin', () => {
+    const bootTop = PROPORTIONS.soleY + FOOT.height
+    expect(shinTip).toBeLessThan(bootTop)
+    expect(shinTip).toBeGreaterThan(PROPORTIONS.soleY)
+    // With real margin rather than tangentially.
+    expect(bootTop - shinTip).toBeGreaterThan(0.01)
+  })
+
+  /*
+    And is wider than the leg where the two meet, which the literal value was not. A boot
+    narrower than its own ankle reads as broken rather than as narrow.
+  */
+  it('is wider than the shin at the plane where they meet', () => {
+    const bootTop = PROPORTIONS.soleY + FOOT.height
+    const shinThere = shinRadiusAt(bootTop)
+    expect(FOOT.width / 2).toBeGreaterThan(shinThere)
+    expect(FOOT.width / 2 - shinThere).toBeGreaterThan(0.015)
+  })
+
+  it('is still narrower than it is long, so it reads as a boot', () => {
+    expect(FOOT.width).toBeLessThan(FOOT.depth)
+  })
+
+  it('keeps its corner radius inside what RoundedBoxGeometry would clamp to', () => {
+    // The clamp is half the smallest dimension. Above it the box silently becomes a
+    // pill, which is the trap `DIAPER` records for the shape it replaced.
+    const clamp = Math.min(FOOT.width, FOOT.height, FOOT.depth) / 2
+    expect(FOOT.radius).toBeLessThan(clamp)
   })
 })
 
@@ -1553,14 +2196,34 @@ describe('the diaper is a cushion and not a pillow', () => {
   on the model while doing it.
 */
 describe('the widest point of the character', () => {
+  // `HAND.a` rather than the `HAND.radius` this read, because the mitten is an oblong
+  // now. `a` is its half-width on x, which is the axis this block is about.
   const handX =
     Math.abs(REST.shoulderL.x) +
     Math.abs(REST.handSocketL.y) * Math.sin(Math.abs(REST_ROTATION.shoulderL!.z)) +
-    HAND.radius
+    HAND.a
 
   it('is still the mittens and not the ear pods', () => {
     const podX = Math.abs(REST.earPodL.x) + EAR_POD_SHAPE.halfThickness
     expect(handX).toBeGreaterThan(podX)
+    /*
+      The margin GREW, from 0.039 to 0.100, and it is worth saying because the two
+      notes in this pass pulled it in opposite directions: the hand narrowed by 0.025
+      per side, which shrinks this, and the pods came in 0.040 and lost 0.043 of
+      thickness, which grows it by more. The block's comment above says "the pods moved
+      outward, and this is the check that they did not become the widest thing" - they
+      have now moved back in, so this is no longer a close call.
+    */
+    expect(handX - podX).toBeGreaterThan(0.05)
+  })
+
+  /*
+    And the FINGERS do not change the answer, which is the new part that could have.
+    They hang off the palm end, so they extend the character downward rather than
+    outward, and their outer edge stays inside the hand's own outline in x.
+  */
+  it('is not the fingers, which stay inside the hand outline', () => {
+    expect(FINGER.x + FINGER.a).toBeLessThan(HAND.a)
   })
 })
 

@@ -89,8 +89,21 @@ export const PROPORTIONS = {
   totalHeight: 1.36,
   headHeight: 0.54,
   headWidth: 0.72,
-  /** The widest band below the neck, which is the diaper rather than the torso. */
-  torsoWidthMax: 0.62,
+  /**
+   * The widest band below the neck, which is now the TORSO rather than the diaper.
+   *
+   * It was 0.62, and that number was the diaper's: the torso measured 0.578 built,
+   * and `DIAPER.a` was tuned to hit 0.62 exactly so this constant would hold. With
+   * the taper inverted the torso is the widest band at 0.580 and the diaper narrows
+   * to 0.496 below it, so the character's widest point moved from the nappy to the
+   * shoulders. That is the whole intent of the change and this is the one number
+   * that records it.
+   *
+   * `robotPose.test.ts` requires `headWidth / torsoWidthMax >= 1.1`, which is what
+   * keeps the head reading as an infant's rather than a short adult's. The ratio
+   * improves from 1.161 to 1.241.
+   */
+  torsoWidthMax: 0.58,
   /** The sole plane sits at the model's own origin. */
   soleY: 0,
 } as const
@@ -126,11 +139,41 @@ export const REST = {
   legR: { x: 0.19, y: -0.14, z: 0 },
   kneeL: { x: 0, y: -0.13, z: 0 },
   kneeR: { x: 0, y: -0.13, z: 0 },
-  /** World 0.085, and the foot is 0.17 tall, so the sole lands exactly on y = 0. */
-  footL: { x: 0, y: -0.165, z: 0.06 },
-  footR: { x: 0, y: -0.165, z: 0.06 },
-  earPodL: { x: -0.38, y: 0, z: -0.02 },
-  earPodR: { x: 0.38, y: 0, z: -0.02 },
+  /**
+   * World 0.065, and the boot is `FOOT.height` 0.13 tall, so the sole lands exactly
+   * on y = 0. Was -0.165 against a boot 0.17 tall, which put the node at world 0.085.
+   *
+   * The y is NOT free once `FOOT.height` changes: `PROPORTIONS.soleY` is 0 and
+   * `totalHeight` 1.36 is measured from it, so a shorter boot at the old node would
+   * have lifted the character 0.020 off the ground with no test failing except the
+   * one that recomputes this sum.
+   *
+   * ## z was 0.06 and the boot was not centred on the leg
+   *
+   * The note is "ensure it's centered on the legs", and it was a real instruction
+   * rather than a no-op. At z 0.06 the box sat 0.06 forward of the shin's axis, so the
+   * old 0.44-deep boot ran from z -0.16 to +0.28: a toe. Worse, and this is the part
+   * nobody had measured, `REST_ROTATION.legL.ry` splays the leg by -0.1 rad, and that
+   * rotation carries the z offset into x - the left boot's centre measured world
+   * x -0.1960 against a shin axis at -0.1900. So the offset was throwing the boot
+   * 0.0060 sideways off its own leg as well as forward of it. At z 0 both go.
+   */
+  footL: { x: 0, y: -0.185, z: 0 },
+  footR: { x: 0, y: -0.185, z: 0 },
+  /**
+   * Pulled inboard from +-0.38, which is 0.04 of the ear pods' 66% extrusion cut.
+   *
+   * The cut cannot come from `EAR_POD_SHAPE.halfThickness` alone. The clearance is
+   * measured from the cheek at `superellipsoidX(0, -0.02, HEAD_SHELL)` = 0.3599, so
+   * hitting 0.0421 of proudness with the socket left at 0.38 needs a half-thickness of
+   * 0.0225, and the head curves away under the pod's rim - the shell is at 0.3487
+   * where the rim reaches y +-0.105. A pod that thin would have had its rim standing
+   * clear of the cheek with a crescent of daylight behind it, which is the artefact
+   * both critique reviewers read as a hole in the character's face. Moving the socket
+   * in and keeping 0.062 of thickness holds the same clearance with 0.0707 of burial.
+   */
+  earPodL: { x: -0.34, y: 0, z: -0.02 },
+  earPodR: { x: 0.34, y: 0, z: -0.02 },
   /**
    * Off-centre on purpose, and it is the one asymmetric feature on the
    * character. A perfectly mirror-symmetric toy reads as a product shot; one
