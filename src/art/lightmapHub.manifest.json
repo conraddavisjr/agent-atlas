@@ -1,0 +1,15 @@
+{
+  "hash": "3f2d36cd",
+  "size": 2048,
+  "texelsPerMetre": 44,
+  "gutter": 2,
+  "charts": 204,
+  "occupancy": 0.6081,
+  "coverage": 0.4958,
+  "rays": 128,
+  "maxDistance": 8,
+  "surfaceAreaSquareMetres": 1071.41,
+  "triangles": 24204,
+  "seconds": 478,
+  "generated": "2026-08-11T00:19:44.410Z"
+}

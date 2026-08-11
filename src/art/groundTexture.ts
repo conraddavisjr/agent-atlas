@@ -1,4 +1,5 @@
 import { CanvasTexture, Color, LinearSRGBColorSpace, RepeatWrapping, SRGBColorSpace } from 'three'
+import { chipTracePaths } from './decalTextures'
 import { palette } from './palette'
 import { mulberry32 } from './placement'
 
@@ -42,6 +43,32 @@ const METRES_PER_TILE = 8
  * read as three separate values in a desaturated frame.
  */
 export const GROUND_BASE_LIFT = 0.12
+
+/**
+ * The hardest alpha any circuit mark on the plateau may be composited at.
+ *
+ * Not a taste limit, a band limit, and it is the number that was missing.
+ *
+ * The canvas composites in byte space, so a mark at alpha `a` lands at
+ * `base * (1 - a) + grassDeep * a`. With the base at a display luma of 0.7261 and
+ * `grassDeep` at 0.4055, and with the surface MEASURED rendering at 0.650 against
+ * its 0.7261 albedo, the rendered value of a mark is:
+ *
+ * | alpha | albedo luma | rendered | headroom above the 0.56 floor |
+ * | --- | --- | --- | --- |
+ * | 0.13 | 0.6845 | 0.6124 | 0.052 |
+ * | 0.22 | 0.6556 | 0.5863 | 0.026 |
+ * | 0.24 | 0.6492 | 0.5805 | 0.021 |
+ * | 0.30 | 0.6299 | 0.5632 | 0.003 |
+ * | 0.33 | 0.6203 | 0.5545 | OUT OF BAND |
+ *
+ * 0.24 is the ceiling this file will use, leaving 0.021 for the lightmap bake
+ * arriving on this surface from another stream. The old code had a trace ceiling
+ * of 0.22 and then drew its end pads at `alpha * 1.5`, which is 0.33 and renders
+ * at 0.5545 - a live band violation on the largest surface in the frame, present
+ * because nobody had done this arithmetic.
+ */
+export const GROUND_TRACE_ALPHA_MAX = 0.24
 
 /**
  * The ground's base colour, as a `Color` in the renderer's linear space.
@@ -202,44 +229,54 @@ export function createGroundTexture(): CanvasTexture {
     Drawn in `grassDeep`, so when the palette's greens come down in value the
     traces come down with them and keep reading as traces rather than as
     scratches.
+
+    The routine itself now lives in `decalTextures.chipTracePaths`, because the
+    deck's printed panel map wants the same mark and section 7.5 of the materials
+    spec asked for exactly that reuse. It takes `rand` rather than a seed
+    specifically so this call site keeps its position in the stream it SHARES
+    with the mottling pass above - see the note on `ChipTraceSpec.rand`, and the
+    byte-identity assertion in `decalTextures.test.ts` that pins it.
   */
   const trace = new Color(palette.grassDeep)
   const grid = SIZE / 16
-  const directions: [number, number][] = [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-    [1, 1],
-    [-1, 1],
-    [1, -1],
-    [-1, -1],
-  ]
 
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
 
-  for (let i = 0; i < 26; i++) {
-    let x = Math.round(rand() * 16) * grid
-    let y = Math.round(rand() * 16) * grid
-    const segments = 2 + Math.floor(rand() * 4)
+  for (const run of chipTracePaths({
+    rand,
+    /*
+      MEASURED, and this is the correction rather than the tuning.
 
-    const path: [number, number][] = [[x, y]]
-    let [dx, dy] = directions[Math.floor(rand() * directions.length)]
+      The brief for this pass said these traces are faint because their alpha is
+      too low at 0.10 to 0.22, and asked for more. The arithmetic says otherwise:
+      the plateau's albedo is 0.7261 of display luma, `grassDeep` is 0.4055, the
+      surface renders at 0.650 (the bald-ring finding at `HubIsland.tsx:705-712`,
+      0.650 against 0.512 two hundred pixels away), and compositing `grassDeep`
+      over the base at alpha 0.22 therefore renders at 0.5863 - which is 0.026
+      above the gameplay floor of 0.56. Alpha was already within 0.04 of the band
+      limit. There was never more than a rounding error of value available, and
+      spending it would have taken the lawn's backdrop out of band.
 
-    for (let s = 0; s < segments; s++) {
-      const length = (1 + Math.floor(rand() * 3)) * grid
-      x += dx * length
-      y += dy * length
-      path.push([x, y])
-      // Turn rather than continue, so a trace is a route and not a line.
-      const turn = directions[Math.floor(rand() * directions.length)]
-      if (turn[0] !== -dx || turn[1] !== -dy) [dx, dy] = turn
-    }
-
-    const width = 2 + rand() * 5
-    const alpha = 0.1 + rand() * 0.12
-
+      What was actually wrong is the SAME defect as the deck's 2.5 mm panel
+      grooves: the mark is too small to see. At 128 texels per metre a 2 to 7
+      pixel stroke is 16 to 55 mm of world, which against roughly 26 to 40 mm per
+      screen pixel is sub-pixel at the thin end and two pixels at the thick end.
+      A mark below the sampling limit cannot be rescued by contrast, in either
+      channel, at any alpha - the mip chain averages it away before the eye ever
+      gets it. So the width goes up by a factor of three, the count from 26 to 40,
+      and the alpha barely moves.
+    */
+    count: 40,
+    grid,
+    widthMin: 6,
+    widthSpan: 14,
+    alphaMin: 0.13,
+    // Ceiling 0.24, which renders at 0.5805 and keeps 0.021 above the band floor
+    // for the lightmap bake landing on this surface from another stream.
+    alphaSpan: 0.11,
+  })) {
+    const { path, width, alpha } = run
     drawWrapped(ctx, SIZE, () => {
       ctx.strokeStyle = `#${trace.getHexString()}`
       ctx.globalAlpha = alpha
@@ -249,14 +286,69 @@ export function createGroundTexture(): CanvasTexture {
       for (let p = 1; p < path.length; p++) ctx.lineTo(path[p][0], path[p][1])
       ctx.stroke()
 
-      // A pad where the run ends, which is the detail that says "circuit"
-      // rather than "scratch".
-      const [ex, ey] = path[path.length - 1]
+      /*
+        A via pad at every TURN as well as at the end, which is the change that
+        makes a run read as a routed circuit rather than as a bent line. One pad
+        on a five-segment run is a line with a full stop; a pad at each corner is
+        a route between components, and it is what the reference's chip-trace
+        print actually looks like.
+
+        The pad alpha is capped rather than scaled freely: `alpha * 1.5` on the old
+        0.22 ceiling was 0.33, which renders at 0.5518 and is BELOW the gameplay
+        floor. That was a live band violation on the lawn's backdrop, unnoticed
+        because nothing had ever computed it.
+      */
       ctx.fillStyle = `#${trace.getHexString()}`
-      ctx.globalAlpha = alpha * 1.5
+      ctx.globalAlpha = Math.min(GROUND_TRACE_ALPHA_MAX, alpha * 1.4)
+      for (let p = 1; p < path.length; p++) {
+        const last = p === path.length - 1
+        ctx.beginPath()
+        ctx.arc(path[p][0], path[p][1], width * (last ? 1.5 : 1.1), 0, Math.PI * 2)
+        ctx.fill()
+      }
+    })
+  }
+
+  /*
+    Die pads: a handful of large rounded rectangles with a proud inner border.
+
+    This is the mark that answers the user's "those textures look like CPU chips"
+    on the ground, and it is here rather than in the trace routine because it is
+    the one mark on this surface big enough to read from the establishing camera.
+    A 0.6 to 1.3 m rectangle is 15 to 33 screen pixels; the traces feeding into it
+    are 2 to 5. The eye finds the chip first and then reads the traces as its
+    wiring, which is the opposite order from how they are drawn and the reason the
+    traces alone never read as a circuit.
+
+    Six of them per 8 m tile, so about one every 10 square metres of lawn. Sparse
+    on purpose: the ground is a backdrop for two hundred thousand blades, and a
+    surface that competes with the field it exists to support is the failure the
+    photographic grass texture was deleted for.
+  */
+  for (let i = 0; i < 6; i++) {
+    const w = (0.6 + rand() * 0.7) * (SIZE / METRES_PER_TILE)
+    const h = w * (0.55 + rand() * 0.6)
+    const x = rand() * SIZE
+    const y = rand() * SIZE
+    const alpha = 0.16 + rand() * 0.07
+
+    drawWrapped(ctx, SIZE, () => {
+      ctx.fillStyle = `#${trace.getHexString()}`
+      ctx.globalAlpha = alpha
       ctx.beginPath()
-      ctx.arc(ex, ey, width * 1.5, 0, Math.PI * 2)
+      ctx.roundRect(x - w / 2, y - h / 2, w, h, Math.min(w, h) * 0.14)
       ctx.fill()
+
+      // The border is drawn in the BASE colour, not in a lighter green: the
+      // canvas composites in byte space, so painting the base back over the pad
+      // at partial alpha is the only way to make a lip brighter than the mark it
+      // surrounds without inventing a colour the palette does not own.
+      ctx.strokeStyle = `#${base.getHexString()}`
+      ctx.globalAlpha = alpha * 0.8
+      ctx.lineWidth = Math.max(2, Math.min(w, h) * 0.07)
+      ctx.beginPath()
+      ctx.roundRect(x - w / 2, y - h / 2, w, h, Math.min(w, h) * 0.14)
+      ctx.stroke()
     })
   }
   ctx.globalAlpha = 1

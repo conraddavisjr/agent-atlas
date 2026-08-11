@@ -15,6 +15,7 @@
 
 import { LatheGeometry, Vector2, type BufferGeometry } from 'three'
 import { palette } from '@/art/palette'
+import { kerb, puck, slab, type LightmapAtlasOptions, type PropPart } from '@/art/geometry'
 
 export type Point3 = [number, number, number]
 
@@ -604,4 +605,297 @@ export function assertDrawable(geometry: BufferGeometry, what: string): BufferGe
     throw new Error(`hubLayout: ${what} merged to an empty geometry, so it will draw nothing`)
   }
   return geometry
+}
+
+// ---------------------------------------------------------------------------
+// The walkable layout, and the two batch part lists built from it
+//
+// These tables and the two builders below moved here from `HubIsland.tsx` for one
+// reason: the offline lightmap bake in `tools/bake/` has to build the SAME
+// geometry the runtime draws, and a lightmap baked against a second copy of the
+// layout is worse than no lightmap, because the shadows land somewhere plausible
+// and slightly wrong.
+//
+// `HubIsland.tsx` cannot be imported from Node - it reaches `useQuality`, which
+// reads `location.search` at module scope - so the shared code has to live in a
+// module with no React, no quality tiers and no browser globals. That is what this
+// file already was, and its own header says so.
+//
+// The colliders still read these same tables from `HubIsland.tsx`, which is the
+// property that stops a player standing on thin air beside a deck. That has not
+// changed; only where the numbers are declared has.
+// ---------------------------------------------------------------------------
+
+/**
+ * The vertical grid everything walkable sits on, and why it is 0.40 rather than
+ * 0.45.
+ *
+ * `BODY.autostepHeight` is 0.50, so a 0.40 riser is climbed automatically with
+ * 0.10 of margin, which is 20% of the threshold. The main path from the lawn to
+ * the portal is seven of these steps and contains no jump and no ramp,
+ * deliberately: the most unambiguous route is the one the player walks up
+ * without ever being asked to time anything. Expression lives in the optional
+ * east jump route and the west toy pile.
+ *
+ * Descent is covered too. `BODY.snapToGroundDistance` is 0.50, so walking DOWN
+ * a 0.40 step is snapped rather than becoming a fall, and the player never gets
+ * a spurious airborne frame coming off the Core.
+ *
+ * It is also the riser the whole lightmap is aimed at. The user's brief for the
+ * bake named "the steps in the platform" specifically, and a 0.40 riser against a
+ * 4 m tread is the one place in this level where an occlusion term has real work
+ * to do: the tread in front of a riser loses a measurable share of its sky.
+ */
+export const STEP = 0.4
+
+/** The Core: three stacked pucks, walked over on the way to the portal. */
+export const CORE_PUCKS = [
+  { radius: 6, base: 0 },
+  { radius: 4, base: STEP },
+  { radius: 2.2, base: 2 * STEP },
+] as const
+
+/**
+ * The four spur lobes, centred at radius 7.071 on the diagonals.
+ *
+ * Their inner edge sits at radius 5.571 against Puck A's 6.00, so they fuse
+ * into it by 0.43 m and the whole thing reads as one four-lobed dais rather
+ * than as five separate objects.
+ *
+ * That fusion is why the atlas packs charts PER PART rather than per connected
+ * component: the union of a spur and Puck A is not convex, but each of them is,
+ * and the interpenetrating texels simply bake to near zero visibility because
+ * they are genuinely enclosed. Correct, and invisible.
+ */
+export const SPURS = [
+  { id: 'NE', x: 5, z: -5 },
+  { id: 'NW', x: -5, z: -5 },
+  { id: 'SW', x: -5, z: 5 },
+  { id: 'SE', x: 5, z: 5 },
+] as const
+
+export const SPUR_RADIUS = 1.5
+
+/**
+ * The bridge, whose south edge touches Puck C at z = -2.20 and whose north edge
+ * touches T1 at z = -6.60, which is what makes both risers a clean 0.40.
+ */
+export const BRIDGE = { x: 0, z: -4.4, radius: 2.2, height: 4 * STEP }
+
+/**
+ * The three portal decks.
+ *
+ * Solid from the lawn up rather than floating slabs, which is why each
+ * collider's half-height is half the FULL height and its centre is not its top.
+ * T3's corners sit at radius 15.52 against a plateau of 16, the tightest fit in
+ * the layout and deliberate: the portal deck is meant to feel like it is right
+ * at the edge of the world.
+ */
+export const DECKS = [
+  { id: 'T1', x: 0, z: -8.6, width: 12, depth: 4, height: 5 * STEP },
+  { id: 'T2', x: 0, z: -11.5, width: 8, depth: 1.8, height: 6 * STEP },
+  { id: 'T3', x: 0, z: -13.7, width: 8, depth: 2.6, height: 7 * STEP },
+] as const
+
+/**
+ * The optional east jump route: lawn to T1, skipping the Core entirely.
+ *
+ * Every gap is under 60% of what the jump arc allows for its rise, which leaves
+ * room for a mistimed takeoff. The route gets easier as it goes, which is the
+ * right shape: the first step advertises that this is a jump route, and the
+ * last is forgiving so a player who committed is not punished at the end.
+ */
+export const EAST_PUCKS = [
+  { x: 9, z: -2.6, radius: 1.1, height: 2 * STEP, colliderRadius: 1 },
+  { x: 9.6, z: -6.4, radius: 1.1, height: 4 * STEP, colliderRadius: 1 },
+  { x: 8.4, z: -10, radius: 1.1, height: 5 * STEP, colliderRadius: 1 },
+] as const
+
+/**
+ * The west toy pile, where the jump, the coyote time and the autostep get
+ * tested without leaving the hub.
+ *
+ * The yaws are small and deliberately not multiples of each other. A stack of
+ * blocks at the same angle reads as a staircase; a stack at jostled angles
+ * reads as a pile someone dropped. Every level of the world, 0.40 through 2.00,
+ * appears in one five-metre clump, and the gaps are all far inside budget. That
+ * is correct: it is a playground, not a challenge.
+ */
+export const WEST_PILE = [
+  { kind: 'slab', x: -9.6, z: 2.4, width: 3.2, depth: 3.2, height: 2 * STEP, yaw: 0.122, radius: 0, colliderRadius: 0 },
+  { kind: 'puck', x: -7.6, z: 1.2, width: 0, depth: 0, height: 3 * STEP, yaw: 0, radius: 1.3, colliderRadius: 1.2 },
+  { kind: 'slab', x: -10.4, z: 0.4, width: 2.4, depth: 2.4, height: 4 * STEP, yaw: -0.192, radius: 0, colliderRadius: 0 },
+  { kind: 'puck', x: -11.6, z: 2.6, width: 0, depth: 0, height: 5 * STEP, yaw: 0, radius: 0.9, colliderRadius: 0.8 },
+  { kind: 'slab', x: -7.8, z: 3.8, width: 2, depth: 2, height: STEP, yaw: 0.332, radius: 0, colliderRadius: 0 },
+] as const
+
+export const KERB_HEIGHT = 0.6
+export const KERB_DEPTH = 0.36
+/** Kerbs are inset half their depth so the outer face is flush with the deck below. */
+export const KERB_INSET = KERB_DEPTH / 2
+
+/**
+ * Every exposed deck edge that is not part of the route.
+ *
+ * A kerb is band 2 on a band 1 deck, so a kerb draws the platform's outline as a
+ * dark line, and that line is what makes a raised deck read as raised in a
+ * greyscale frame where a value change across a flat top does not.
+ *
+ * Eleven runs, not the ten the spec's summary claims; its own table lists six
+ * on T1, two on T2 and three on T3.
+ */
+export const KERBS = [
+  // T1. Open at the bridge mouth in the south and up to T2 in the north.
+  { x: -4.1, z: -6.6 + KERB_INSET, length: 3.8, yaw: 0, top: 5 * STEP },
+  { x: 4.1, z: -6.6 + KERB_INSET, length: 3.8, yaw: 0, top: 5 * STEP },
+  /*
+    These two are T1's NORTH edge, at z = -10.60, and the inset has to run in +z
+    to reach the deck. They read `- KERB_INSET` until this pass, which put them at
+    z = -10.78: a 0.36 m kerb spanning -10.96 to -10.60, touching T1 along one
+    line and hanging entirely off the deck into open air beyond it. Every other
+    entry in this table insets toward the deck - `6 - INSET`, `-6 + INSET`,
+    `4 - INSET`, `-4 + INSET`, `-15 + INSET` - so the sign was the only thing
+    wrong and the fix is consistent with all nine of them.
+
+    Their colliders come from this same table, so nothing was ever functionally
+    broken; there was simply an invisible wall in the same wrong place as the mesh.
+  */
+  { x: -5, z: -10.6 + KERB_INSET, length: 2, yaw: 0, top: 5 * STEP },
+  { x: 5, z: -10.6 + KERB_INSET, length: 2, yaw: 0, top: 5 * STEP },
+  { x: 6 - KERB_INSET, z: -8.6, length: 4, yaw: Math.PI / 2, top: 5 * STEP },
+  { x: -6 + KERB_INSET, z: -8.6, length: 4, yaw: Math.PI / 2, top: 5 * STEP },
+  // T2. Open south from T1 and north to T3.
+  { x: 4 - KERB_INSET, z: -11.5, length: 1.8, yaw: Math.PI / 2, top: 6 * STEP },
+  { x: -4 + KERB_INSET, z: -11.5, length: 1.8, yaw: Math.PI / 2, top: 6 * STEP },
+  // T3. Open south from T2 only.
+  { x: 4 - KERB_INSET, z: -13.7, length: 2.6, yaw: Math.PI / 2, top: 7 * STEP },
+  { x: -4 + KERB_INSET, z: -13.7, length: 2.6, yaw: Math.PI / 2, top: 7 * STEP },
+  { x: 0, z: -15 + KERB_INSET, length: 8, yaw: 0, top: 7 * STEP },
+] as const
+
+/**
+ * Where each hub lesson's totem stands, keyed by lesson id.
+ *
+ * The reading order runs anticlockwise from the spawn, so the two you meet
+ * first sit on the near side of the Core and the two you meet last face the
+ * portal.
+ *
+ * Held here rather than in `src/state/lessons.ts`, where the spec asks for it,
+ * because that file is content and belongs to another stream. A totem falls
+ * back to its lesson's own position if it is not listed, so adding a fifth
+ * basics lesson degrades to the old behaviour rather than to a crash.
+ *
+ * **Insertion order is load-bearing** and was nearly lost moving this here.
+ * `hubDeckParts` folds the plinths in via `Object.values`, so these four entries
+ * are the last four parts of the deck batch in exactly this sequence. Re-sorting
+ * the keys alphabetically, or writing them out by compass point, keeps the same
+ * four plinths in the same four places and silently permutes their charts.
+ */
+export const TOTEM_SPURS: Record<string, [number, number, number]> = {
+  'what-is-ai': [-5, STEP, 5],
+  'what-is-an-llm': [5, STEP, 5],
+  'popular-models': [-5, STEP, -5],
+  'what-is-a-prompt': [5, STEP, -5],
+}
+
+/**
+ * Every walkable piece in the level, as a part list ready for `mergeProp`.
+ *
+ * The ORDER of this list is load-bearing in a way it was not before the lightmap.
+ * `packLightmapAtlas` attributes triangles back to parts by their position in the
+ * merge, so inserting a puck in the middle of this function moves every later
+ * part's charts and invalidates the bake. The manifest hash is what makes that
+ * loud instead of silent: it is computed from this list's geometry, so a reordered
+ * or resized layout fails the check at load rather than rendering someone else's
+ * shadows.
+ *
+ * `plinth` is a parameter rather than an import because `totemPlinth` lives in
+ * `LessonTotem.tsx` and this module is deliberately free of React. Both callers -
+ * the component and the bake - pass the same `totemPlinth()` result.
+ */
+export function hubDeckParts(plinth: BufferGeometry): PropPart[] {
+  const parts: PropPart[] = []
+
+  for (const { radius, base } of CORE_PUCKS) {
+    parts.push({ geometry: puck(radius, STEP), position: [0, base, 0] })
+  }
+  for (const spur of SPURS) {
+    parts.push({ geometry: puck(SPUR_RADIUS, STEP), position: [spur.x, 0, spur.z] })
+  }
+  parts.push({ geometry: puck(BRIDGE.radius, BRIDGE.height), position: [BRIDGE.x, 0, BRIDGE.z] })
+
+  for (const deck of DECKS) {
+    parts.push({ geometry: slab(deck.width, deck.height, deck.depth), position: [deck.x, 0, deck.z] })
+  }
+  for (const east of EAST_PUCKS) {
+    parts.push({ geometry: puck(east.radius, east.height), position: [east.x, 0, east.z] })
+  }
+  for (const piece of WEST_PILE) {
+    parts.push(
+      piece.kind === 'slab'
+        ? {
+            geometry: slab(piece.width, piece.height, piece.depth),
+            position: [piece.x, 0, piece.z],
+            rotation: [0, piece.yaw, 0],
+          }
+        : { geometry: puck(piece.radius, piece.height), position: [piece.x, 0, piece.z] },
+    )
+  }
+
+  // The totem plinths, folded in from LessonTotem rather than drawn there.
+  for (const position of Object.values(TOTEM_SPURS)) parts.push({ geometry: plinth, position })
+
+  return parts
+}
+
+/** Every kerb, as a part list ready for `mergeProp`. */
+export function hubTrimParts(): PropPart[] {
+  return KERBS.map((run) => ({
+    geometry: kerb(run.length, KERB_HEIGHT, KERB_DEPTH),
+    position: [run.x, run.top, run.z] as [number, number, number],
+    rotation: [0, run.yaw, 0] as [number, number, number],
+  }))
+}
+
+/**
+ * The atlas geometry, read by both the bake and the runtime.
+ *
+ * It lives in this file rather than in `src/art/lightmap.ts` because the bake tool
+ * needs it and `lightmap.ts` statically imports the baked PNG, so a bake that read
+ * it from there could not run until its own output already existed.
+ *
+ * **Resolution, argued from measured area rather than chosen.** The two walkable
+ * batches are 19,848 and 4,356 triangles carrying **1071.4 m2 of surface** across
+ * **204 charts**. That figure is much larger than a look at the level suggests,
+ * because it counts both sides of everything: deck undersides sitting on the lawn,
+ * and the faces where the four spur lobes fuse 0.43 m into Puck A. Those texels bake
+ * to near zero visibility, correctly, and are never seen. Culling them was
+ * considered and rejected - "is this face visible" is not answerable before the
+ * trace, and a heuristic that guessed wrong would remove occlusion from something
+ * on screen.
+ *
+ * At 2048 and 44 texels per metre the atlas is 60.8% occupied, which is **2.27 cm
+ * per texel**. The number that sizes it is not the deck, it is the 0.12 m bevel on
+ * every edge in the kit: at 44 texels/m that bevel is 5.3 texels across, and the
+ * bevel is where the sharpest real gradient in the whole bake sits.
+ *
+ * 1024 at 24 texels/m also fits, at 77.6% occupancy and 4.17 cm/texel, and is a
+ * one-line downgrade if the memory is ever wanted back. It was baked and read back
+ * and it is not obviously worse anywhere except on the bevels, where the band
+ * narrows to 2.9 texels - which is also what made a rasteriser bug visible, so the
+ * finer grid is buying real headroom rather than just numbers.
+ *
+ * 4096 was priced and rejected: 68 texels/m only reaches 35.1% occupancy because the
+ * shelf packer cannot fill it, so it is four times the memory for 1.5x the texel
+ * density. **And the brief's framing of the cost needs correcting in both
+ * directions.** This is a single-channel image, so 4096 would be 16 MB of source
+ * data rather than the 64 MB quoted - but three uploads an `Image` as RGBA whatever
+ * the PNG contains, so VRAM is 4 bytes a texel regardless: 4 MB at 1024, **16 MB at
+ * 2048**, 64 MB at 4096, and a third again on top if mipmaps were on. They are not;
+ * see `configureLightmap`.
+ */
+export const HUB_LIGHTMAP_ATLAS: Required<LightmapAtlasOptions> = {
+  size: 2048,
+  texelsPerMetre: 44,
+  gutter: 2,
 }

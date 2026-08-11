@@ -15,6 +15,7 @@ import {
   TubeGeometry,
   Vector2,
   Vector3,
+  type InterleavedBufferAttribute,
 } from 'three'
 import { mergeGeometries, toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 
@@ -741,6 +742,561 @@ export function boxProjectUV(geometry: BufferGeometry, metresPerTile: number): B
 
   geometry.setAttribute('uv', new BufferAttribute(uv, 2))
   return geometry
+}
+
+// ---------------------------------------------------------------------------
+// The lightmap atlas
+//
+// `boxProjectUV` above derives a TILING, world-scale parameterisation and that is
+// deliberate: every detail map in the project depends on the same stone being the
+// same physical size on a 12 m deck and on a 0.7 m plinth. A lightmap wants the
+// exact opposite - one texel per place, no repeats, nothing overlapping anything
+// else - so it cannot share that UV set and needs a second one.
+//
+// **The second UV set is called `uv1`, and this is worth stating with the source
+// citation because getting it wrong is silent.** In three 0.185.1 the set a map
+// reads is chosen only by `texture.channel`: `WebGLPrograms.js` `getChannel()`
+// returns `'uv'` for 0 and `` `uv${n}` `` for anything else, that string becomes
+// `#define AOMAP_UV uv1` in `WebGLProgram.js`, and `uv_vertex.glsl.js` reads it
+// into `vAoMapUv`. `uv2` is the THIRD set, not the second, which is the trap the
+// old `aoMap`-defaults-to-UV2 folklore leaves behind. `textures.ts` already pins
+// `channel = 0` on its ORM pack for the mirror image of this reason.
+//
+// A geometry missing the attribute a map's channel names does NOT error. WebGL
+// hands the shader a zero attribute, every fragment samples texel (0, 0), and the
+// result is a uniform multiply that looks like a slightly darker material. That is
+// this project's signature failure and `assertLightmapUV` in `src/art/lightmap.ts`
+// exists to catch exactly it.
+//
+// ## Why per part, per face, rather than a real unwrap
+//
+// The batches are one merged geometry each, so "unwrap the mesh" would mean
+// unwrapping a 30-piece union with interpenetrating parts. Two things make that
+// unnecessary here.
+//
+// First, every part in the walkable batches is CONVEX (pucks, slabs, kerbs) or a
+// stack of convex pieces along Y (the totem plinth). For a convex part, the
+// triangles whose normal is dominated by one axis-and-sign form a surface that is
+// single-valued over that axis' projection plane - so an orthographic projection
+// of that group is injective, which is the whole property an atlas needs.
+//
+// Second, dominant-axis classification bounds the distortion. A triangle assigned
+// to a chart is within 45 degrees of that chart's plane by construction, so its
+// projected area is never worse than cos(45) = 0.707 of its true area. Texel
+// density therefore varies by at most sqrt(2) across the whole atlas, which is why
+// a single texels-per-metre figure is meaningful.
+//
+// ## The one thing that had to change from `boxProjectUV`'s approach
+//
+// `boxProjectUV` classifies PER VERTEX. That is fine for a tiling map, where a
+// triangle straddling an axis flip just repeats the texture oddly on a fillet. In
+// an atlas it is fatal: one vertex in chart A and two in chart B stretches a
+// triangle across unrelated parts of the image and drags their occlusion with it.
+// So charts are assigned PER TRIANGLE, from the face normal.
+//
+// That only works because `mergeProp` de-indexes everything it merges (it calls
+// `toNonIndexed()` on any indexed input), so every triangle in a merged batch
+// already owns its three vertices and no vertex is shared between two triangles.
+// A merged batch is therefore free to have per-triangle UVs. An indexed geometry
+// is not, and this function rejects one rather than silently painting stripes.
+// ---------------------------------------------------------------------------
+
+/**
+ * The six chart directions, in the order this module numbers them.
+ *
+ * The axis PAIRS match `boxProjectUV`'s, so a reader moving between the two
+ * functions is not also translating between two conventions.
+ */
+const CHART_AXES: ReadonlyArray<{ readonly u: 0 | 1 | 2; readonly v: 0 | 1 | 2 }> = [
+  { u: 2, v: 1 }, // 0 +X: (z, y)
+  { u: 2, v: 1 }, // 1 -X
+  { u: 0, v: 2 }, // 2 +Y: (x, z)
+  { u: 0, v: 2 }, // 3 -Y
+  { u: 0, v: 1 }, // 4 +Z: (x, y)
+  { u: 0, v: 1 }, // 5 -Z
+]
+
+/** Human-readable chart names, for bake reports and test failures. */
+export const CHART_FACE_NAMES = ['+X', '-X', '+Y', '-Y', '+Z', '-Z'] as const
+
+/** One part's worth of one face direction: a rectangle of texels and what fills it. */
+export type LightmapChart = {
+  /** Index into the `LightmapMesh[]` the atlas was packed from. */
+  mesh: number
+  /** Index of the source `PropPart` within that mesh. */
+  part: number
+  /** 0..5, indexing `CHART_FACE_NAMES`. */
+  face: number
+  /** Triangle indices within the mesh's geometry. */
+  triangles: readonly number[]
+  /** Projected extent in WORLD METRES, on this chart's axis pair. */
+  minU: number
+  minV: number
+  spanU: number
+  spanV: number
+  /** Placement in the atlas, in texels, gutter included. */
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export type LightmapMesh = {
+  geometry: BufferGeometry
+  /**
+   * Post-merge vertex count of each source part, in merge order. Get it from
+   * `propPartVertexCounts`, never by hand: `mergeProp` de-indexes, so a part's
+   * contribution is its INDEX count when it had one and its position count when it
+   * did not, and using the wrong one silently shifts every later part's charts.
+   */
+  partVertexCounts: readonly number[]
+}
+
+export type LightmapAtlas = {
+  size: number
+  texelsPerMetre: number
+  gutter: number
+  charts: readonly LightmapChart[]
+  /** Fraction of the atlas' texels that fall inside a chart rectangle. */
+  occupancy: number
+}
+
+export type LightmapAtlasOptions = {
+  /** Square atlas edge, in texels. */
+  size: number
+  texelsPerMetre: number
+  /**
+   * Texels of padding around every chart.
+   *
+   * Two is the minimum that survives bilinear filtering, because a sample at a
+   * chart's outer edge reaches half a texel beyond it and the baker's dilation
+   * pass then needs somewhere valid to write. It is NOT enough for mipmapping,
+   * which is why `src/art/lightmap.ts` turns mipmaps off rather than paying for a
+   * gutter wide enough to survive them.
+   */
+  gutter?: number
+}
+
+/**
+ * What each part will occupy in a merged geometry, in vertices.
+ *
+ * Exists because the atlas has to attribute a triangle in the merged result back
+ * to the part it came from, and `mergeProp` does not report that. Replaying its
+ * de-index rule here is exact rather than approximate: `toNonIndexed()` emits one
+ * vertex per index, `clone()` keeps the count as-is, and nothing else in
+ * `mergeProp` changes counts.
+ */
+export function propPartVertexCounts(parts: readonly PropPart[]): number[] {
+  return parts.map(({ geometry }, i) => {
+    const index = geometry.getIndex()
+    if (index) return index.count
+    const position = geometry.getAttribute('position')
+    if (!position) {
+      throw new Error(`geometry: propPartVertexCounts part ${i} has no position attribute`)
+    }
+    return position.count
+  })
+}
+
+/**
+ * Assign every triangle of every mesh to a chart, and pack the charts into one
+ * square atlas.
+ *
+ * Both meshes of the hub share ONE atlas and therefore one texture, one sampler
+ * and one manifest. There is no cost to it: a chart's placement is independent of
+ * which mesh it came from, so packing them together only improves occupancy.
+ *
+ * Packing is shelf / next-fit-decreasing-height. It is not optimal and a
+ * guillotine or skyline packer would fit maybe ten per cent more, which is worth
+ * naming as a dead end tried rather than leaving as an open question: at the sizes
+ * here the atlas is chosen from the measured occupancy anyway, so ten per cent of
+ * area is one step on the power-of-two ladder and the ladder is what actually
+ * decides the file size.
+ *
+ * **Determinism is a correctness requirement, not a nicety.** The bake and the
+ * runtime both call this function and must agree texel for texel, so charts are
+ * sorted by (height, width, mesh, part, face) with every tie broken explicitly.
+ * `Array.prototype.sort` is stable in every engine this runs on, but relying on
+ * that instead of on a total order is how a bake ends up correct on the machine
+ * that made it and rotated by one chart everywhere else.
+ */
+export function packLightmapAtlas(
+  meshes: readonly LightmapMesh[],
+  options: LightmapAtlasOptions,
+): LightmapAtlas {
+  const { size, texelsPerMetre } = options
+  const gutter = options.gutter ?? 2
+
+  if (!Number.isInteger(size) || size <= 0) {
+    throw new Error(`geometry: packLightmapAtlas needs an integer size, got ${size}`)
+  }
+  if (!(texelsPerMetre > 0)) {
+    throw new Error(`geometry: packLightmapAtlas needs a positive texelsPerMetre, got ${texelsPerMetre}`)
+  }
+  if (meshes.length === 0) {
+    throw new Error('geometry: packLightmapAtlas needs at least one mesh')
+  }
+
+  const charts: LightmapChart[] = []
+
+  meshes.forEach((mesh, meshIndex) => {
+    const { geometry, partVertexCounts } = mesh
+    if (geometry.getIndex()) {
+      throw new Error(
+        `geometry: packLightmapAtlas mesh ${meshIndex} is indexed. Charts are per triangle, ` +
+          'so a shared vertex would have to carry two atlas positions at once. Merge through ' +
+          '`mergeProp`, which de-indexes, or call `toNonIndexed()` first.',
+      )
+    }
+    const position = geometry.getAttribute('position')
+    const normal = geometry.getAttribute('normal')
+    if (!position || !normal) {
+      throw new Error(`geometry: packLightmapAtlas mesh ${meshIndex} needs position and normal attributes`)
+    }
+    const total = partVertexCounts.reduce((sum, n) => sum + n, 0)
+    if (total !== position.count) {
+      throw new Error(
+        `geometry: packLightmapAtlas mesh ${meshIndex} has ${position.count} vertices but its ` +
+          `part counts sum to ${total}. Use propPartVertexCounts on the same array that was ` +
+          'handed to mergeProp, in the same order.',
+      )
+    }
+    if (position.count % 3 !== 0) {
+      throw new Error(
+        `geometry: packLightmapAtlas mesh ${meshIndex} has ${position.count} vertices, which is ` +
+          'not a whole number of triangles',
+      )
+    }
+
+    // Vertex index -> part index, as a prefix-sum lookup rather than a search per
+    // triangle. Parts number in the low tens and triangles in the tens of
+    // thousands, so this is the side of the loop to spend memory on.
+    const partOfVertex = new Int32Array(position.count)
+    let cursor = 0
+    partVertexCounts.forEach((count, part) => {
+      partOfVertex.fill(part, cursor, cursor + count)
+      cursor += count
+    })
+
+    // Grouped by part * 6 + face. A Map keyed on a number keeps insertion order,
+    // which the sort below then makes irrelevant, but it also keeps the grouping
+    // pass allocation-light.
+    const groups = new Map<number, number[]>()
+    const triangleCount = position.count / 3
+
+    for (let t = 0; t < triangleCount; t++) {
+      const a = t * 3
+      /*
+        Classified from the summed VERTEX normals rather than from the geometric
+        normal of the triangle. `toCreasedNormals` has already decided which edges
+        are hard here, and the vertex normals are what the shader actually uses, so
+        agreeing with them keeps a chart boundary on the same edge the shading
+        break is on. A geometric normal disagrees with them across a smoothed
+        fillet, which puts the seam in the middle of a gradient.
+      */
+      const nx = normal.getX(a) + normal.getX(a + 1) + normal.getX(a + 2)
+      const ny = normal.getY(a) + normal.getY(a + 1) + normal.getY(a + 2)
+      const nz = normal.getZ(a) + normal.getZ(a + 1) + normal.getZ(a + 2)
+      const ax = Math.abs(nx)
+      const ay = Math.abs(ny)
+      const az = Math.abs(nz)
+
+      let face: number
+      if (ay >= ax && ay >= az) face = ny >= 0 ? 2 : 3
+      else if (ax >= az) face = nx >= 0 ? 0 : 1
+      else face = nz >= 0 ? 4 : 5
+
+      const key = partOfVertex[a] * 6 + face
+      const bucket = groups.get(key)
+      if (bucket) bucket.push(t)
+      else groups.set(key, [t])
+    }
+
+    for (const [key, triangles] of groups) {
+      const part = Math.floor(key / 6)
+      const face = key % 6
+      const axes = CHART_AXES[face]
+      let minU = Infinity
+      let maxU = -Infinity
+      let minV = Infinity
+      let maxV = -Infinity
+      for (const t of triangles) {
+        for (let k = 0; k < 3; k++) {
+          const i = t * 3 + k
+          const u = componentAt(position, i, axes.u)
+          const v = componentAt(position, i, axes.v)
+          if (u < minU) minU = u
+          if (u > maxU) maxU = u
+          if (v < minV) minV = v
+          if (v > maxV) maxV = v
+        }
+      }
+      const spanU = maxU - minU
+      const spanV = maxV - minV
+      /*
+        `ceil` plus one, not `ceil`. A chart spanning exactly 1.0 m at 40 texels
+        per metre needs 41 texel CENTRES to cover both edges, and rounding to 40
+        loses the far edge of every axis-aligned face in the level - a one-texel
+        bright line down the outside of every kerb, which reads as a highlight
+        rather than as a bug.
+      */
+      const w = Math.ceil(spanU * texelsPerMetre) + 1 + gutter * 2
+      const h = Math.ceil(spanV * texelsPerMetre) + 1 + gutter * 2
+      charts.push({
+        mesh: meshIndex,
+        part,
+        face,
+        triangles,
+        minU,
+        minV,
+        spanU,
+        spanV,
+        x: 0,
+        y: 0,
+        w,
+        h,
+      })
+    }
+  })
+
+  charts.sort(
+    (a, b) => b.h - a.h || b.w - a.w || a.mesh - b.mesh || a.part - b.part || a.face - b.face,
+  )
+
+  let shelfY = 0
+  let shelfHeight = 0
+  let penX = 0
+  let used = 0
+
+  for (const chart of charts) {
+    if (chart.w > size || chart.h > size) {
+      throw new Error(
+        `geometry: packLightmapAtlas chart ${CHART_FACE_NAMES[chart.face]} of part ${chart.part} ` +
+          `needs ${chart.w}x${chart.h} texels, which does not fit a ${size} atlas. Lower ` +
+          'texelsPerMetre or raise size.',
+      )
+    }
+    if (penX + chart.w > size) {
+      shelfY += shelfHeight
+      shelfHeight = 0
+      penX = 0
+    }
+    if (shelfY + chart.h > size) {
+      throw new Error(
+        `geometry: packLightmapAtlas ran out of room in a ${size} atlas at ` +
+          `${texelsPerMetre} texels per metre, ${charts.length} charts. Raise size or lower ` +
+          'texelsPerMetre.',
+      )
+    }
+    chart.x = penX
+    chart.y = shelfY
+    penX += chart.w
+    if (chart.h > shelfHeight) shelfHeight = chart.h
+    used += chart.w * chart.h
+  }
+
+  return { size, texelsPerMetre, gutter, charts, occupancy: used / (size * size) }
+}
+
+/** One of the three position components, chosen by axis index. */
+function componentAt(attribute: BufferAttribute | InterleavedBufferAttribute, i: number, axis: 0 | 1 | 2): number {
+  return axis === 0 ? attribute.getX(i) : axis === 1 ? attribute.getY(i) : attribute.getZ(i)
+}
+
+/** What a bake writes beside its image, and what a runtime checks it against. */
+export type LightmapManifest = {
+  /** `lightmapAtlasHash` of the atlas the bake actually used. */
+  hash: string
+  size: number
+  texelsPerMetre: number
+  gutter: number
+  charts: number
+  /** Fraction of atlas texels inside a chart rectangle. */
+  occupancy: number
+  /** Fraction of atlas texels that received a traced value. */
+  coverage: number
+  /** Cosine-weighted hemisphere rays per texel. */
+  rays: number
+  /** Metres beyond which an occluder was ignored. */
+  maxDistance: number
+  surfaceAreaSquareMetres: number
+  triangles: number
+  seconds: number
+  generated: string
+}
+
+/**
+ * A 32-bit FNV-1a over a canonical description of a packed atlas.
+ *
+ * **This is the staleness detector, and it is the reason a moved deck is a console
+ * error rather than shadows in the wrong place.** The layout WILL move again; that
+ * was accepted when this approach was chosen. What was not acceptable was the
+ * failure mode, because a lightmap whose atlas no longer matches its geometry
+ * renders a completely clean frame with the previous layout's occlusion painted on
+ * it, and nothing anywhere reports a problem.
+ *
+ * Hashing the packed ATLAS rather than the layout tables is deliberate and strictly
+ * stronger. Every input that could invalidate a bake shows up in it: a moved or
+ * resized part changes its charts' spans, a reordered part list changes their part
+ * indices, a new part changes the count and shifts every placement, and a change to
+ * this packer or to the atlas options changes the rectangles. A hash of the tables
+ * would miss the last two, and the last two are the ones a future reader is least
+ * likely to suspect.
+ *
+ * It lives here, beside the packer, rather than in `src/art/lightmap.ts`, because
+ * the bake tool must compute it too and `lightmap.ts` statically imports the baked
+ * PNG - so a bake that imported it could not run until its own output existed.
+ *
+ * Numbers are fixed to six decimals before hashing. Free-form `toString` on a float
+ * differs between engines at the last digit for some values, and a hash that
+ * depends on that fails in CI and passes locally, which is worse than no hash.
+ */
+export function lightmapAtlasHash(atlas: LightmapAtlas): string {
+  const round = (n: number) => n.toFixed(6)
+  const parts: string[] = [
+    'v1',
+    String(atlas.size),
+    round(atlas.texelsPerMetre),
+    String(atlas.gutter),
+    String(atlas.charts.length),
+  ]
+  for (const c of atlas.charts) {
+    parts.push(
+      `${c.mesh}/${c.part}/${c.face}/${c.triangles.length}/` +
+        `${round(c.minU)}/${round(c.minV)}/${round(c.spanU)}/${round(c.spanV)}/` +
+        `${c.x}/${c.y}/${c.w}/${c.h}`,
+    )
+  }
+
+  let hash = 0x811c9dc5
+  const canonical = parts.join('|')
+  for (let i = 0; i < canonical.length; i++) {
+    hash ^= canonical.charCodeAt(i)
+    /*
+      The 32-bit FNV prime applied as shifts rather than as `hash * 16777619`. The
+      multiply overflows float64's exact-integer range and rounds, which produces a
+      hash that is stable on one engine and not FNV at all - so it would silently
+      disagree with any other implementation of the same named algorithm, including
+      a future rewrite of this function.
+    */
+    hash = (hash + (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24)) >>> 0
+  }
+  return hash.toString(16).padStart(8, '0')
+}
+
+/**
+ * A vertex's position in its chart's 2D world-metre space.
+ *
+ * Exported because the baker needs the identical projection and a second copy of
+ * `CHART_AXES` in `tools/bake/` is exactly the kind of duplicate that ends up one
+ * axis pair out of date. The first draft of the baker had one, and it is the reason
+ * this function exists.
+ */
+export function chartLocal(
+  attribute: BufferAttribute | InterleavedBufferAttribute,
+  i: number,
+  face: number,
+): { u: number; v: number } {
+  const axes = CHART_AXES[face]
+  if (!axes) throw new Error(`geometry: chartLocal got face ${face}, which is not 0..5`)
+  return { u: componentAt(attribute, i, axes.u), v: componentAt(attribute, i, axes.v) }
+}
+
+/**
+ * The atlas texel a chart-local point lands on, in fractional texel coordinates
+ * from the top-left of the IMAGE.
+ *
+ * The bake rasterises in this space and the runtime writes UVs from it, so it
+ * lives here, beside the UV writer, rather than in the bake tool. A lightmap that
+ * is offset by a gutter, or flipped, looks entirely plausible and is entirely
+ * wrong, and the only defence is that both sides call one function.
+ */
+export function chartLocalToTexel(
+  atlas: LightmapAtlas,
+  chart: LightmapChart,
+  u: number,
+  v: number,
+): { col: number; row: number } {
+  return {
+    col: chart.x + atlas.gutter + (u - chart.minU) * atlas.texelsPerMetre,
+    row: chart.y + atlas.gutter + (v - chart.minV) * atlas.texelsPerMetre,
+  }
+}
+
+/** The inverse of `chartLocalToTexel`, for the baker's per-texel world lookup. */
+export function texelToChartLocal(
+  atlas: LightmapAtlas,
+  chart: LightmapChart,
+  col: number,
+  row: number,
+): { u: number; v: number } {
+  return {
+    u: chart.minU + (col - chart.x - atlas.gutter) / atlas.texelsPerMetre,
+    v: chart.minV + (row - chart.y - atlas.gutter) / atlas.texelsPerMetre,
+  }
+}
+
+/**
+ * Write the `uv1` attribute for every mesh the atlas was packed from.
+ *
+ * **The V flip is here and it is the whole reason this is a function.** three
+ * loads an image with `flipY = true` by default, so image row 0 ends up at v = 1.
+ * The atlas is authored top-down, because that is the order a PNG stores its
+ * scanlines and the order the baker fills them, so V has to be inverted on the way
+ * out. `src/art/lightmap.ts` deliberately leaves `flipY` at its default rather
+ * than turning it off, so that the lightmap behaves like every other texture in
+ * the project and there is one place - this one - that knows about the flip.
+ *
+ * A vertically mirrored lightmap is the most convincing wrong result available:
+ * the occlusion is still soft, still in the right places on symmetric parts, and
+ * only obviously broken on the asymmetric ones. `geometry.test.ts` pins the
+ * orientation with an explicit expected UV.
+ */
+export function applyLightmapUV(meshes: readonly LightmapMesh[], atlas: LightmapAtlas): void {
+  const targets = meshes.map(({ geometry }) => {
+    const position = geometry.getAttribute('position')
+    if (!position) throw new Error('geometry: applyLightmapUV needs a position attribute')
+    return { geometry, position, uv: new Float32Array(position.count * 2), written: new Uint8Array(position.count) }
+  })
+
+  for (const chart of atlas.charts) {
+    const target = targets[chart.mesh]
+    if (!target) {
+      throw new Error(
+        `geometry: applyLightmapUV was handed ${meshes.length} meshes but the atlas references ` +
+          `mesh ${chart.mesh}. Pass the same array, in the same order, that packLightmapAtlas got.`,
+      )
+    }
+    for (const t of chart.triangles) {
+      for (let k = 0; k < 3; k++) {
+        const i = t * 3 + k
+        const local = chartLocal(target.position, i, chart.face)
+        const { col, row } = chartLocalToTexel(atlas, chart, local.u, local.v)
+        target.uv[i * 2] = col / atlas.size
+        target.uv[i * 2 + 1] = 1 - row / atlas.size
+        target.written[i] = 1
+      }
+    }
+  }
+
+  for (const [i, target] of targets.entries()) {
+    /*
+      Every vertex must have been claimed by exactly one chart. A gap here means a
+      triangle was classified into a chart that then failed to place, or that the
+      geometry handed in is not the one the atlas was packed from - both of which
+      otherwise show up as a patch of level sampling texel (0, 0), which is a
+      plausible-looking flat multiply rather than an error.
+    */
+    let missing = 0
+    for (const flag of target.written) if (!flag) missing++
+    if (missing > 0) {
+      throw new Error(
+        `geometry: applyLightmapUV left ${missing} of ${target.written.length} vertices of mesh ` +
+          `${i} without a uv1. The atlas does not describe this geometry.`,
+      )
+    }
+    target.geometry.setAttribute('uv1', new BufferAttribute(target.uv, 2))
+  }
 }
 
 // ---------------------------------------------------------------------------

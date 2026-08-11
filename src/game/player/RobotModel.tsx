@@ -268,6 +268,24 @@ function at(v: Vec3): [number, number, number] {
  * one thing about the face this pass did NOT change - the bar and the two lenses
  * that replaced it are centred at exactly the same height, which is inside the
  * reference brief's measured 55-60% either way.
+ *
+ * ## The group no longer carries an offset, and that is not a simplification
+ *
+ * It used to sit at head-local (0, -0.045, 0.305), which is where a flat plate
+ * mounts on a flat face. Both layers are now curved patches of the head's own
+ * superellipsoid, and a patch is only meaningful in the frame its host is defined
+ * in, so both geometries are authored directly in HEAD-local space and this group
+ * has to be at the head's origin.
+ *
+ * The two numbers the offset used to hold did not disappear; they moved to where
+ * the geometry is. The -0.045 is `FACE_PLATE.y`, and the 0.305 plus the plate's
+ * 0.016 of proudness is now `FACE_PLATE.rise` measured off the surface rather than
+ * off the origin, which is what makes it a constant step over a curved shell
+ * instead of a constant step at one point on it.
+ *
+ * The group itself stays rather than being flattened into the head, because it is
+ * the only thing left saying that the plate and the glyph are one feature in two
+ * layers.
  */
 function Face({
   pose,
@@ -280,7 +298,7 @@ function Face({
   detail: 'simple' | 'full'
 }) {
   return (
-    <group position={[0, -0.045, 0.305]}>
+    <group>
       <FacePlate />
       <RobotFace pose={pose} detail={detail} />
     </group>

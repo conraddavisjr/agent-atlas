@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { BoxGeometry, BufferGeometry, PlaneGeometry, Vector2, Vector3 } from 'three'
+import { BoxGeometry, BufferAttribute, BufferGeometry, PlaneGeometry, Vector2, Vector3 } from 'three'
 import {
+  CHART_FACE_NAMES,
+  applyLightmapUV,
   beveledExtrude,
   boxProjectUV,
+  chartLocal,
+  chartLocalToTexel,
   chamferedBox,
   counterClockwise,
   fin,
   insetConvex,
   kerb,
   latheProfile,
+  lightmapAtlasHash,
   mergeProp,
   minimumEdgeDistance,
   nodeCore,
@@ -16,7 +21,9 @@ import {
   pad,
   paintByFacing,
   paintByHeight,
+  packLightmapAtlas,
   pill,
+  propPartVertexCounts,
   puck,
   roundedCylinder,
   roundedOutline,
@@ -24,6 +31,7 @@ import {
   signedArea,
   slab,
   trace,
+  texelToChartLocal,
   tubeFromCurve,
   wedge,
 } from './geometry'
@@ -741,5 +749,254 @@ describe('the kit', () => {
     }
     expect(apexRadius).toBeGreaterThan(0)
     expect(bounds(geometry).max.y).toBeCloseTo(2.2, 5)
+  })
+})
+
+describe('the lightmap atlas', () => {
+  /** Two axis-aligned boxes, merged, plus the part counts the packer needs. */
+  function twoBoxes() {
+    const parts = [
+      { geometry: chamferedBox({ width: 2, height: 1, depth: 2, bevel: 0.1 }), position: [0, 0, 0] as [number, number, number] },
+      { geometry: chamferedBox({ width: 1, height: 1, depth: 1, bevel: 0.1 }), position: [5, 0, 0] as [number, number, number] },
+    ]
+    const counts = propPartVertexCounts(parts)
+    const geometry = mergeProp(parts)
+    return { parts, counts, meshes: [{ geometry, partVertexCounts: counts }] }
+  }
+
+  it('reports each part’s post-merge vertex count, summing to the merge', () => {
+    const { counts, meshes } = twoBoxes()
+    expect(counts).toHaveLength(2)
+    expect(counts[0] + counts[1]).toBe(meshes[0].geometry.getAttribute('position').count)
+  })
+
+  it('rejects an indexed geometry rather than painting stripes on it', () => {
+    const geometry = new BoxGeometry(1, 1, 1)
+    expect(() =>
+      packLightmapAtlas([{ geometry, partVertexCounts: [geometry.getIndex()!.count] }], {
+        size: 64,
+        texelsPerMetre: 8,
+      }),
+    ).toThrow(/indexed/)
+  })
+
+  it('rejects part counts that do not sum to the geometry', () => {
+    const { meshes } = twoBoxes()
+    expect(() =>
+      packLightmapAtlas([{ geometry: meshes[0].geometry, partVertexCounts: [3] }], {
+        size: 256,
+        texelsPerMetre: 8,
+      }),
+    ).toThrow(/part counts sum to/)
+  })
+
+  /*
+    The single most important property of the packer, and the one a bug in it breaks
+    silently. Two charts sharing texels means one surface renders with another's
+    occlusion, and the image still looks like a plausible lightmap. It was checked by
+    hand on the real hub geometry once, at 204 charts, and this is that check kept.
+  */
+  it('never overlaps two charts', () => {
+    const { meshes } = twoBoxes()
+    const atlas = packLightmapAtlas(meshes, { size: 512, texelsPerMetre: 40 })
+    expect(atlas.charts.length).toBeGreaterThan(6)
+    for (let i = 0; i < atlas.charts.length; i++) {
+      for (let j = i + 1; j < atlas.charts.length; j++) {
+        const a = atlas.charts[i]
+        const b = atlas.charts[j]
+        const overlaps =
+          a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+        expect(overlaps, `${a.part}/${a.face} overlaps ${b.part}/${b.face}`).toBe(false)
+      }
+    }
+  })
+
+  it('keeps every chart inside the atlas', () => {
+    const { meshes } = twoBoxes()
+    const atlas = packLightmapAtlas(meshes, { size: 512, texelsPerMetre: 40 })
+    for (const c of atlas.charts) {
+      expect(c.x).toBeGreaterThanOrEqual(0)
+      expect(c.y).toBeGreaterThanOrEqual(0)
+      expect(c.x + c.w).toBeLessThanOrEqual(atlas.size)
+      expect(c.y + c.h).toBeLessThanOrEqual(atlas.size)
+    }
+  })
+
+  it('gives a box exactly six charts per part, one per face direction', () => {
+    const { meshes } = twoBoxes()
+    const atlas = packLightmapAtlas(meshes, { size: 512, texelsPerMetre: 40 })
+    for (const part of [0, 1]) {
+      const faces = atlas.charts.filter((c) => c.part === part).map((c) => c.face).sort()
+      expect(faces).toEqual([0, 1, 2, 3, 4, 5])
+    }
+  })
+
+  it('assigns every triangle to exactly one chart', () => {
+    const { meshes } = twoBoxes()
+    const atlas = packLightmapAtlas(meshes, { size: 512, texelsPerMetre: 40 })
+    const seen = new Set<number>()
+    let total = 0
+    for (const c of atlas.charts) {
+      for (const t of c.triangles) {
+        expect(seen.has(t), `triangle ${t} is in two charts`).toBe(false)
+        seen.add(t)
+        total++
+      }
+    }
+    expect(total).toBe(meshes[0].geometry.getAttribute('position').count / 3)
+  })
+
+  it('is deterministic, which is what lets the bake and the runtime agree', () => {
+    const a = packLightmapAtlas(twoBoxes().meshes, { size: 512, texelsPerMetre: 40 })
+    const b = packLightmapAtlas(twoBoxes().meshes, { size: 512, texelsPerMetre: 40 })
+    expect(lightmapAtlasHash(a)).toBe(lightmapAtlasHash(b))
+    expect(a.charts.map((c) => [c.part, c.face, c.x, c.y])).toEqual(
+      b.charts.map((c) => [c.part, c.face, c.x, c.y]),
+    )
+  })
+
+  it('changes its hash when the geometry moves, which is the staleness detector', () => {
+    const base = lightmapAtlasHash(packLightmapAtlas(twoBoxes().meshes, { size: 512, texelsPerMetre: 40 }))
+
+    const moved = twoBoxes()
+    moved.parts[1].position = [5.5, 0, 0]
+    const shifted = mergeProp(moved.parts)
+    const after = lightmapAtlasHash(
+      packLightmapAtlas([{ geometry: shifted, partVertexCounts: moved.counts }], {
+        size: 512,
+        texelsPerMetre: 40,
+      }),
+    )
+    expect(after).not.toBe(base)
+  })
+
+  it('changes its hash when the atlas options change', () => {
+    const a = lightmapAtlasHash(packLightmapAtlas(twoBoxes().meshes, { size: 512, texelsPerMetre: 40 }))
+    const b = lightmapAtlasHash(packLightmapAtlas(twoBoxes().meshes, { size: 512, texelsPerMetre: 41 }))
+    expect(a).not.toBe(b)
+  })
+
+  it('throws rather than silently dropping charts when the atlas is too small', () => {
+    expect(() => packLightmapAtlas(twoBoxes().meshes, { size: 32, texelsPerMetre: 40 })).toThrow(
+      /does not fit|ran out of room/,
+    )
+  })
+
+  it('writes a uv1 attribute for every vertex, in 0..1', () => {
+    const { meshes } = twoBoxes()
+    const atlas = packLightmapAtlas(meshes, { size: 512, texelsPerMetre: 40 })
+    applyLightmapUV(meshes, atlas)
+    const uv = meshes[0].geometry.getAttribute('uv1')
+    expect(uv).toBeTruthy()
+    expect(uv.count).toBe(meshes[0].geometry.getAttribute('position').count)
+    for (let i = 0; i < uv.count; i++) {
+      expect(uv.getX(i)).toBeGreaterThanOrEqual(0)
+      expect(uv.getX(i)).toBeLessThanOrEqual(1)
+      expect(uv.getY(i)).toBeGreaterThanOrEqual(0)
+      expect(uv.getY(i)).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('leaves uv0 alone, so the tiling detail maps still work', () => {
+    const { meshes } = twoBoxes()
+    boxProjectUV(meshes[0].geometry, 2)
+    const before = Array.from((meshes[0].geometry.getAttribute('uv') as { array: ArrayLike<number> }).array)
+    applyLightmapUV(meshes, packLightmapAtlas(meshes, { size: 512, texelsPerMetre: 40 }))
+    const after = Array.from((meshes[0].geometry.getAttribute('uv') as { array: ArrayLike<number> }).array)
+    expect(after).toEqual(before)
+  })
+
+  /*
+    **The V flip, pinned with an explicit expected value.** three loads an image with
+    `flipY = true`, so image row 0 lands at v = 1 and `applyLightmapUV` inverts V on
+    the way out. A lightmap that is vertically mirrored is the most convincing wrong
+    result available - still soft, still in plausible places, and only obviously
+    broken on asymmetric parts - so it gets a test that would fail on a sign flip
+    rather than a property that a mirror would still satisfy.
+  */
+  it('puts atlas row 0 at v = 1, matching three’s default flipY', () => {
+    const { meshes } = twoBoxes()
+    const atlas = packLightmapAtlas(meshes, { size: 512, texelsPerMetre: 40 })
+    applyLightmapUV(meshes, atlas)
+
+    const chart = atlas.charts.find((c) => c.part === 0 && c.face === 2)!
+    const position = meshes[0].geometry.getAttribute('position')
+    const uv = meshes[0].geometry.getAttribute('uv1')
+
+    // The vertex of this chart with the smallest V in chart space must carry the
+    // LARGEST uv1.y, because chart V grows downward through the image.
+    let lowest = Infinity
+    let lowestUv = 0
+    let highest = -Infinity
+    let highestUv = 0
+    for (const t of chart.triangles) {
+      for (let k = 0; k < 3; k++) {
+        const i = t * 3 + k
+        const v = chartLocal(position, i, chart.face).v
+        if (v < lowest) {
+          lowest = v
+          lowestUv = uv.getY(i)
+        }
+        if (v > highest) {
+          highest = v
+          highestUv = uv.getY(i)
+        }
+      }
+    }
+    expect(highest).toBeGreaterThan(lowest)
+    expect(lowestUv).toBeGreaterThan(highestUv)
+
+    // And the exact value, from the mapping, so a gutter change cannot pass.
+    const expected = 1 - (chart.y + atlas.gutter) / atlas.size
+    expect(lowestUv).toBeCloseTo(expected, 6)
+  })
+
+  it('round trips a point through the texel mapping', () => {
+    const { meshes } = twoBoxes()
+    const atlas = packLightmapAtlas(meshes, { size: 512, texelsPerMetre: 40 })
+    const chart = atlas.charts[0]
+    const u = chart.minU + chart.spanU * 0.37
+    const v = chart.minV + chart.spanV * 0.61
+    const { col, row } = chartLocalToTexel(atlas, chart, u, v)
+    const back = texelToChartLocal(atlas, chart, col, row)
+    expect(back.u).toBeCloseTo(u, 9)
+    expect(back.v).toBeCloseTo(v, 9)
+  })
+
+  it('rejects an atlas that does not describe the geometry it is applied to', () => {
+    const { meshes } = twoBoxes()
+    const atlas = packLightmapAtlas(meshes, { size: 512, texelsPerMetre: 40 })
+    const other = twoBoxes()
+    // One extra vertex is enough: the charts cannot claim it, and an unclaimed
+    // vertex samples texel (0, 0) forever if it is allowed through.
+    const truncated = { ...atlas, charts: atlas.charts.slice(0, 3) }
+    expect(() => applyLightmapUV(other.meshes, truncated)).toThrow(/without a uv1/)
+  })
+
+  it('rejects a chart naming a mesh that was not passed in', () => {
+    const { meshes } = twoBoxes()
+    const atlas = packLightmapAtlas(meshes, { size: 512, texelsPerMetre: 40 })
+    const wrong = { ...atlas, charts: atlas.charts.map((c) => ({ ...c, mesh: 7 })) }
+    expect(() => applyLightmapUV(meshes, wrong)).toThrow(/references mesh 7/)
+  })
+
+  it('packs two meshes into one atlas', () => {
+    const a = twoBoxes()
+    const b = twoBoxes()
+    const atlas = packLightmapAtlas([a.meshes[0], b.meshes[0]], { size: 1024, texelsPerMetre: 40 })
+    expect(new Set(atlas.charts.map((c) => c.mesh))).toEqual(new Set([0, 1]))
+    applyLightmapUV([a.meshes[0], b.meshes[0]], atlas)
+    expect(a.meshes[0].geometry.getAttribute('uv1')).toBeTruthy()
+    expect(b.meshes[0].geometry.getAttribute('uv1')).toBeTruthy()
+  })
+
+  it('names the six chart directions in the order it numbers them', () => {
+    expect(CHART_FACE_NAMES).toEqual(['+X', '-X', '+Y', '-Y', '+Z', '-Z'])
+    const position = new BufferAttribute(new Float32Array([1, 2, 3]), 3)
+    // +Y takes (x, z); +X takes (z, y); +Z takes (x, y).
+    expect(chartLocal(position, 0, 2)).toEqual({ u: 1, v: 3 })
+    expect(chartLocal(position, 0, 0)).toEqual({ u: 3, v: 2 })
+    expect(chartLocal(position, 0, 4)).toEqual({ u: 1, v: 2 })
+    expect(() => chartLocal(position, 0, 6)).toThrow(/not 0..5/)
   })
 })

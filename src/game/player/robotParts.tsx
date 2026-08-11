@@ -11,12 +11,13 @@ import {
   vinyl,
   visorPlate,
 } from '@/art/materials'
-import { beveledExtrude, latheProfile } from '@/art/geometry'
+import { latheProfile } from '@/art/geometry'
 import type { QualitySettings } from '@/art/quality'
 import {
   ARM_BAND,
   ARM_BEVEL,
   BACKPACK_BLOCK,
+  DIAPER,
   EAR_POD_SHAPE,
   FACE_PLATE,
   HAND,
@@ -25,6 +26,7 @@ import {
   SOLE_LIGHT,
   roundedDiscProfile,
   superellipsePoints,
+  superellipsoidPatch,
   taperedSuperellipsoid,
   TORSO,
   type CapeRibbon,
@@ -78,7 +80,7 @@ import {
  * dome." Every clause of that is now false on purpose, and the integrator owns
  * rewriting it.
  */
-const PROPOSED_HELMET = '#2f6fc4'
+
 
 // ---------------------------------------------------------------------------
 // Geometry, built once at module load.
@@ -96,19 +98,77 @@ const PROPOSED_HELMET = '#2f6fc4'
 const TORSO_GEOMETRY = taperedSuperellipsoid(TORSO)
 
 /**
- * The face plate: an extruded squircle.
+ * The head: an oblong helmet, and the largest single mass on the character.
  *
- * `beveledExtrude` rather than a raw `ExtrudeGeometry`, because three's own
- * bevel option insets the contour near the caps and leaves the side edges
- * exactly as sharp as the polygon that produced them. On the single most
- * looked-at surface on the character, a sharp edge is the whole difference
- * between a moulded window and a decal.
+ * A superellipsoid rather than the `RoundedBox` it was, because 59% of the box's
+ * height was one flat normal and the user reads the result as "shaped like a
+ * rounded rectangle". `HEAD_SHELL` carries the exponent table it was chosen
+ * against and the reason its extents did not move.
  */
-const FACE_PLATE_GEOMETRY = beveledExtrude({
+const HEAD_GEOMETRY = taperedSuperellipsoid(HEAD_SHELL)
+
+/**
+ * The diaper: a tapered cushion widest at the hip line.
+ *
+ * A `taperedSuperellipsoid` rather than the `RoundedBox` it was, because a corner
+ * radius 93% of the box's half-height left 7% of flat top and made the front
+ * outline a 2.21 : 1 stadium, which is the "odd and bubbly" the user is reading.
+ * `DIAPER` carries the width ladder and the reason the radius was NOT being
+ * clamped, which is what the brief for this pass suspected.
+ */
+const DIAPER_GEOMETRY = taperedSuperellipsoid(DIAPER)
+
+/**
+ * The face plate: a squircle patch lying on the helmet's own surface.
+ *
+ * It was a `beveledExtrude` of the same outline, mounted on the head's flat front
+ * face. There is no flat front face now, and a flat plate on a superellipsoid head
+ * stands 0.141 m off it at the rim against a plate 0.032 m deep.
+ * `superellipsoidPatch` carries that measurement and the three alternatives that
+ * were rejected; `FACE_PLATE` carries the reason not one number in `VISOR` had to
+ * move, which is that the patch emits the UVs the quad emitted.
+ *
+ * `beveledExtrude` is still the right tool for a flat plate and is still used for
+ * nothing else on this character, so its import is gone from this file.
+ */
+const FACE_PLATE_GEOMETRY = superellipsoidPatch({
+  host: HEAD_SHELL,
   outline: superellipsePoints(FACE_PLATE.a, FACE_PLATE.b, FACE_PLATE.n, FACE_PLATE.segments),
-  depth: FACE_PLATE.depth,
-  bevel: FACE_PLATE.bevel,
-  bevelSegments: 3,
+  halfW: FACE_PLATE.a,
+  halfH: FACE_PLATE.b,
+  centreY: FACE_PLATE.y,
+  facing: 1,
+  inset: FACE_PLATE.inset,
+  rise: FACE_PLATE.rise,
+  chamfer: FACE_PLATE.chamfer,
+  chamferFrac: FACE_PLATE.chamferFrac,
+  rings: FACE_PLATE.rings,
+  solid: true,
+})
+
+/**
+ * The copper cap: the same generator, the same host, the other side of the head.
+ *
+ * A patch and not a `RoundedBox`, because the box drew "reads as a panel stuck on
+ * rather than an integrated shape" and because on an oval head it also gapped - it
+ * would have stood 0.047 clear of the crown at its own centre depth with daylight
+ * under its rim. A shell whose inner surface IS the helmet's surface cannot do
+ * either. `HEAD_CAP` carries the footprint the generator refused to build and the
+ * one it accepted.
+ */
+const HEAD_CAP_GEOMETRY = superellipsoidPatch({
+  host: HEAD_SHELL,
+  outline: superellipsePoints(HEAD_CAP.halfW, HEAD_CAP.halfH, HEAD_CAP.n, HEAD_CAP.segments),
+  halfW: HEAD_CAP.halfW,
+  halfH: HEAD_CAP.halfH,
+  centreY: HEAD_CAP.y,
+  facing: -1,
+  inset: HEAD_CAP.inset,
+  rise: HEAD_CAP.rise,
+  chamfer: HEAD_CAP.chamfer,
+  chamferFrac: HEAD_CAP.chamferFrac,
+  rings: HEAD_CAP.rings,
+  solid: true,
 })
 
 /**
@@ -182,6 +242,11 @@ type Q = { quality: QualitySettings }
  * The head shell. 0.72 x 0.54 x 0.62, and deliberately the widest mass on the
  * character.
  *
+ * A superellipsoid at exponents 0.75, not a `RoundedBox`. The extents are the same
+ * to the millimetre and the form is the whole change; `HEAD_SHELL` has the normal
+ * table it was chosen against, and `superellipsoidPatch` has what it cost the face
+ * plate.
+ *
  * The head being wider than the torso at every height is what makes a shape
  * read as an infant rather than as a short adult, and it matters more than the
  * head-height ratio does. The previous model had a 0.56 head on a 0.62 torso,
@@ -194,7 +259,7 @@ type Q = { quality: QualitySettings }
  *
  * ## The head is now the helmet
  *
- * It is `PROPOSED_HELMET` blue rather than `palette.shell` off-white, and that is
+ * It is `palette.helmet` blue rather than `palette.shell` off-white, and that is
  * the largest single change in the livery. The reference's head is entirely a
  * blue helmet with a dark faceplate on the front and a copper cap on the back;
  * there is no white on it. The torso, the diaper and the hand keep the off-white
@@ -212,15 +277,9 @@ type Q = { quality: QualitySettings }
  */
 export function HeadShell({ quality }: Q) {
   return (
-    <RoundedBox
-      args={[HEAD_SHELL.width, HEAD_SHELL.height, HEAD_SHELL.depth]}
-      radius={HEAD_SHELL.radius}
-      smoothness={HEAD_SHELL.smoothness}
-      castShadow
-      receiveShadow
-    >
-      <meshPhysicalMaterial {...shell(PROPOSED_HELMET, quality.sheenHero ? {} : { sheen: 0 })} />
-    </RoundedBox>
+    <mesh geometry={HEAD_GEOMETRY} castShadow receiveShadow>
+      <meshPhysicalMaterial {...shell(palette.helmet, quality.sheenHero ? {} : { sheen: 0 })} />
+    </mesh>
   )
 }
 
@@ -249,16 +308,9 @@ export function HeadShell({ quality }: Q) {
  */
 export function HeadCap() {
   return (
-    <RoundedBox
-      args={[HEAD_CAP.width, HEAD_CAP.height, HEAD_CAP.depth]}
-      radius={HEAD_CAP.radius}
-      smoothness={HEAD_CAP.smoothness}
-      position={[0, HEAD_CAP.y, HEAD_CAP.z]}
-      castShadow
-      receiveShadow
-    >
+    <mesh geometry={HEAD_CAP_GEOMETRY} castShadow receiveShadow>
       <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
-    </RoundedBox>
+    </mesh>
   )
 }
 
@@ -282,8 +334,22 @@ export function FacePlate() {
 }
 
 /**
- * An ear pod, at its own node's origin. The pair are the widest thing on the
- * head and the only feature that breaks its boxy corners.
+ * An ear pod, at its own node's origin. The pair are the widest thing on the head.
+ *
+ * ## It was rendering inside out, on every angle, since it was built
+ *
+ * The user's note is that the ears disappear in profile. The cause is not in this
+ * component and not in the material: `roundedDiscProfile` descended, so
+ * `LatheGeometry` gave the pod inward normals and inverted winding, and with the
+ * default `FrontSide` the only thing drawn was the interior of its far wall. The
+ * signed volumes, the reason the defect is worst in profile specifically, and the
+ * two arm rings it also affected are all on `EAR_POD_SHAPE` and
+ * `roundedDiscProfile`.
+ *
+ * The claim in this comment's own history that the pods "break the head's boxy
+ * corners" is retired: the head has no boxy corners any more, and the pods cannot
+ * break its profile outline at all - they clear it by 0.165 in y and 0.185 in z. In
+ * profile they read by shading, which is why the fillet went 0.030 to 0.055.
  *
  * One material and not two. This used to pick `chrome()` on a tier with
  * `sheenHero` and `plastic(palette.accentDeep)` otherwise, and describe itself
@@ -404,12 +470,17 @@ export function ChestPanel() {
  * It flares back out to the full 0.62 below a torso that narrows to 0.52, which
  * is the second inversion in the silhouette and the one that gives the
  * character a waist without giving it a waistline.
+ *
+ * That flare survives; the pill it was does not. `DIAPER` carries the two
+ * measurements behind "his hips look odd and bubbly", the finding that
+ * `RoundedBoxGeometry` was NOT clamping the radius, and why reducing the radius
+ * would have moved the complaint rather than answering it.
  */
 export function Diaper({ quality }: Q) {
   return (
-    <RoundedBox args={[0.62, 0.28, 0.52]} radius={0.13} smoothness={4} position={[0, 0, -0.03]} castShadow receiveShadow>
+    <mesh geometry={DIAPER_GEOMETRY} position={[0, 0, DIAPER.z]} castShadow receiveShadow>
       <meshPhysicalMaterial {...heroShell(quality)} />
-    </RoundedBox>
+    </mesh>
   )
 }
 
@@ -512,7 +583,7 @@ export function UpperArm({ quality }: Q) {
       {/* The blue band. Same hue as the helmet, which is what makes the livery
           read as one design rather than as a blue head on a striped arm. */}
       <mesh geometry={ARM_BAND_GEOMETRY} position={[0, ARM_BAND.y + 0.13, 0]} castShadow>
-        <meshPhysicalMaterial {...plastic(PROPOSED_HELMET)} />
+        <meshPhysicalMaterial {...plastic(palette.helmet)} />
       </mesh>
       {/* The cuff bevel, in the hardware copper. Narrower and less proud, so it
           reads as a moulded step rather than as a second band. */}

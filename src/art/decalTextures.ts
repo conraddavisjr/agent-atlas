@@ -103,7 +103,32 @@ export function roughnessByte(value: number, target: number): number {
  * groove is negative, a raised lip or a screw head is positive.
  */
 export type Mark =
-  | { kind: 'panel'; x1: number; y1: number; x2: number; y2: number; width: number; depth: number }
+  | {
+      kind: 'panel'
+      x1: number
+      y1: number
+      x2: number
+      y2: number
+      width: number
+      depth: number
+      /**
+       * Extra half-width of the raised lip on EACH side of the groove, in tile
+       * units. Omit for the legacy behaviour of a one-pixel lip.
+       *
+       * A one-pixel lip is right for a 2.5 mm groove and wrong for a 20 mm one.
+       * `deck` now cuts a groove 8 times the spec width - see `DECAL_KINDS.deck`
+       * for why - and a 10-pixel groove with a 1-pixel lip reads as a wide flat
+       * trench, which is a gap between parts rather than a moulded seam. The lip
+       * has to scale with the groove or the mark changes meaning as it grows.
+       *
+       * Optional rather than defaulted, so `trim`, `hull` and `plate` keep the
+       * exact pixels they were measured with. Their kerb faces are the one
+       * surface in the world where the relief ladder was proven to read, moving
+       * high-frequency detail from 16.78 to 17.75, and that is not a measurement
+       * to spend on a mark nobody asked to change.
+       */
+      lip?: number
+    }
   | { kind: 'screw'; x: number; y: number; radius: number; depth: number }
   | { kind: 'vent'; x: number; y: number; width: number; height: number; angle: number; depth: number }
   | { kind: 'chevron'; x: number; y: number; size: number; angle: number; depth: number }
@@ -127,6 +152,8 @@ export type PanelLineSpec = {
   metresPerTile: number
   /** Groove width in metres. 2.5 mm is the house value. */
   width?: number
+  /** Raised-lip half-width on each side of the groove, in metres. */
+  lip?: number
   /** Height-mask displacement of the groove. Negative. */
   depth?: number
   seed: number
@@ -146,6 +173,7 @@ export function panelLines({
   pitch,
   metresPerTile,
   width = 0.0025,
+  lip,
   depth = -0.16,
   seed,
   suppress = 0.3,
@@ -157,6 +185,7 @@ export function panelLines({
 
   const random = mulberry32(seed)
   const lineWidth = width / metresPerTile
+  const lipWidth = lip === undefined ? undefined : lip / metresPerTile
   const marks: Mark[] = []
 
   for (let t = step; t < 1 - 1e-9; t += step) {
@@ -166,11 +195,15 @@ export function panelLines({
       stopped short would leave a visible stub end in the middle of a face,
       which is a worse artefact than the one this avoids.
     */
+    // The lip key is spread rather than assigned, so a kind that does not ask
+    // for one produces the exact object shape - and therefore the exact pixels -
+    // that it produced before this parameter existed.
+    const lipKey = lipWidth === undefined ? {} : { lip: lipWidth }
     if (random() >= suppress) {
-      marks.push({ kind: 'panel', x1: 0, y1: t, x2: 1, y2: t, width: lineWidth, depth })
+      marks.push({ kind: 'panel', x1: 0, y1: t, x2: 1, y2: t, width: lineWidth, depth, ...lipKey })
     }
     if (random() >= suppress) {
-      marks.push({ kind: 'panel', x1: t, y1: 0, x2: t, y2: 1, width: lineWidth, depth })
+      marks.push({ kind: 'panel', x1: t, y1: 0, x2: t, y2: 1, width: lineWidth, depth, ...lipKey })
     }
   }
 
@@ -367,6 +400,116 @@ export function warningChevrons({
   return marks
 }
 
+export type ChipTraceSpec = {
+  /**
+   * The random source, PASSED IN rather than seeded here, and this is the whole
+   * reason the signature looks like this.
+   *
+   * `groundTexture.ts` drew these traces inline from a `mulberry32(20260805)`
+   * stream that it SHARES with the 26-circle mottling pass immediately above
+   * them. Lifting the routine and giving it its own seed would have left the
+   * ground's own call drawing from a different point in that stream, and the
+   * lawn's mottle and traces would both have moved - a change to the largest
+   * surface in the frame, arriving as a side effect of a refactor, with no error
+   * and nothing in any test to catch it. Taking `rand` keeps the ground's stream
+   * position and consumption order byte for byte identical, which
+   * `groundTexture.test.ts` now asserts against a reimplementation of the
+   * original inline code.
+   */
+  rand: () => number
+  /** How many runs to lay down. */
+  count: number
+  /** Spacing of the grid the runs turn on, in pixels. */
+  grid: number
+  /** How many grid steps across the canvas a start position may land on. */
+  cells?: number
+  /** Segments per run: `min` to `min + span - 1`. */
+  segmentsMin?: number
+  segmentsSpan?: number
+  /** Segment length in grid steps: 1 to `lengthSpan`. */
+  lengthSpan?: number
+  /** Stroke width in pixels: `min` to `min + span`. */
+  widthMin?: number
+  widthSpan?: number
+  /** Stroke alpha: `min` to `min + span`. */
+  alphaMin?: number
+  alphaSpan?: number
+}
+
+/** One chip-trace run: a path in pixels, plus how to stroke it. */
+export type ChipTrace = {
+  path: [number, number][]
+  width: number
+  alpha: number
+}
+
+/**
+ * Chip-trace runs with a via pad at the end of each: axis-aligned and diagonal
+ * segments on a fixed grid.
+ *
+ * Lifted verbatim out of `createGroundTexture`, where it has been drawing the
+ * lawn's circuit motif since the first pass, and made pure so that both callers
+ * share it - the lawn at 8 m per tile, and the deck's printed panel map at 40 m
+ * across. Section 7.5 of the materials spec already asked for exactly this reuse.
+ *
+ * What makes these read as a circuit rather than as cracks is the single
+ * constraint that every segment runs along one of eight fixed headings and the
+ * run terminates in a pad. A crack wanders and ends nowhere; a trace turns at set
+ * angles and stops at a pad. The turn is rejected only when it would double back
+ * along the segment just drawn, so a run is a route rather than a scribble.
+ *
+ * Returns data rather than drawing, which is what puts it on the tested side of
+ * this file's line and what makes the byte-identity assertion possible at all.
+ */
+export function chipTracePaths({
+  rand,
+  count,
+  grid,
+  cells = 16,
+  segmentsMin = 2,
+  segmentsSpan = 4,
+  lengthSpan = 3,
+  widthMin = 2,
+  widthSpan = 5,
+  alphaMin = 0.1,
+  alphaSpan = 0.12,
+}: ChipTraceSpec): ChipTrace[] {
+  const directions: [number, number][] = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+    [1, 1],
+    [-1, 1],
+    [1, -1],
+    [-1, -1],
+  ]
+
+  const traces: ChipTrace[] = []
+  for (let i = 0; i < count; i++) {
+    let x = Math.round(rand() * cells) * grid
+    let y = Math.round(rand() * cells) * grid
+    const segments = segmentsMin + Math.floor(rand() * segmentsSpan)
+
+    const path: [number, number][] = [[x, y]]
+    let [dx, dy] = directions[Math.floor(rand() * directions.length)]
+
+    for (let s = 0; s < segments; s++) {
+      const length = (1 + Math.floor(rand() * lengthSpan)) * grid
+      x += dx * length
+      y += dy * length
+      path.push([x, y])
+      // Turn rather than continue, so a trace is a route and not a line.
+      const turn = directions[Math.floor(rand() * directions.length)]
+      if (turn[0] !== -dx || turn[1] !== -dy) [dx, dy] = turn
+    }
+
+    traces.push({ path, width: widthMin + rand() * widthSpan, alpha: alphaMin + rand() * alphaSpan })
+  }
+
+  return traces
+}
+
 /**
  * The four surface kinds, matching the material presets that carry them.
  *
@@ -385,6 +528,15 @@ export type KindSpec = {
   swing: number
   /** Panel line pitch in metres. Zero means no panel lines. */
   panelPitch: number
+  /**
+   * Groove width in metres. Omit for the spec's 2.5 mm.
+   *
+   * See `DECAL_KINDS.deck` for the argument that 2.5 mm is a scale error on a
+   * twelve-metre platform.
+   */
+  panelWidth?: number
+  /** Raised-lip half-width in metres, each side. Omit for a one-pixel lip. */
+  panelLip?: number
   /** Screw heads per square metre. Zero means none. */
   screwDensity: number
   /** Normal map strength, in height units per pixel. */
@@ -428,6 +580,33 @@ export const DECAL_KINDS: Record<DecalKind, KindSpec> = {
       neither has a call site in the files this stream owns.
     */
     panelPitch: 0.5,
+    /*
+      20 mm, against section 7.1's 2.5 mm, and it is the correction of a SCALE
+      ERROR rather than a taste change. This is the single biggest lever on the
+      user's "make the lines more pronounced".
+
+      2.5 mm is authored in the same paragraph as a 0.12 m pitch on `shell` - a
+      handheld toy part, where a 2.5 mm seam is 2% of the pitch. Applying a
+      handheld part's seam width to a twelve-metre platform keeps the ratio to
+      the tile and throws away the ratio to the eye, and the eye is what the
+      user is complaining about.
+
+      MEASURED, and this is the number that decides it: the establishing frame is
+      1660 wide and the deck around world origin covers roughly 470 px for 12 m,
+      so one screen pixel is about 26 mm of deck. A 2.5 mm groove is ONE TENTH of
+      a pixel. It cannot be seen, it cannot survive the mip chain, and it makes no
+      difference whether it is cut as relief or printed as value - which is a
+      second, simpler explanation for the null result recorded above than the
+      `N.L` argument, and one that predicts a different fix. 20 mm is 0.77 of a
+      pixel at that distance and 3 px on the near step risers at
+      (950, 490), where the deck maps are the channel that actually reads.
+
+      The lip is 6 mm each side, so the whole mark is 32 mm: a dark core with a
+      proud edge either side, which is the reference's inset seam rather than a
+      scratch.
+    */
+    panelWidth: 0.02,
+    panelLip: 0.006,
     screwDensity: 0,
     normalStrength: 2.4,
   },
@@ -471,6 +650,8 @@ export function decalMarks(kind: DecalKind, seed = 20260809): Mark[] {
     ...panelLines({
       pitch: spec.panelPitch,
       metresPerTile: spec.metresPerTile,
+      width: spec.panelWidth,
+      lip: spec.panelLip,
       seed,
     }),
     ...screwHeads({
@@ -655,11 +836,59 @@ export function ormFromHeight(
 export const DECK_LIT_LUMA = 0.687
 
 /**
+ * The display luma a deck SIDE face renders at, MEASURED. The step risers.
+ *
+ * This surface was missing from the arithmetic entirely, and it is the one the
+ * user actually complained about - "the complexity in the shape or the geometry
+ * of those steps". The risers are in `deckBatch`, so they carry this same map,
+ * and nothing had ever checked what the ladder does to them.
+ *
+ *   node tools/critique/frame.mjs spread \
+ *     .critique/astro/maps-on--hub-establishing.png 950 490 44 26
+ *   -> mean 0.3836, p5 0.3758, p95 0.3931, width 0.0173
+ *
+ * **Three things fall out of that number and all three matter.**
+ *
+ * It is 0.208 BELOW its authored albedo. `palette.bandDeckSide` is `#9d968d` at
+ * a display luma of 0.592 and claims band 1; the face renders at 0.3836. The
+ * deck top loses 0.048 the same way, 0.735 authored to 0.687 rendered, so this
+ * is not a small consistent offset - a vertical face in this lighting loses four
+ * times as much as a horizontal one, and `band()` cannot see it because `band()`
+ * asserts on a hex while the test is about the frame.
+ *
+ * It straddles the midground CEILING. p5 0.3758 is inside midground 0.20-0.38;
+ * p95 0.3931 is in the 0.38-0.56 gap that is meant to be empty. Every step riser
+ * in the game currently fails band membership by sitting on the boundary, before
+ * this file prints anything on it at all.
+ *
+ * Therefore darkening a riser is a FIX, not a risk, and this is where the brief
+ * given to this stream was wrong in the most consequential way. It described
+ * this measurement as "a shadowed deck four thousandths above the midground
+ * floor" and concluded that "darkening has very little room downward". It is not
+ * a shadowed top, it is a side face in ambient; 0.38 is the midground ceiling and
+ * not its floor; and the room downward is 0.184, not 0.004. The printed ladder
+ * takes the riser to 0.3249 at its darkest, which is cleanly inside midground
+ * for the first time.
+ */
+export const DECK_SIDE_LUMA = 0.3836
+
+/**
  * The tone ladder, as DISPLAY-luma drops from the surface's own rendered value.
  *
- * The span is 0.06, which is section 8.2's figure exactly, spent entirely
- * downward for the reason in this section's header.
+ * The panel-to-panel span is 0.070, up from the 0.060 this shipped at, and the
+ * ladder no longer starts at zero: it runs 0.016 to 0.086 so that
+ * `SEAM_LIP_DROP` has somewhere brighter than every panel to live. The full
+ * printed range including the lip and the seam core is 0.0910, and the darkest
+ * printed value sits 0.0993 below the surface's own rendered luma.
  *
+ * The user asked twice for more, and the honest constraint on how much more is
+ * the band ceiling rather than the rule: 8.2 licenses "roughly plus or minus
+ * 0.06 in a band 0.18 wide", which is a span of 0.12, and a lit deck rendering
+ * at 0.687 in a band that ends at 0.74 can only spend it downward. 0.0993 of the
+ * 0.127 available, with the remaining 0.0276 reserved for the concurrent lightmap
+ * bake, is the whole of what is available without moving the deck's base value.
+ *
+
  * SIX rungs rather than the five it started at, and the sixth is not a taste
  * decision - it is what makes `panelRegions`' central property provable. A
  * rectangular subdivision's adjacency graph is planar, planar graphs are
@@ -670,13 +899,103 @@ export const DECK_LIT_LUMA = 0.687
  * the fallback there puts two same-toned panels against each other, which is
  * the one thing this mark exists to avoid.
  *
- * 0.012 per rung is 4 to 5 bytes at this end of the curve, against the 0.0026
- * that one byte buys, so the smallest possible step between two adjacent panels
- * still survives 8-bit quantisation four times over. The colouring prefers a
- * tone two or more rungs away where one is free, so the typical step is 0.024
- * and 0.012 is the floor rather than the norm.
+ * 0.014 per rung is 5 bytes at this end of the curve, against the 0.0026 that one
+ * byte buys, so the smallest possible step between two adjacent panels still
+ * survives 8-bit quantisation five times over. The colouring prefers a tone two
+ * or more rungs away where one is free, so the typical step is 0.028 and 0.014 is
+ * the floor rather than the norm.
  */
-export const PANEL_TONE_DROPS = [0, 0.012, 0.024, 0.036, 0.048, 0.06] as const
+export const PANEL_TONE_DROPS = [0.016, 0.03, 0.044, 0.058, 0.072, 0.086] as const
+
+/**
+ * The bright bevelled lip beside every seam, and the reason the whole ladder
+ * moved off zero.
+ *
+ * **This is the trick that makes a one-sided map produce a two-sided mark.** The
+ * reference's seams are not dark lines; they are a dark inset core with a BRIGHT
+ * lip either side, and the bright lip is most of what the eye uses to read a
+ * seam as a moulded join rather than as a scratch. A map that can only multiply
+ * toward black has no brighter-than-white to spend on it - so the panels give up
+ * the top of the range instead. Every panel now starts at least 0.016 below the
+ * surface's own value, which leaves 0.016 of room ABOVE the lightest panel for
+ * the lip to occupy. No new channel, no vertex colour, no second texture.
+ *
+ * 0.008 rather than 0, and the zero was tempting. A byte of 255 makes the map a
+ * no-op on the lip, which keeps the deck's authored value present somewhere in
+ * the frame and is easy to reason about. It is rejected for two reasons: the
+ * deck's mean is meant to come DOWN off the band ceiling it is sitting on at
+ * 0.687 against a 0.74 ceiling, and a genuinely neutral hairline immediately
+ * beside the darkest texel on the surface is the shape of a specular blowout
+ * rather than of a bevel. 0.008 is three bytes and costs the lip-to-core
+ * contrast 0.003 of the 0.0910 it has.
+ */
+export const SEAM_LIP_DROP = 0.008
+
+/**
+ * The seam's own core: the darkest printed value on the deck.
+ *
+ * 0.100, so the printed span from lip to core is 0.0910 of display luma on a lit
+ * deck and the darkest printed value lands 0.0993 below the surface's own, against
+ * the 0.0607 the panel fills spent alone and against the 0.000 the relief seams
+ * measured. That is the user's "more pronounced" as a number.
+ *
+ * ## Where the budget went, and what is left
+ *
+ * MEASURED on `.critique/astro/maps-on--hub-establishing.png`:
+ *
+ * | surface | box | rendered | with this ladder | band |
+ * | --- | --- | --- | --- | --- |
+ * | lit deck top | 760,620,36,24 | 0.6869 | 0.5876 to 0.6816 | gameplay 0.56-0.74 |
+ * | step riser | 950,490,44,26 | 0.3836 | 0.3249 to 0.3805 | midground 0.20-0.38 |
+ *
+ * The lit deck keeps 0.0276 of margin above the gameplay floor. That margin is
+ * not spare: another stream is baking a lightmap into `lightMap` or `aoMap` on
+ * this same material, and a lightmap multiplies albedo exactly as this map does,
+ * so the two spans COMPOUND. 0.0276 is what is reserved for it, and a bake that
+ * darkens a lit deck by more than that takes the deck's seams out of band. That
+ * is a shared budget and somebody has to own the total.
+ *
+ * ## The ceiling is the real problem, and it is not mine to fix
+ *
+ * A lit deck renders at 0.6869 in a band that ends at 0.74, so the distribution
+ * hangs off the ceiling with 0.053 above it and 0.127 below. The right shape for
+ * a surface carrying a printed pattern is to sit at the band's MIDDLE, 0.65, and
+ * spend the range in both directions. Every 0.01 the deck's base is raised buys
+ * 0.01 more printed span. See the promotion request in the report: this is the
+ * highest-value palette change available and it is why the ladder is a function
+ * of `renderedLuma` rather than a table of bytes.
+ */
+export const SEAM_CORE_DROP = 0.1
+
+/**
+ * The marks drawn INSIDE a panel, as drops relative to that panel's own tone.
+ *
+ * Relative rather than absolute, which is the property that keeps the whole
+ * vocabulary legal. An absolute value for a perforation hole would be invisible
+ * on a dark panel and would punch through the floor of the band on a light one;
+ * a relative drop gives every panel the same internal contrast, and because the
+ * total is clamped at `SEAM_CORE_DROP` nothing inside a panel can ever be darker
+ * than the seams that bound it. The seam stays the darkest thing on the deck,
+ * which is what makes the panel layout legible at all.
+ *
+ * `subPanelBorder` is NEGATIVE: the inner border of a recessed sub-panel is
+ * BRIGHTER than the panel around it, for the same reason the seam lip is. It is
+ * the second place the re-baselined ladder pays for itself.
+ */
+export const PANEL_MARK_DROPS = {
+  /** Dot and hex perforation holes. */
+  perforation: 0.02,
+  /** The recessed floor of a sub-panel. */
+  subPanelRecess: 0.024,
+  /** The proud inner lip around a sub-panel. Negative: brighter. */
+  subPanelBorder: -0.012,
+  /** The dark half of a hazard stripe fill. */
+  hazard: 0.03,
+  /** A chip-trace run. */
+  trace: 0.022,
+  /** A via pad where a trace ends. */
+  via: 0.034,
+} as const
 
 /**
  * The albedo byte that drops a surface rendering at `renderedLuma` by `drop` of
@@ -698,6 +1017,14 @@ export const PANEL_TONE_DROPS = [0, 0.012, 0.024, 0.036, 0.048, 0.06] as const
  * That means one ladder is inherently safe across every band in the world, and
  * it means a ladder sized for the deck under-delivers on band 2 rather than
  * over-delivering, which is the direction to be wrong in.
+ *
+ * **And the stronger version of that, which is why one ladder is not merely safe
+ * but correct.** A multiplier delivers a constant CONTRAST RATIO, not a constant
+ * luma difference. The seam core at byte 219 is 14.45% below a lit deck top at
+ * 0.6869 and 15.30% below a step riser at 0.3836 - the same mark, the same
+ * apparent strength, on surfaces 0.30 of luma apart. So the deck batch does not
+ * need a per-face ladder, and the objection that a printed mark sized for band 1
+ * would vanish on the darker risers is simply not what the arithmetic does.
  */
 export function albedoByte(drop: number, renderedLuma: number = DECK_LIT_LUMA): number {
   if (!(renderedLuma > 0) || renderedLuma > 1) {
@@ -731,6 +1058,93 @@ export function panelToneBytes(renderedLuma: number = DECK_LIT_LUMA): number[] {
 }
 
 /**
+ * How far the warm-cool tilt pushes the red and blue multipliers apart, as a
+ * fraction of the linear multiplier.
+ *
+ * 0.09 puts a full-warm and a full-cool panel at `#f7eee4` and `#e7f0fa` - a
+ * 19-byte spread on red and blue - which on the deck's `#bfbbb4` reads as two
+ * mould shots from slightly different batches of pigment. Past about 0.14 the
+ * panels stop looking like one material and start looking painted, which is the
+ * failure mode the reference avoids and cheap sci-fi flooring does not.
+ */
+export const PANEL_TINT_CHROMA = 0.09
+
+/**
+ * The tilts in play, warm positive and cool negative.
+ *
+ * Five rather than three, and independent of the tone ladder rather than derived
+ * from it: two independent axes of variation out of one set of panels is what
+ * makes ~900 panels read as a manufactured assembly instead of as a six-value
+ * palette applied repeatedly. Two panels that share a tone almost never share a
+ * tilt, and two that share a tilt almost never share a tone.
+ */
+export const PANEL_TINT_TILTS = [-1, -0.5, 0, 0.5, 1] as const
+
+/**
+ * The albedo bytes for a panel at `drop` with a warm-cool `tilt` in -1 to 1,
+ * chosen so the tilt costs the band NOTHING.
+ *
+ * **This is the answer to the user's "variation in hues and colors", and the
+ * reason it is free rather than expensive.** The value-band rule is a statement
+ * about Rec.709 DISPLAY luma, so a colour change that holds display luma fixed is
+ * invisible to it. Hue is therefore an entirely unbudgeted axis: the tone ladder
+ * has to fight for 0.0993 of the 0.127 available, while the hue variation sitting
+ * on top of it costs 0.0007 - a quarter of one byte, and below the 0.0026 that a
+ * single byte buys.
+ *
+ * The arithmetic is a one-dimensional solve rather than a formula, because there
+ * is no closed form. The wanted quantity is a linear multiplier triple `m` such
+ * that `sum(w_c * linearToSrgb(base * m_c)) == renderedLuma - drop`, where `w` is
+ * Rec.709 and `base` is the surface's own rendered value decoded to linear. The
+ * transfer function inside the sum is what stops that being invertible, so the
+ * chroma direction is fixed and the overall SCALE is bisected. Sixty iterations
+ * is far past byte precision and runs once per panel at load.
+ *
+ * Two approximations, both stated because they are the ones that would make this
+ * quietly wrong. The surface is treated as neutral grey at `renderedLuma`, which
+ * is the same approximation `albedoByte` already makes and is good to a fraction
+ * of a byte on a surface as desaturated as `#bfbbb4`. And a warm tilt is defined
+ * as red up, blue down, green fixed - the green channel is left alone on purpose,
+ * because green carries 71.52% of the luma and moving it is the expensive way to
+ * change hue.
+ */
+export function panelTintBytes(
+  drop: number,
+  tilt: number,
+  renderedLuma: number = DECK_LIT_LUMA,
+  chroma: number = PANEL_TINT_CHROMA,
+): [number, number, number] {
+  if (!(renderedLuma > 0) || renderedLuma > 1) {
+    throw new Error(`decalTextures: renderedLuma must be in (0, 1], got ${renderedLuma}`)
+  }
+  const target = renderedLuma - drop
+  if (target <= 0) {
+    throw new Error(`decalTextures: a drop of ${drop} takes ${renderedLuma} to or below black`)
+  }
+
+  const base = srgbToLinear(renderedLuma)
+  const direction = [1 + tilt * chroma, 1, 1 - tilt * chroma]
+
+  // Bisect the scale. Monotone in `scale`, so this cannot get stuck.
+  let lo = 0
+  let hi = 1
+  for (let i = 0; i < 60; i++) {
+    const scale = (lo + hi) / 2
+    const luma =
+      0.2126 * linearToSrgb(Math.min(1, base * scale * direction[0])) +
+      0.7152 * linearToSrgb(Math.min(1, base * scale * direction[1])) +
+      0.0722 * linearToSrgb(Math.min(1, base * scale * direction[2]))
+    if (luma > target) hi = scale
+    else lo = scale
+  }
+
+  const scale = (lo + hi) / 2
+  const byte = (v: number) =>
+    Math.max(0, Math.min(255, Math.round(255 * linearToSrgb(Math.min(1, scale * v)))))
+  return [byte(direction[0]), byte(direction[1]), byte(direction[2])]
+}
+
+/**
  * One printed panel, in CELL coordinates: integer cells from the tile's origin.
  *
  * Cells rather than the 0-to-1 tile units the `Mark` primitives use, and the
@@ -739,6 +1153,46 @@ export function panelToneBytes(renderedLuma: number = DECK_LIT_LUMA): number[] {
  * plane exactly with no overlap and no gap, which is a statement about integers.
  * Asserting it in floats would be asserting it about a rasteriser.
  */
+/**
+ * What is printed INSIDE one panel. Exactly one of these per panel, never two.
+ *
+ * **This is the restraint rule re-scoped, and the re-scoping is deliberate.**
+ * `02-materials.md` section 7.7 says "at most three of the six marks on any one
+ * object, and never more than one mark type per face". Taken literally, the
+ * deck's top face is ONE face of 113 square metres and may carry ONE mark - which
+ * is the state that produced round 1's finding of "decks with literally zero
+ * surface detail" and the user's complaint now. The rule was written for a 0.3 m
+ * moulded part, where a face is a single mould facet.
+ *
+ * So the rule is applied per PANEL instead: a face may carry the seams that
+ * define its panels, plus one mark inside each panel, and no panel carries two.
+ * That preserves the rule's actual intent - nothing is simultaneously perforated
+ * and hazard-striped and trace-printed - at the granularity the surface has. The
+ * requested amendment to section 7.7 is in this stream's report; the enum is what
+ * enforces it in code either way, because a union type cannot hold two values.
+ *
+ * `flat` is the majority on purpose. The reference fills SOME panels and not
+ * others, and a vocabulary applied to every panel is the greeble the rule exists
+ * to prevent.
+ */
+export type PanelFill = 'flat' | 'dots' | 'hex' | 'hazard' | 'trace' | 'sub'
+
+/**
+ * How often each fill appears. Must sum to at most 1; the remainder is `flat`.
+ *
+ * Sized off the reference: perforation is the commonest mark by a wide margin and
+ * appears in two grid forms, chip-trace runs are next, hazard fills are on "a
+ * few" panels and are the rarest because they are the loudest, and recessed
+ * sub-panels are structural rather than decorative so they stay sparse too.
+ */
+export const PANEL_FILL_SHARES: Record<Exclude<PanelFill, 'flat'>, number> = {
+  dots: 0.14,
+  hex: 0.08,
+  trace: 0.12,
+  sub: 0.08,
+  hazard: 0.05,
+}
+
 export type PanelRegion = {
   x: number
   y: number
@@ -746,8 +1200,10 @@ export type PanelRegion = {
   h: number
   /** Index into the tone ladder. */
   tone: number
-  /** Whether this panel carries the printed perforation grid. */
-  perforated: boolean
+  /** Index into `PANEL_TINT_TILTS`. The panel's warm-cool bias. */
+  tilt: number
+  /** The one mark printed inside this panel. */
+  fill: PanelFill
 }
 
 export type PanelRegionSpec = {
@@ -757,8 +1213,11 @@ export type PanelRegionSpec = {
   maxCells?: number
   /** How many rungs of the tone ladder are in play. */
   tones?: number
-  /** Fraction of panels carrying the perforation grid. */
-  perforatedShare?: number
+  /**
+   * Overrides for `PANEL_FILL_SHARES`. A share of 0 removes that fill, which is
+   * how `medium` drops the two marks it cannot resolve.
+   */
+  fillShares?: Partial<Record<Exclude<PanelFill, 'flat'>, number>>
   seed?: number
 }
 
@@ -798,7 +1257,7 @@ export function panelRegions({
   cells,
   maxCells = 6,
   tones = PANEL_TONE_DROPS.length,
-  perforatedShare = 0.12,
+  fillShares,
   seed = 20260810,
 }: PanelRegionSpec): PanelRegion[] {
   if (!(cells > 0) || !Number.isInteger(cells)) {
@@ -942,11 +1401,51 @@ export function panelRegions({
     colour[index] = pool[Math.floor(random() * pool.length)]
   }
 
-  return boxes.map((box, index) => ({
-    ...box,
-    tone: colour[index],
-    perforated: random() < perforatedShare,
-  }))
+  /*
+    Phase four: the fill and the tilt.
+
+    Drawn from the same stream and after the colouring, so a change to either of
+    these cannot move a single panel boundary or tone. That ordering is the reason
+    this pass is appended rather than folded into the loop above: the layout and
+    the colouring are the two properties with tests asserting real invariants on
+    them, and a decorative pass must not be able to perturb them.
+
+    The fill is picked by walking the cumulative shares, which makes an unlisted
+    or zeroed fill cost exactly one comparison and lets `medium` remove the two
+    marks it cannot resolve without changing the panels underneath.
+  */
+  const shares = { ...PANEL_FILL_SHARES, ...fillShares }
+  const table: [PanelFill, number][] = []
+  let cumulative = 0
+  for (const kind of ['dots', 'hex', 'trace', 'sub', 'hazard'] as const) {
+    cumulative += Math.max(0, shares[kind])
+    table.push([kind, cumulative])
+  }
+  if (cumulative > 1) {
+    throw new Error(`decalTextures: panel fill shares sum to ${cumulative.toFixed(3)}, over 1`)
+  }
+
+  return boxes.map((box, index) => {
+    const roll = random()
+    const tilt = Math.floor(random() * PANEL_TINT_TILTS.length)
+    let fill: PanelFill = 'flat'
+    for (const [kind, limit] of table) {
+      if (roll < limit) {
+        fill = kind
+        break
+      }
+    }
+    /*
+      A one-cell panel is 0.5 m and, at the panel map's 25.6 texels per metre,
+      13 pixels square. A sub-panel inset inside it would be a 3-pixel rectangle
+      with a 1-pixel border, which rasterises as a grey smudge whose value comes
+      from the antialiaser rather than from the ladder - the same failure the
+      perforation radius floor exists to prevent, and the reason it is caught here
+      in the pure half where it can be tested rather than in the canvas.
+    */
+    if (fill === 'sub' && (box.w < 2 || box.h < 2)) fill = 'flat'
+    return { ...box, tone: colour[index], tilt, fill }
+  })
 }
 
 /**
@@ -960,18 +1459,54 @@ export function panelRegions({
  * corner by 4.5 m on every side.
  *
  * The cost of the span is texel density, and it is the reason this map cannot
- * also carry the fine marks. At 1024 over 40 m it is 25.6 texels per metre,
+ * also carry the fine marks. At the shipped 2048 it is 51.2 texels per metre,
  * where the tiling maps get 512 texels per metre at the deck's 2 m tile. A
- * 2.5 mm panel groove is 0.06 of a texel here and simply does not exist. The
+ * 2.5 mm panel groove is an eighth of a texel here and simply does not exist. The
  * two scales are separate textures because they have to be.
+ *
+ * The span was NOT reduced to buy density, and that is worth recording since it is
+ * the obvious move. 32 would still clear T3's corner at 15.52 - by 0.48 m - and
+ * would buy 25% more texels. It is refused because the margin is the whole point:
+ * the map wraps at the span, and a wrap seam puts two differently-toned panels
+ * against each other with no seam between them. 0.48 m of clearance, on a surface
+ * whose bevels are 0.12 m and whose contact decals reach 0.4 m past the geometry,
+ * is not a margin but a coincidence. The density came out of the resolution
+ * instead. See `panelFillSize`.
  */
 export const PANEL_FILL_SPAN = 40
 
 /** Panel grid cell, in metres. Matches `DECAL_KINDS.deck.panelPitch`. */
 export const PANEL_FILL_CELL = 0.5
 
+/**
+ * The panel map's own resolution, decoupled from `quality.surfaceMapSize`.
+ *
+ * **This is the one budget increase in the change, and it is the cheapest thing
+ * on the list.** MEASURED off the establishing frame: the deck around the origin
+ * covers about 470 px for 12 m, so one screen pixel is 26 mm of deck. At 1024
+ * over a 40 m span the map has 39 mm texels - COARSER than the screen, so the
+ * limit on how much detail this surface can carry is the texture and not the
+ * display, and every mark in the reference vocabulary is being drawn below the
+ * resolution the player can see. 2048 halves the texel to 20 mm and puts the map
+ * just inside the screen.
+ *
+ * It costs 16 MB of VRAM plus 5 MB of mips, and essentially no CPU: unlike
+ * `createDecalMaps`, this function never calls `getImageData` and runs no
+ * per-pixel JavaScript at all, so the extra 3 megapixels are canvas fills and one
+ * upload rather than four megapixels of array arithmetic. That asymmetry is why
+ * the resolution goes up HERE and not on the tiling set.
+ *
+ * `medium` stays at 512. It is the tier that can least afford both the memory and
+ * the upload, and at 78 mm texels it keeps the panel tones - which are tens of
+ * texels across - and loses only the marks it could never have resolved.
+ */
+export function panelFillSize(surfaceMapSize: 0 | 512 | 1024): 0 | 512 | 2048 {
+  if (!surfaceMapSize) return 0
+  return surfaceMapSize >= 1024 ? 2048 : 512
+}
+
 export type PanelFillSpec = {
-  size: 512 | 1024
+  size: 512 | 1024 | 2048
   /** How many metres one copy covers. Defaults to `PANEL_FILL_SPAN`. */
   metres?: number
   /** Panel grid cell in metres. Must divide `metres` into whole cells. */
@@ -981,10 +1516,22 @@ export type PanelFillSpec = {
   /** The display luma this surface renders at under a white albedo. */
   renderedLuma?: number
   seed?: number
-  perforatedShare?: number
+  /** Overrides for `PANEL_FILL_SHARES`. See `panelRegions`. */
+  fillShares?: Partial<Record<Exclude<PanelFill, 'flat'>, number>>
   /** Perforation pitch and hole radius, in metres. */
   perforationPitch?: number
   perforationRadius?: number
+  /**
+   * Seam core width and lip half-width, in metres.
+   *
+   * 0.06 and 0.03, which at 2048 over 40 m is a 3-pixel core with a 1.5-pixel lip
+   * either side. Far wider than the tiling set's 20 mm groove, and they are not
+   * the same mark at the same size: this is the INSET between two panels several
+   * metres across, where the tiling groove is the part line within one panel. The
+   * reference has both, and its inter-panel insets are visibly centimetres wide.
+   */
+  seamWidth?: number
+  seamLip?: number
 }
 
 /**
@@ -1011,18 +1558,35 @@ export type PanelFillSpec = {
  * without the offset world -20 and world +20 both wrap to the same texel and
  * the island comes out mirrored about its own centre.
  *
- * **The alternative that was seriously considered and rejected, and it is the
- * cheaper one.** Per-piece vertex colour on the merged batch: the deck batch is
- * assembled from discrete pucks, slabs and plinths, so every piece IS a panel
- * already, and tinting each one costs no texture, no sampler, no UV set, and
- * cannot alias. It is also two-sided, since a vertex colour is an absolute value
- * rather than a multiplier against white, so it could go 0.03 brighter as well
- * as darker. It is the better mechanism for panel-to-panel variation and it is
- * recommended in the handoff. It is not what shipped here for one reason: it
- * requires rewriting `deckBatch`'s assembly, and this stream owns the material
- * bindings in `HubIsland.tsx` and not its geometry. The two are complementary
- * rather than exclusive - vertex colour gives one tone per PIECE, this map gives
- * several panels within one twelve-metre slab, and the reference has both.
+ * **Do these marks belong in a texture at all? Answered properly this time,
+ * because the previous pass left it as a recommendation and the answer is split.**
+ *
+ * Per-piece vertex colour on the merged batch is genuinely better for one of the
+ * two things this map does. Every piece of `deckBatch` IS a panel already, tinting
+ * each one costs no texture, no sampler and no UV set, it cannot alias, and it is
+ * two-sided - a vertex colour is an absolute value rather than a multiplier capped
+ * at white, so it can go 0.03 BRIGHTER as well as darker, which is exactly the
+ * headroom this file spends three paragraphs working around.
+ *
+ * So the split is:
+ *
+ * - **Panel-to-panel TONE should move to vertex colour** when someone owns the
+ *   geometry, and this map's ladder should shrink when it does. Two mechanisms
+ *   both spending the same 0.127 of band headroom is how a surface ends up out of
+ *   band with nobody responsible.
+ * - **Every other mark in this file has to be a texture, and it is not close.**
+ *   Seams with a bright lip, perforation grids, hazard fills, chip traces and
+ *   sub-panel borders are all patterns WITHIN a single piece. A twelve-metre slab
+ *   is a handful of vertices; expressing a 60 mm seam on it as vertex colour means
+ *   subdividing the slab into roughly forty thousand quads to carry data a 2048
+ *   texture carries for 16 MB and no vertex cost. Vertex colour is the right
+ *   mechanism for "which part is this" and the wrong one for "what is printed on
+ *   it", and the reference clearly has both.
+ *
+ * The one thing vertex colour would fix that this map cannot: the deck's mean is
+ * pinned at its rendered 0.687 ceiling and every printed mark can only go down
+ * from there. A vertex colour could raise the base first. That is the palette
+ * promotion this stream is asking for.
  */
 const panelFillCache = new Map<string, Texture>()
 
@@ -1033,38 +1597,45 @@ export function createPanelFillMap({
   metresPerTile = DECAL_KINDS.deck.metresPerTile,
   renderedLuma = DECK_LIT_LUMA,
   seed = 20260810,
-  perforatedShare,
+  fillShares,
   perforationPitch = 0.25,
   perforationRadius = 0.06,
+  seamWidth = 0.06,
+  seamLip = 0.03,
 }: PanelFillSpec): Texture | null {
   if (typeof document === 'undefined') return null
 
   /*
     Memoised at module scope on everything that changes the image, exactly as
     `createDecalMaps` and `groundTexture.ts` already do. It matters more here
-    than there: this is a 1024 canvas plus a degeneracy ordering over nine
+    than there: this is a 2048 canvas plus a degeneracy ordering over nine
     hundred panels, so a component remount that regenerated it would be a
     multi-millisecond main-thread stall for a byte-identical result.
   */
-  const key = [size, metres, cell, metresPerTile, renderedLuma, seed, perforatedShare].join(':')
+  const key = [size, metres, cell, metresPerTile, renderedLuma, seed, JSON.stringify(fillShares ?? null)].join(':')
   const cached = panelFillCache.get(key)
   if (cached) return cached
 
   const cells = Math.round(metres / cell)
-  const tones = panelToneBytes(renderedLuma)
+  const perTexel = metres / size
 
   /*
-    Perforation at 1024 only, and it is an aliasing limit rather than a budget.
+    Drop the two marks the tier cannot resolve, rather than scaling them down.
 
     At 512 over 40 m the map is 12.8 texels per metre, so a 0.25 m hole pitch is
     3.2 texels of period - inside the regime the anisotropy note at the bottom of
     this file is about, and the failure mode is a moire that crawls as the camera
-    moves rather than a pattern that reads faintly. The panel fills themselves
-    are flat regions tens of texels across and are unaffected, so `medium` gets
-    the mark that matters and loses only the one it could not have resolved.
+    moves rather than a pattern that reads faintly. Hazard stripes at a 0.4 m
+    period are the same story at 5 texels. The panel tones, the seams and the
+    sub-panels are all tens of texels across and survive, so `medium` keeps the
+    marks that carry the read and loses the two that would only shimmer.
   */
-  const perforated = perforatedShare ?? (size >= 1024 ? 0.12 : 0)
-  const regions = panelRegions({ cells, perforatedShare: perforated, seed })
+  const fine = size >= 1024
+  const regions = panelRegions({
+    cells,
+    seed,
+    fillShares: fine ? fillShares : { dots: 0, hex: 0, hazard: 0, ...fillShares },
+  })
 
   const canvas = document.createElement('canvas')
   canvas.width = size
@@ -1072,69 +1643,227 @@ export function createPanelFillMap({
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
 
-  const grey = (byte: number) => `rgb(${byte},${byte},${byte})`
+  const rgb = (b: [number, number, number]) => `rgb(${b[0]},${b[1]},${b[2]})`
+  /*
+    Every printed value in this function goes through here, and the clamp is what
+    makes the whole vocabulary band-safe by construction rather than by review.
+
+    A mark's drop is its panel's tone PLUS the mark's own offset, so contrast
+    inside a panel is the same wherever that panel sits on the ladder. The clamp
+    at `SEAM_CORE_DROP` is the load-bearing part: no mark inside a panel can ever
+    be darker than the seams that bound it, so the seam stays the darkest thing on
+    the deck and the panel layout stays the surface's dominant structure. It is
+    also what puts a hard floor under the distribution - the darkest byte this
+    function can emit is `albedoByte(0.100)`, whatever any caller asks for.
+  */
+  const tone = (drop: number, tilt: number) =>
+    rgb(
+      panelTintBytes(
+        Math.max(0, Math.min(SEAM_CORE_DROP, drop)),
+        PANEL_TINT_TILTS[tilt],
+        renderedLuma,
+      ),
+    )
   // Rounded on both edges from the same expression, so the right edge of one
   // panel is the left edge of the next to the pixel. Computing a width instead
   // leaves a one-pixel gap or overlap wherever the rounding disagrees, and at a
   // 12.8-pixel cell that gap is 8% of a panel.
   const px = (c: number) => Math.round((c * size) / cells)
 
-  ctx.fillStyle = grey(tones[0])
+  ctx.fillStyle = tone(PANEL_TONE_DROPS[0], 2)
   ctx.fillRect(0, 0, size, size)
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
 
   for (const region of regions) {
     const x0 = px(region.x)
     const y0 = px(region.y)
     const x1 = px(region.x + region.w)
     const y1 = px(region.y + region.h)
+    const w = x1 - x0
+    const h = y1 - y0
+    const base = PANEL_TONE_DROPS[region.tone]
+    const ink = (offset: number) => tone(base + offset, region.tilt)
 
-    ctx.fillStyle = grey(tones[region.tone])
-    ctx.fillRect(x0, y0, x1 - x0, y1 - y0)
+    ctx.fillStyle = ink(0)
+    ctx.fillRect(x0, y0, w, h)
 
-    if (!region.perforated) continue
+    if (region.fill === 'flat') continue
 
     /*
-      The perforation grid, drawn INSIDE the panel and one rung darker than it.
+      Every fill is drawn CLIPPED to its own panel and offset from its own tone.
 
-      That containment is what keeps this from being a second mark on the face
-      under section 7.7's one-mark-per-face rule: it is not a pattern laid over
-      the panels, it is one KIND of panel. A perforated panel's own p5-p95 is one
-      ladder step, 0.015 of display luma, so it costs the surface's distribution
-      almost nothing and the panel still reads as a single tone from any distance
-      at which the holes have stopped resolving.
+      The clip is not defensive tidiness, it is what makes a fill "a kind of
+      panel" rather than "a pattern laid over the deck". A hazard run that bled
+      one pixel past its panel would cross a seam, and a mark that crosses a seam
+      says the two parts are one part, which is the exact read the seams exist to
+      deny.
     */
-    const step = (perforationPitch * size) / metres
-    let radius = (perforationRadius * size) / metres
-    // A sub-texel disc rasterises as a faint grey smear whose value depends on
-    // the antialiaser rather than on the ladder, so the hole is floored at a
-    // size the canvas can actually draw.
-    if (radius < 1.5) radius = 1.5
-
     ctx.save()
     ctx.beginPath()
-    ctx.rect(x0, y0, x1 - x0, y1 - y0)
+    ctx.rect(x0, y0, w, h)
     ctx.clip()
-    ctx.fillStyle = grey(tones[Math.min(tones.length - 1, region.tone + 1)])
-    for (let cy = y0 + step / 2; cy < y1; cy += step) {
-      for (let cx = x0 + step / 2; cx < x1; cx += step) {
+
+    if (region.fill === 'dots' || region.fill === 'hex') {
+      /*
+        Perforation, in two grid forms because the reference has both and they do
+        not read the same. A square grid reads as a machined vent; a hex grid,
+        which is every other row offset by half a pitch, reads as a moulded
+        speaker mesh. Alternating them between panels is most of what stops the
+        perforated panels reading as one repeated stamp.
+      */
+      const step = perforationPitch / perTexel
+      // A sub-texel disc rasterises as a faint grey smear whose value depends on
+      // the antialiaser rather than on the ladder, so the hole is floored at a
+      // size the canvas can actually draw.
+      const radius = Math.max(1.5, perforationRadius / perTexel)
+      ctx.fillStyle = ink(PANEL_MARK_DROPS.perforation)
+      let row = 0
+      for (let cy = y0 + step / 2; cy < y1 + step; cy += step, row++) {
+        const shift = region.fill === 'hex' && row % 2 ? step / 2 : 0
+        for (let cx = x0 + step / 2 + shift; cx < x1 + step; cx += step) {
+          ctx.beginPath()
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
+    } else if (region.fill === 'hazard') {
+      /*
+        Hazard stripes, and an honest note about what they can and cannot be.
+
+        The reference's hazard fills are yellow against black - a value contrast
+        of 0.6 or more, which is three bands wide and flatly illegal here. Inside
+        a band 0.18 wide the mark degrades from "warning marking" to "diagonal
+        ribbing", and that is what this draws: 0.030 of contrast at 45 degrees on
+        a 0.4 m period. It reads as a differently-finished panel rather than as a
+        hazard, which is the honest outcome of the band rule and is recorded in
+        this stream's report as a request rather than papered over here.
+      */
+      const period = 0.4 / perTexel
+      ctx.strokeStyle = ink(PANEL_MARK_DROPS.hazard)
+      ctx.lineWidth = period / 2
+      ctx.beginPath()
+      // Diagonals every `period` across the panel's own diagonal extent, so the
+      // phase is set by the panel and neighbouring hazard panels do not line up.
+      for (let d = -h; d < w + h; d += period) {
+        ctx.moveTo(x0 + d, y0)
+        ctx.lineTo(x0 + d + h, y1)
+      }
+      ctx.stroke()
+    } else if (region.fill === 'trace') {
+      /*
+        Chip-trace print, from the shared routine `groundTexture.ts` has been
+        drawing the lawn with since the first pass. This is the mark the user
+        named directly - "those textures look like CPU chips".
+
+        Its own random stream, seeded off the panel's position, so a panel's traces
+        are stable across sessions and two trace panels never carry the same run.
+        Deliberately NOT the layout stream: this is a decorative pass and must not
+        be able to move a panel boundary or a tone.
+      */
+      const rand = mulberry32(seed + region.x * 73856093 + region.y * 19349663)
+      const grid = Math.max(4, 0.25 / perTexel)
+      const traces = chipTracePaths({
+        rand,
+        count: 2 + Math.floor(rand() * 3),
+        grid,
+        cells: Math.max(1, Math.round(Math.max(w, h) / grid)),
+        lengthSpan: 2,
+        widthMin: Math.max(1.5, 0.03 / perTexel),
+        widthSpan: Math.max(1, 0.03 / perTexel),
+        alphaMin: 1,
+        alphaSpan: 0,
+      })
+      for (const run of traces) {
+        ctx.strokeStyle = ink(PANEL_MARK_DROPS.trace)
+        ctx.lineWidth = run.width
         ctx.beginPath()
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+        ctx.moveTo(x0 + run.path[0][0], y0 + run.path[0][1])
+        for (let p = 1; p < run.path.length; p++) {
+          ctx.lineTo(x0 + run.path[p][0], y0 + run.path[p][1])
+        }
+        ctx.stroke()
+        // The via pad where the run ends, which is the detail that says "circuit"
+        // rather than "scratch".
+        const [ex, ey] = run.path[run.path.length - 1]
+        ctx.fillStyle = ink(PANEL_MARK_DROPS.via)
+        ctx.beginPath()
+        ctx.arc(x0 + ex, y0 + ey, run.width * 1.5, 0, Math.PI * 2)
         ctx.fill()
       }
+    } else if (region.fill === 'sub') {
+      /*
+        A recessed rectangular sub-panel with its own inner border: a darker
+        floor, and a lip around it BRIGHTER than the panel it sits in.
+
+        The bright lip is why the tone ladder gave up its top rung. It is the
+        mark that most needs a two-sided swing out of a map that can only darken,
+        and it is the reference's most characteristic platform detail after the
+        seams themselves - a panel with a shallow tray milled into it.
+      */
+      const inset = Math.max(2, Math.min(w, h) * 0.22)
+      const rx = x0 + inset
+      const ry = y0 + inset
+      const rw = w - 2 * inset
+      const rh = h - 2 * inset
+      ctx.fillStyle = ink(PANEL_MARK_DROPS.subPanelRecess)
+      ctx.fillRect(rx, ry, rw, rh)
+      ctx.strokeStyle = ink(PANEL_MARK_DROPS.subPanelBorder)
+      ctx.lineWidth = Math.max(1, inset * 0.3)
+      ctx.strokeRect(rx, ry, rw, rh)
     }
+
     ctx.restore()
   }
 
   /*
-    No `drawWrapped` here, and that is a considered omission rather than an
-    oversight.
+    The seams, drawn LAST and over everything, because a seam is the one mark
+    that belongs to two panels rather than to one.
 
-    Every panel is snapped to the cell grid and clipped to the tile, so nothing
-    drawn in this function can cross the tile edge; calling the wrapper would run
-    nine identical no-ops. The seam is instead handled where it actually lives,
-    in `panelRegions`, which excludes column and row zero's tones from the last
-    column and row so the no-matching-neighbour rule survives the wrap.
+    Lip first and wider, core second and narrower on top - the same construction
+    `paint` uses for a relief groove, for the same reason. A dark line alone reads
+    as a scratch; a dark line with a proud bright edge either side reads as the
+    inset between two moulded parts. The lip is the brightest value on the whole
+    deck at `SEAM_LIP_DROP`, and the core is the darkest at `SEAM_CORE_DROP`, so
+    the seam carries 0.0910 of display luma across about five pixels. It carried
+    zero before this: the relief seams in `createDecalMaps` measured p5-p95 0.039
+    against 0.0387 with the maps off.
+
+    Every boundary is stroked twice, once from each of the two panels that share
+    it, and that is harmless - same colour, same geometry - while being far simpler
+    than walking a shared edge list. The stroke is centred on the boundary so the
+    inset straddles it evenly.
   */
+  const lipBytes = rgb(panelTintBytes(SEAM_LIP_DROP, 0, renderedLuma))
+  const coreBytes = rgb(panelTintBytes(SEAM_CORE_DROP, 0, renderedLuma))
+  const core = Math.max(1, seamWidth / perTexel)
+  const lip = core + (2 * seamLip) / perTexel
+  /*
+    `drawWrapped` IS needed here, where it was correctly omitted before.
+
+    The old function drew nothing that could cross the tile edge - every panel was
+    snapped to the cell grid and clipped to it - and the comment saying so was
+    right. A seam stroke centred on a panel's boundary is the first mark in this
+    function with width, so half of it hangs outside the rect and the strokes on
+    row and column zero now run off the edge. Without the wrap the map loses its
+    seams along two of its four edges, which at a 40 m span is a 40 m line across
+    the island with no mark on it.
+  */
+  drawWrapped(ctx, size, () => {
+    for (const region of regions) {
+      const x0 = px(region.x)
+      const y0 = px(region.y)
+      const w = px(region.x + region.w) - x0
+      const h = px(region.y + region.h) - y0
+      ctx.strokeStyle = lipBytes
+      ctx.lineWidth = lip
+      ctx.strokeRect(x0, y0, w, h)
+      ctx.strokeStyle = coreBytes
+      ctx.lineWidth = core
+      ctx.strokeRect(x0, y0, w, h)
+    }
+  })
+
   const texture = wrapTexture(canvas, SRGBColorSpace)
   texture.repeat.set(metresPerTile / metres, metresPerTile / metres)
   // Centred on the world origin. Without this, world -20 and +20 wrap to the
@@ -1159,6 +1888,34 @@ export type DecalMaps = {
    * comes out at 80% of the roughness that was authored.
    */
   roughness: number
+  /**
+   * The SAME ORM image again, for `clearcoatRoughnessMap`. The A/B this stream
+   * could not run, offered as one property.
+   *
+   * **Why it is worth trying, and it falsifies part of this file's own thesis.**
+   * The measurement note above blames the deck's null result on the key's
+   * elevation, which explains the NORMAL half. It does not explain the ROUGHNESS
+   * half, and that half has its own sufficient explanation: in three,
+   * `roughnessMap` multiplies `roughness` and nothing else. `mattePlastic` is
+   * roughness 0.75 with a coat at clearcoatRoughness 0.26, so the ORM ladder was
+   * breaking up a near-Lambertian lobe with no specular shape to break, while the
+   * only lobe on the deck narrow enough to produce a visible highlight stayed at a
+   * uniform 0.26 across all 113 square metres. The deck's "single specular band
+   * sweeping from one side of the island to the other as the camera turns", which
+   * `DECAL_KINDS.deck.swing` was raised to fix, is the COAT's band, and the map
+   * raised to fix it cannot see the coat.
+   *
+   * three reads `clearcoatRoughnessMap` from the green channel, which is where
+   * this image already keeps roughness, so the experiment is free: no new canvas,
+   * no new texture, no new sampler, one extra material property. The green channel
+   * bottoms out at byte 161, taking the coat to 0.164 at its smoothest, and
+   * `coatLobeRatioUnderMap` in `materials.ts` confirms the two-lobe rule survives
+   * that with a ratio of 20.9 against a minimum of 8.
+   *
+   * NOT MEASURED - this stream may not drive the browser. Bind it, capture, and
+   * revert this one line if the deck's highlight reads worse rather than broken up.
+   */
+  clearcoatRoughnessMap: Texture
 }
 
 /**
@@ -1198,7 +1955,15 @@ function paint(ctx: CanvasRenderingContext2D, mark: Mark, size: number) {
           tell a seam from damage.
         */
         ctx.strokeStyle = 'rgb(140,140,140)'
-        ctx.lineWidth = mark.width * size + 2
+        /*
+          A one-pixel lip where no lip width was asked for, which is the legacy
+          behaviour and is byte-for-byte what `trim`, `hull` and `plate` were
+          measured with. Where a width IS given the lip scales with the groove,
+          because a 10-pixel trench with a 1-pixel edge is a gap between parts
+          rather than a seam in one.
+        */
+        ctx.lineWidth =
+          mark.lip === undefined ? mark.width * size + 2 : (mark.width + 2 * mark.lip) * size
         ctx.beginPath()
         ctx.moveTo(mark.x1 * size, mark.y1 * size)
         ctx.lineTo(mark.x2 * size, mark.y2 * size)
@@ -1330,6 +2095,7 @@ export function createDecalMaps(kind: DecalKind, size: 512 | 1024, extra: Mark[]
     roughnessMap: orm,
     aoMap: orm,
     roughness: roughnessBias(spec.roughness),
+    clearcoatRoughnessMap: orm,
   }
 
   if (extra.length === 0) cache.set(key, maps)

@@ -52,19 +52,59 @@ import {
 // half-extent.
 // ---------------------------------------------------------------------------
 
-/** The squircle face plate. 0.56 x 0.38 with a 0.012 bevel on a 0.012 extrusion. */
+/**
+ * The squircle face plate: still 0.56 by 0.38, and no longer flat.
+ *
+ * ## What changed and why nothing about the eyes did
+ *
+ * It was a `beveledExtrude` of a squircle, mounted on the head's flat front face.
+ * The head has no flat front face any more, and a flat plate on the new one would
+ * stand 0.141 m off the surface at its rim against a plate 0.032 m deep. The full
+ * argument, the three alternatives that were measured and rejected, and the reason
+ * the offset is a scale rather than a normal are all on `superellipsoidPatch`.
+ *
+ * **The footprint, the depth and every number in `VISOR` are untouched**, which was
+ * the constraint this was designed around rather than a happy result. The user
+ * singled out the blinking as excellent. The blink lives in `VISOR`'s half-extents,
+ * those are expressed in plate space, and plate space is defined as the glyph's own
+ * UV space. `superellipsoidPatch` emits exactly the UVs `PlaneGeometry(0.56, 0.38)`
+ * emitted, so the shader, the six expressions, the gaze and the blink all see the
+ * same coordinate system over a surface that is now curved. Not one character of
+ * `RobotFace.tsx`'s GLSL changed.
+ *
+ * `depth` is gone: a patch has a `rise` and an `inset` instead, because "how thick
+ * is it" and "how far does it stand out of its housing" were the same number on a
+ * flat plate and are not on a curved one. 0.012 out and 0.016 in: the outer face
+ * stands 0.012 proud of the helmet, which is the same step the extrusion had at the
+ * plate's centre, and the 0.016 of engagement is what guarantees the rim is inside
+ * the shell rather than 1.5 mm inside it, which is all the old flat plate had at
+ * its corners.
+ */
 export const FACE_PLATE = {
   a: 0.28,
   b: 0.19,
   /** n = 4 is the classic squircle, and the reference brief's "neither square nor round". */
   n: 4,
   segments: 64,
-  depth: 0.012,
-  bevel: 0.01,
+  /** Head-local y of the plate's centre. Was the `Face` group's own offset. */
+  y: -0.045,
+  inset: 0.016,
+  rise: 0.012,
+  chamfer: 0.006,
+  chamferFrac: 0.045,
+  rings: 6,
+  /**
+   * How far the glyph shell rides in front of the plate's outer surface.
+   *
+   * 0.020, unchanged from the quad it replaces: far enough that the depth test
+   * never fights at any camera angle inside `CAMERA.minDistance`, near enough that
+   * the parallax between plate and glyph stays under a pixel.
+   */
+  glyphRise: 0.032,
 } as const
 
 /**
- * The head shell, as a block rather than as four literals in the component.
+ * The head shell: an oblong helmet, and no longer a rounded box.
  *
  * Here because the ear pods have to be sized against it: a pod that does not
  * clear the shell's side reads as a dent in the cheek rather than as a pod, and
@@ -72,16 +112,79 @@ export const FACE_PLATE = {
  * decided by arithmetic between this block and `EAR_POD_SHAPE`, and neither is
  * visible in a screenshot until someone stares at the face.
  *
- * Corner radius 0.110 at smoothness 4 is six segments per corner arc and a 1.9
- * degree facet. Going to 5 costs geometry for nothing visible at this size;
- * below 4 puts steps on the terminator.
+ * ## What it was, and the two numbers that condemned it
+ *
+ * A `RoundedBox` 0.72 x 0.54 x 0.62 at corner radius 0.110. The user's note is
+ * "his head is still shaped like a rounded rectangle when it should be more
+ * oblong and oval", and the arithmetic agrees twice over:
+ *
+ *   - **59% of its height was one flat normal.** A `RoundedBox` is flat away from
+ *     its corner rounds, so the front face was flat over `|y| <= 0.160` out of a
+ *     half-height of 0.270. `Lighting.tsx` had already measured the consequence
+ *     from the other end and written it down: "the surface is not curved ... 0.32 m
+ *     of its 0.54 m height - 59%, and 79 px of the 133 px it occupies at
+ *     hub-backlit - is a single FLAT face with one normal, which no light can put
+ *     a gradient across." The head reading flat was diagnosed as a lighting defect
+ *     and was a geometry defect.
+ *   - **It had a hard terminator where the flat met the fillet.** 0 degrees of
+ *     normal variation across 59% of the height and then 90 degrees across 0.110 m
+ *     is what makes a shape read as a moulded box, whatever its silhouette does.
+ *
+ * ## The exponents, and what they were chosen against
+ *
+ * The vertical meridian's normal, measured as its angle off +Z going up the
+ * front of the head, is the number that decides whether a light can put a
+ * gradient on it:
+ *
+ *     up the face      20%     40%     60%     80%
+ *     RoundedBox       0.0     0.0     0.0     approx 90 across the fillet
+ *     e = 0.50         0.5     4.3    15.4    41.1
+ *     e = 0.75         4.5    14.8    30.5    52.6
+ *     e = 1.00        13.2    26.6    40.7    56.8
+ *
+ * 0.75 rather than 1.00, which would be a true ellipsoid. Two reasons and the
+ * second is the one that decided it. A true ellipsoid at these extents is an
+ * oblate pill and reads as a bean rather than as a helmet. And the torso is
+ * already a superellipsoid at 0.60 and 0.70, so a head at 0.75 is plainly the
+ * rounder member of one family of forms, where an ellipsoid head over a
+ * square-ish torso reads as two parts from different toys.
+ *
+ * The extents are UNCHANGED at 0.72 x 0.54 x 0.62, and that is deliberate rather
+ * than conservative. `docs/design/05-character-vfx.md` sits the character at 2.52
+ * head-heights with the head at 39.7% of the silhouette, against a reference band
+ * of 2.5-2.8 head-heights AND 40-48% of height, and those two bands overlap at a
+ * single point. Any increase in head height moves one metric into its band and the
+ * other out of it, and the crown is what fixes `PROPORTIONS.totalHeight` at 1.36.
+ * So the head's size is at the only place it can be and the whole change is its
+ * form. `taperTop` is 1 so the extents are exact - see the note on
+ * `taperedSuperellipsoid` about the taper reaching the equator - and so
+ * `superellipsoidField` is a valid inside/outside test on it, which every
+ * clearance argument on the visor, the cap, the pods and the antenna now needs.
+ *
+ * ## Cost
+ *
+ * 28 by 40 segments measures 2,160 triangles against the 1,152 the old head cost
+ * at smoothness 4. Sized by the silhouette rather than by the shading: the front
+ * outline is traced by one meridian, so it is a 0.72 by 0.54 oval sampled at 56
+ * points, whose perimeter is about 2.0 m and whose worst chord is 0.036 m, giving
+ * a sagitta of about 0.7 mm. That is under a pixel at every framing in
+ * `vantages.ts`. Smooth normals hide facets everywhere except on the outline, so
+ * the outline is the only place resolution buys anything.
  */
 export const HEAD_SHELL = {
+  a: 0.36,
+  b: 0.27,
+  c: 0.31,
+  e1: 0.75,
+  e2: 0.75,
+  /** 1, so the extents below are exact and `superellipsoidField` applies. */
+  taperTop: 1,
+  latSegments: 28,
+  lonSegments: 40,
+  /** Derived, and kept because the width ladder and half the tests read them. */
   width: 0.72,
   height: 0.54,
   depth: 0.62,
-  radius: 0.11,
-  smoothness: 4,
 } as const
 
 /**
@@ -114,7 +217,13 @@ export const HEAD_SHELL = {
  *     `AntennaUpper` to clear a measured bloom threshold, was rendering into the
  *     inside of a hat.
  *
- * ## Why the replacement is a closed box and not another shell
+ * ## Why the replacement was a closed box and not another shell
+ *
+ * HISTORICAL from here to the next heading. Every number in this section is
+ * measured against a `RoundedBox` head and a `RoundedBox` cap, and neither exists
+ * any more. It is kept because the argument it makes - a closed solid has no
+ * interior to leak, and a cap that does not stand proud is a paint stripe - still
+ * governs the shape that replaced it.
  *
  * A `RoundedBox` is a closed solid, so there is no interior to see and no
  * `DoubleSide` to need. Overhang is then a design choice rather than a defect:
@@ -142,16 +251,52 @@ export const HEAD_SHELL = {
  * `robotGeometry.test.ts` pins. The antenna is at z -0.040 and this cap ends at
  * z -0.090, so it cannot enclose anything. The ear pods span z -0.125 to 0.085
  * and the cap's front face is at -0.090, so the two never intersect.
+ *
+ * ## It is no longer a box either, and that is the integrator's note rather than
+ * ## the user's
+ *
+ * Everything above is kept because it is the record of why a hemisphere is not the
+ * answer, and none of it is the current shape. The `RoundedBox` version drew the
+ * note "reads as a panel stuck on rather than an integrated shape", and once the
+ * head became a superellipsoid it was worse than that: a box on an oval gaps. At
+ * the cap's own centre depth the new crown is at head-local y 0.223 and the cap's
+ * top face was at 0.270, so it would have stood 0.047 off the head with daylight
+ * under its rim.
+ *
+ * So the cap is now a `superellipsoidPatch` on the head's own surface, the same
+ * generator and the same host as the visor plate, on the -z side. A panel whose
+ * inner surface IS the helmet's surface, 0.010 in and 0.014 out, cannot read as
+ * stuck on and cannot gap: it is the helmet, offset. What makes it a separate
+ * moulded part is the 0.014 step and the chamfer on it, which is what the
+ * reference's own cap has.
+ *
+ * The footprint is 0.46 by 0.30 rather than the box's 0.56 by 0.34. Not a taste
+ * change: an oval head's silhouette narrows as the footprint climbs, and at the old
+ * size the corner of the squircle wanted x 0.236 at y 0.243 where the head only
+ * reaches x 0.201. `superellipsoidPatch` throws on that rather than bending the
+ * point back, so the number was found by the generator refusing to build. At 0.46
+ * by 0.30 centred at y 0.060 the worst margin to the silhouette is 0.105.
+ *
+ * Where it lands, measured: the cap's centre sits at z -0.308 and its rim wraps
+ * from -0.226 at the sides round to a top edge at y 0.210, z -0.237. So it covers
+ * the rear crown and stops short of both the antenna and the pods, which is what
+ * the two tests below assert. `palette.gold` is still refused for it and the
+ * reasoning is unchanged; only the shape moved.
  */
 export const HEAD_CAP = {
-  width: 0.56,
-  height: 0.34,
-  depth: 0.24,
-  radius: 0.09,
-  smoothness: 4,
-  /** Head-local centre. */
-  y: 0.1,
-  z: -0.21,
+  /** Footprint half-extents, and the squircle exponent that rounds its corners. */
+  halfW: 0.23,
+  halfH: 0.15,
+  n: 4,
+  segments: 56,
+  /** Head-local y of the footprint's centre. */
+  y: 0.06,
+  /** Buried into the helmet, and standing proud of it. */
+  inset: 0.01,
+  rise: 0.014,
+  chamfer: 0.006,
+  chamferFrac: 0.05,
+  rings: 5,
 } as const
 
 /**
@@ -282,13 +427,76 @@ export const ARM_BEVEL = {
  * The fillet goes 0.022 to 0.030 with a step more of resolution for the same
  * reason: at the old size it was the whole of what the eye read, and at this one
  * a 0.022 chamfer on a 0.21 object is barely over a pixel at playing distance.
+ * It has since gone to 0.055; see below.
+ *
+ * Both burial figures above were measured against a `RoundedBox` head. On the
+ * superellipsoid that replaced it the pod's rim is buried between 0.0727 and
+ * 0.0809 all the way round, which is a tighter spread than the box gave and is
+ * asserted below rather than asserted here.
+ *
+ * ## The pods vanished in profile, and it was not any of the shapes above
+ *
+ * The user's third note is "the cylinders that are being used as his ears
+ * disappear when I move the camera towards the profile of the character". Four
+ * causes were candidates and the arithmetic picks a fifth.
+ *
+ * It is not that the pod is a thin disc seen edge on: at `halfThickness` 0.105 it
+ * is a can 0.21 long, not the 0.03 the brief for this pass supposed, and 0.03 is
+ * the FILLET. It is not that the head occludes it: the pod's outer face is at
+ * x 0.485 against a head that reaches 0.360 at the same y and z, so 0.125 of it
+ * stands clear.
+ *
+ * **The lathe was wound inside out, and had been since the pods were built.**
+ * `roundedDiscProfile` ran from `(0, +halfThickness)` DOWN to `(0, -halfThickness)`,
+ * and `LatheGeometry` derives both its winding and its normals from the profile's
+ * direction of travel: the outward normal of a profile edge is `(dy, -dx)`, so a
+ * descending rim edge with `dy` negative gets a normal pointing at the axis. The
+ * built geometry measures a signed volume of **-0.006906** with all 210 radial
+ * normals pointing INWARD, against +0.006906 for the same profile reversed.
+ * Nothing in the project sets `side`, so `MeshPhysicalMaterial` culls back faces
+ * and the only thing on screen was the interior of the pod's far wall.
+ *
+ * That is why it is angle-dependent, which no amount of "the mesh is missing"
+ * would be. At three-quarter view the visible far wall is the curved inside of the
+ * rim, which shades plausibly enough to read as a pod. In PROFILE the camera looks
+ * down the pod's own axis: the near end cap is a back face and is culled, and the
+ * far end cap at x 0.275 is inside the head, which draws in front of it. So the pod
+ * contributed nothing at all from the side and something from every other angle,
+ * which is exactly the report.
+ *
+ * The fix is in `roundedDiscProfile`, which now ascends. It also fixes
+ * `ARM_BAND` and `ARM_BEVEL`, which are the same generator and were inside out too
+ * - measured at -0.000712 - and which no one had reported because a ring seen from
+ * outside with only its inner wall drawn still puts a dark band round the arm.
+ *
+ * ## The second reason, which the winding fix does not address
+ *
+ * Even wound correctly the pod cannot break the head's outline from the side. Its
+ * end cap projects to a disc of radius 0.105 centred at head-local (y 0, z -0.02),
+ * so it sits inside the head's 0.27 by 0.31 profile silhouette by 0.165 in y and
+ * 0.185 in z. No pod mounted mid-cheek on a head this size can reach the outline;
+ * `HAND.radius` and the 0.97 width ladder cap how far out the socket can go.
+ *
+ * So the profile read has to come from shading instead, and two changes serve it.
+ * The head underneath is now curved, so the cheek falls away from the pod's rim
+ * rather than presenting the flat side of a box at the same value. And the fillet
+ * goes 0.030 to 0.055 with a step more of resolution: the fillet is the only
+ * surface on the pod that catches the key as a bright line, and at 0.030 on a
+ * 0.21 object it was barely over a pixel at playing distance. At 0.055 the pod is a
+ * barrel rather than a can with a flat lid, so there is no single flat normal
+ * pointing at the camera to go dark when the key is anywhere else.
+ *
+ * If a render still says the ears are weak in profile, the dial to turn is
+ * `REST.earPodL.x`, not this block: the mittens reach x 0.524 and the pods 0.485,
+ * so there is 0.039 of room to push them outboard before they become the widest
+ * thing on the character.
  */
 export const EAR_POD_SHAPE = {
   radius: 0.105,
   halfThickness: 0.105,
-  fillet: 0.03,
-  filletSteps: 5,
-  radialSegments: 20,
+  fillet: 0.055,
+  filletSteps: 6,
+  radialSegments: 24,
 } as const
 
 /** The mitten hand. Here only because it is what fixes the character's width. */
@@ -879,6 +1087,85 @@ export const TORSO = {
 } as const
 
 /**
+ * The diaper: a tapered cushion, and no longer a pillow.
+ *
+ * ## What "odd and bubbly" is, arithmetically
+ *
+ * It was a `RoundedBox` 0.62 x 0.28 x 0.52 at radius 0.13. Two measurements say
+ * what the user is seeing.
+ *
+ * **It is a pill, and the brief for this pass guessed the wrong reason.** The
+ * suspicion on record was that `RoundedBoxGeometry` was silently clamping the
+ * radius. It was not: the clamp is half the smallest dimension, which is
+ * `0.28 / 2 = 0.14`, and 0.13 is under it. The radius was honoured exactly, and
+ * that is the problem rather than the reprieve. 0.13 against a half-height of 0.14
+ * leaves `2 * (0.14 - 0.13) = 0.020` of flat top, which is 7.1% of the height, so
+ * the shape is fully rounded in y and its front outline is a stadium. A stadium
+ * 0.62 by 0.28 is a 2.21 : 1 horizontal capsule, and it is the widest band on the
+ * body, so the pill outline is also the largest thing the eye reads below the head.
+ *
+ * **What it is not is over-round in the vertical section.** Measured as half-width
+ * against height, the box holds 64% of its width at 99% of its height, which is
+ * close to a superellipsoid at `e1` 0.40 and nothing like a sphere's 14%. So
+ * reducing the radius, which is what "bubbly" sounds like it asks for, would have
+ * traded a pill for a box and moved the complaint rather than answering it.
+ *
+ * ## What replaces it
+ *
+ * A `taperedSuperellipsoid`, which the torso already uses, with the taper INVERTED
+ * relative to the torso's: `taperTop` above 1 makes it widest at the hip line and
+ * narrowing downward, so the legs emerge from a tuck instead of from the widest
+ * point. That is the whole difference between a nappy and an inflated ring, and it
+ * is what removes the stadium outline without introducing a flat.
+ *
+ * Measured half-width as a percentage of the 0.62 maximum, against the box:
+ *
+ *     y            +0.07   0.00   -0.07   -0.10   -0.12   -0.13
+ *     RoundedBox    95.3  100.0    95.3    88.3    80.4    74.2
+ *     this          99.9   99.1    95.2    87.7    76.8    65.9
+ *
+ * so it is fuller through the hips and tucks harder underneath, and the widest
+ * band moves from the middle to y +0.060 where the torso meets it. The torso is
+ * 0.577 wide at that height, so the step at the waist is 0.043 total and reads as
+ * a moulded lip rather than as a shoulder.
+ *
+ * `a` is 0.2871 and not 0.31, and that is not a width change. The taper multiplies
+ * every latitude including the equator, so the widest half-width of the solid is
+ * `a * max(taper * rim)`, which at `taperTop` 1.14 is `a * 1.0797`. 0.2871 puts the
+ * maximum at 0.3100 and therefore the full width at 0.6200, unchanged, which is
+ * what `PROPORTIONS.torsoWidthMax` and the head-over-torso inversion both depend
+ * on. `c` is 0.2408 by the same factor, for an unchanged 0.52 of depth. Both are
+ * checked against the built geometry's bounding box rather than against this
+ * comment, because the factor is a numeric maximum and not a closed form.
+ *
+ * `e1` 0.50 keeps the top and bottom broad instead of domed, and `e2` 0.72 keeps
+ * the plan view a soft rounded rectangle wider than it is deep. The bottom pole is
+ * a smooth apex between the legs, which a diaper has; the shin's top at hips-local
+ * y -0.135 spans `|x|` 0.105 to 0.275 and this shape covers `|x|` up to about 0.16
+ * there, so the two overlap by 0.055 and the leg emerges from the garment rather
+ * than from beside it.
+ */
+export const DIAPER = {
+  a: 0.2871,
+  b: 0.14,
+  c: 0.2408,
+  e1: 0.5,
+  e2: 0.72,
+  taperTop: 1.14,
+  latSegments: 22,
+  lonSegments: 32,
+  /**
+   * Pushed back, unchanged from the box.
+   *
+   * This is the puffy rear and it is worth stating because it looks like a nudge.
+   * The torso's own depth is 0.52 centred on z 0, so a diaper of the same depth at
+   * z -0.03 stands 0.03 further back than the torso and 0.03 less far forward: the
+   * reference's "puffy diaper rear" without a second shape to model it.
+   */
+  z: -0.03,
+} as const
+
+/**
  * The face glyph's shape, in face-plate space.
  *
  * Plate space runs `x` over `+-aspect/2` and `y` over `+-0.5`, where aspect is
@@ -1082,8 +1369,33 @@ export function superellipsePoints(a: number, b: number, n: number, segments: nu
  * Points are `(radius, height)` for `latheProfile`, which revolves about Y. The
  * caller rotates the result so the disc's axis lies along X.
  *
- * The profile runs from the axis outward across the top face, around the top
- * fillet, down the rim, around the bottom fillet, and back to the axis.
+ * ## The profile ASCENDS, and it did not, and that was the ear-pod bug
+ *
+ * It runs from the axis at `-halfThickness` outward across the bottom face, around
+ * the bottom fillet, UP the rim, around the top fillet, and back to the axis at
+ * `+halfThickness`. It used to run the other way, top to bottom, and the shape is
+ * identical because the point set is symmetric in y - so the mistake was invisible
+ * in every test that measured a bound, a radius or an extent, and there were five
+ * of them.
+ *
+ * What it is not invisible in is the winding. `LatheGeometry` takes both its face
+ * order and its vertex normals from the profile's direction of travel: the outward
+ * normal it assigns an edge is `(dy, -dx)`, which for the rim of a descending
+ * profile has `dy < 0` and therefore points at the axis. Measured on the built
+ * geometry, the descending version had a signed volume of **-0.006906** and all 210
+ * of its radial normals pointing inward; the ascending version is +0.006906 with
+ * all 210 outward. `roundedCylinder` in `src/art/geometry.ts` has always ascended,
+ * which is why nothing else in the world was affected.
+ *
+ * Consequence, since nothing in this project sets `side` and the default is
+ * `FrontSide`: every part built from this profile rendered with its outside culled
+ * and only the interior of its far wall drawn. That is the ear pods, which the user
+ * reported as disappearing in profile, and the two rings on each upper arm, which
+ * nobody reported because a ring whose inner wall is drawn still puts a dark band
+ * round the arm.
+ *
+ * `robotGeometry.test.ts` now measures the signed volume rather than the extents,
+ * because the extents were the same either way.
  */
 export function roundedDiscProfile(
   radius: number,
@@ -1102,27 +1414,27 @@ export function roundedDiscProfile(
   const inner = radius - fillet
   const flat = halfThickness - fillet
 
-  points.push(new Vector2(0, halfThickness))
-  points.push(new Vector2(inner, halfThickness))
-  // Top fillet, sweeping from straight up round to straight out.
+  points.push(new Vector2(0, -halfThickness))
+  points.push(new Vector2(inner, -halfThickness))
+  // Bottom fillet, sweeping from straight down round to straight out.
   for (let i = 1; i <= filletSteps; i++) {
     const a = (i / filletSteps) * (Math.PI / 2)
-    points.push(new Vector2(inner + fillet * Math.sin(a), flat + fillet * Math.cos(a)))
+    points.push(new Vector2(inner + fillet * Math.sin(a), -flat - fillet * Math.cos(a)))
   }
   /*
-    Bottom fillet, the mirror, sweeping from straight out back round to straight
-    down. It runs to `filletSteps - 1` and the flat point is pushed separately,
-    because the arc's own last sample lands exactly on it and `latheProfile`
-    rejects coincident points: three derives each profile point's normal from
-    its neighbours, so a duplicate gives a zero-length normal ring which renders
+    Top fillet, the mirror, sweeping from straight out back round to straight up.
+    It runs to `filletSteps - 1` and the flat point is pushed separately, because
+    the arc's own last sample lands exactly on it and `latheProfile` rejects
+    coincident points: three derives each profile point's normal from its
+    neighbours, so a duplicate gives a zero-length normal ring which renders
     without erroring and shades wrong along one band.
   */
   for (let i = 0; i < filletSteps; i++) {
     const a = (Math.PI / 2) * (1 - i / filletSteps)
-    points.push(new Vector2(inner + fillet * Math.sin(a), -flat - fillet * Math.cos(a)))
+    points.push(new Vector2(inner + fillet * Math.sin(a), flat + fillet * Math.cos(a)))
   }
-  points.push(new Vector2(inner, -halfThickness))
-  points.push(new Vector2(0, -halfThickness))
+  points.push(new Vector2(inner, halfThickness))
+  points.push(new Vector2(0, halfThickness))
   return points
 }
 
@@ -1131,7 +1443,16 @@ export type SuperellipsoidOptions = {
   a: number
   b: number
   c: number
-  /** Vertical squareness. 1 is an ellipsoid, near 0 is a box. */
+  /**
+   * Vertical squareness. 1 is an ellipsoid, near 0 is a box.
+   *
+   * Above 1 the surface goes CONCAVE - a four-pointed star in cross-section -
+   * which every clearance argument in this file assumes cannot happen, because
+   * `superellipsoidField` below is only a valid inside/outside test on a convex
+   * solid. Nothing here validates it because nothing here has a use for it; if
+   * something ever wants `e > 1`, the field helper and every test that leans on
+   * it stop being true and that is the thing to fix first.
+   */
   e1: number
   /** Horizontal squareness. */
   e2: number
@@ -1139,6 +1460,112 @@ export type SuperellipsoidOptions = {
   taperTop: number
   latSegments: number
   lonSegments: number
+}
+
+/** The subset of `SuperellipsoidOptions` that describes the SURFACE rather than its tessellation. */
+export type SuperellipsoidShape = Pick<SuperellipsoidOptions, 'a' | 'b' | 'c' | 'e1' | 'e2'>
+
+/**
+ * The superellipsoid's implicit field: 1 exactly on the surface, above 1 outside
+ * it, below 1 inside.
+ *
+ * ## Why this exists at all, and why it is a field and not a distance
+ *
+ * This file's header says every "how proud of the part underneath is this part"
+ * number on the model is one signed-distance question, and until this pass every
+ * one of them was asked against a `RoundedBox`, where `sdRoundBox3` answers it.
+ * The head is no longer a box, so the same questions - is the visor outside the
+ * helmet, is the copper cap outside it, is the ear pod buried in it, does the
+ * antenna reach it - need an inside/outside test for a superellipsoid, and there
+ * is no closed-form signed distance to one.
+ *
+ * There does not need to be. Every question above is strictly "inside or
+ * outside", and for that a monotone field is exactly as good as a distance and is
+ * exact rather than approximate. The magnitude is meaningless, so nothing may
+ * compare two field values as if they were metres; the tests that want a
+ * clearance in metres solve for the surface coordinate instead, with
+ * `superellipsoidX/Y/Z` below.
+ *
+ * ## The derivation, because it is not obvious from the parametric form
+ *
+ * `taperedSuperellipsoid` builds
+ *
+ *     x = a R sp(cos u, e2),  z = c R sp(sin u, e2),  y = b sp(sin v, e1),
+ *     R = sp(cos v, e1)
+ *
+ * so `(|x| / (a R))^(1/e2) = |cos u|` and likewise for z, and `cos^2 + sin^2 = 1`
+ * gives `R^m2 = (|x|/a)^m2 + (|z|/c)^m2` with `m2 = 2/e2`. The same step on the
+ * latitude pair gives `R^m1 + (|y|/b)^m1 = 1` with `m1 = 2/e1`. Substituting the
+ * first into the second is this function.
+ *
+ * **`taperTop` is not modelled and cannot be.** The taper is a per-latitude
+ * multiplier applied after the fact, so a tapered solid is not a superellipsoid
+ * and has no implicit form of this kind. Every caller here passes a shape whose
+ * taper is 1, and the head is authored at `taperTop: 1` for exactly this reason:
+ * the alternative was a head whose clearances could only be checked by sampling a
+ * mesh, and this codebase has shipped two invisible parts that a mesh sample
+ * would also have passed.
+ */
+export function superellipsoidField(
+  x: number,
+  y: number,
+  z: number,
+  s: SuperellipsoidShape,
+): number {
+  const m1 = 2 / s.e1
+  const m2 = 2 / s.e2
+  const rm2 = Math.pow(Math.abs(x) / s.a, m2) + Math.pow(Math.abs(z) / s.c, m2)
+  const r = Math.pow(rm2, 1 / m2)
+  return Math.pow(r, m1) + Math.pow(Math.abs(y) / s.b, m1)
+}
+
+/**
+ * The surface's `|z|` at a given `x` and `y`, or NaN if that column misses the
+ * solid entirely.
+ *
+ * NaN rather than a clamp on purpose. Every caller is asking "where does my panel
+ * sit on the head", and a footprint that runs off the head's silhouette is a
+ * panel whose rim would float in the air; returning the nearest valid answer
+ * would produce a geometry that renders cleanly with a crescent gap under its
+ * edge, which is the artefact three separate parts on this character have already
+ * shipped. `superellipsoidPatch` throws on the NaN.
+ */
+export function superellipsoidZ(x: number, y: number, s: SuperellipsoidShape): number {
+  const m1 = 2 / s.e1
+  const m2 = 2 / s.e2
+  const ty = Math.pow(Math.abs(y) / s.b, m1)
+  if (!(ty < 1)) return NaN
+  const r = Math.pow(1 - ty, 1 / m1)
+  const tx = Math.pow(Math.abs(x) / (s.a * r), m2)
+  if (!(tx < 1)) return NaN
+  return s.c * r * Math.pow(1 - tx, 1 / m2)
+}
+
+/** The surface's `|x|` at a given `y` and `z`. The ear pods are placed against this. */
+export function superellipsoidX(y: number, z: number, s: SuperellipsoidShape): number {
+  const m1 = 2 / s.e1
+  const m2 = 2 / s.e2
+  const ty = Math.pow(Math.abs(y) / s.b, m1)
+  if (!(ty < 1)) return NaN
+  const r = Math.pow(1 - ty, 1 / m1)
+  const tz = Math.pow(Math.abs(z) / (s.c * r), m2)
+  if (!(tz < 1)) return NaN
+  return s.a * r * Math.pow(1 - tz, 1 / m2)
+}
+
+/** The surface's `|y|` at a given `x` and `z`. The antenna's root is placed against this. */
+export function superellipsoidY(x: number, z: number, s: SuperellipsoidShape): number {
+  const m1 = 2 / s.e1
+  const m2 = 2 / s.e2
+  const rm2 = Math.pow(Math.abs(x) / s.a, m2) + Math.pow(Math.abs(z) / s.c, m2)
+  const r = Math.pow(rm2, 1 / m2)
+  if (!(r < 1)) return NaN
+  return s.b * Math.pow(1 - Math.pow(r, m1), 1 / m1)
+}
+
+/** A shape scaled by adding `d` to every half-extent. Negative `d` shrinks it. */
+export function superellipsoidOffset(s: SuperellipsoidShape, d: number): SuperellipsoidShape {
+  return { a: s.a + d, b: s.b + d, c: s.c + d, e1: s.e1, e2: s.e2 }
 }
 
 /** `sign(t) * |t|^e`, the superquadric power that keeps the sign through a fractional exponent. */
@@ -1255,6 +1682,296 @@ export function taperedSuperellipsoid(opts: SuperellipsoidOptions): BufferGeomet
     normals.setXYZ(lastRow + i, 0, 1, 0)
   }
   normals.needsUpdate = true
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+export type SuperellipsoidPatchOptions = {
+  /** The solid the panel lies on. Its `taperTop` must be 1; see `superellipsoidField`. */
+  host: SuperellipsoidShape
+  /**
+   * The panel's footprint, as a closed loop in the host's PROJECTED (x, y) plane,
+   * relative to the footprint's own centre. `superellipsePoints` is the generator
+   * every caller here uses.
+   */
+  outline: Vector2[]
+  /** The footprint's nominal half-extents, which set the UV mapping. */
+  halfW: number
+  halfH: number
+  /** Where the footprint's centre sits on the host's y axis. */
+  centreY: number
+  /** +1 puts the panel on the host's +z side, -1 on its -z side. */
+  facing: 1 | -1
+  /** How far the panel's inner surface lies INSIDE the host. Ignored when `solid` is false. */
+  inset: number
+  /** How far the panel's outer surface lies OUTSIDE the host. Must be positive. */
+  rise: number
+  /** Radial subdivisions from the footprint's centre to the chamfer. */
+  rings: number
+  /**
+   * The chamfer on the outer rim: how far the panel drops back toward the host
+   * across it, and what fraction of the footprint it eats. Ignored when `solid`
+   * is false.
+   */
+  chamfer: number
+  chamferFrac: number
+  /**
+   * A closed solid with a rim and an inner surface, or a single open shell.
+   *
+   * False is for the visor glyph, which is a transparent overlay with
+   * `depthWrite: false` and therefore has no inside, no shadow and no rim to
+   * catch a highlight. Everything else is true, because an open shell leaks the
+   * shadow pass; see the cape ribbon's caps.
+   */
+  solid: boolean
+}
+
+/**
+ * A curved panel lying on a superellipsoid: the visor plate, the visor glyph and
+ * the copper cap on the back of the head.
+ *
+ * ## Why this had to be written, in one number
+ *
+ * The head was a `RoundedBox` and is now a superellipsoid, because the user's note
+ * is "his head is still shaped like a rounded rectangle when it should be more
+ * oblong and oval" and 59% of the old head's height was one flat face. The face
+ * plate mounted on that flat face.
+ *
+ * A superellipsoid has no flat face, and the plate is not small: 0.56 by 0.38 on a
+ * head 0.72 by 0.54, so it covers 78% of the width and 70% of the height and its
+ * rim is most of the way to the silhouette. Measured over the plate's own
+ * footprint, the surface it has to sit on drops by
+ *
+ *     RoundedBox r 0.110        0.0295 m from plate centre to plate rim
+ *     superellipsoid e 0.75     0.1407 m
+ *
+ * against a plate that is 0.032 m deep in total. So on the old head a flat plate
+ * was 0.0295 out over its rim and got away with it by 1.5 mm of engagement at the
+ * corners, and on the new one a flat plate would stand 0.14 m off the head at its
+ * rim. That is not a tuning problem, it is a crescent-shaped hole in the face, and
+ * it is the same artefact both round 1 reviewers read on the ear pods.
+ *
+ * Four ways out were considered and three are recorded because they all look
+ * reasonable until they are measured:
+ *
+ *   - **Shrink the plate until a flat one fits.** Sag goes roughly as the square
+ *     of the footprint, so 0.032 m of sag needs the plate at 0.35 of its size,
+ *     which is 0.20 m across a 0.72 m head. The eyes are sized as fractions of
+ *     the plate, so this shrinks the character's identity by two thirds.
+ *   - **Keep the head boxy and only round its top and back.** drei's `RoundedBox`
+ *     has one radius, so this needs the crown as a separate part, which is the
+ *     `Helmet` defect and the "panel stuck on" note about the copper cap.
+ *   - **Loft an oval cross-section along z with `beveledExtrude`.** The front view
+ *     becomes a true oval, which is most of the ask, and the PROFILE stays a
+ *     rounded rectangle. Profile is the exact view the ear-pod complaint is
+ *     about, so this fixes the head in the one view that was not the problem.
+ *   - **Curve the panel.** This.
+ *
+ * ## Construction, and why the offset is a scale rather than a normal
+ *
+ * The obvious way to give a panel thickness is to push each vertex along the
+ * surface normal. The analytic normal of a superellipsoid has a removable
+ * singularity at the poles and at all four seams - the same one that makes
+ * `taperedSuperellipsoid` use `computeVertexNormals` - so a normal offset puts NaN
+ * along exactly the lines the visor's own rim crosses.
+ *
+ * Instead the outer surface rides a LARGER superellipsoid, `host + rise` on every
+ * half-extent, and the inner surface a smaller one. That has three properties
+ * worth stating because all three are load-bearing:
+ *
+ *   1. It cannot produce NaN anywhere the footprint is valid, since it is the same
+ *      closed form with different constants.
+ *   2. **Every point of the larger solid is strictly outside the host.** For a
+ *      point on `host + rise`, the host's own field evaluates to more than 1 term
+ *      by term, because each `|x|/a` exceeds `|x|/(a + rise)`. So "the panel is
+ *      visible from outside its housing" is not a measurement that has to be
+ *      re-taken when a number moves; it is true by construction for any positive
+ *      `rise`, and `robotGeometry.test.ts` checks it against the field over every
+ *      vertex of the BUILT geometry rather than against the arithmetic that
+ *      produced it.
+ *   3. The perpendicular thickness is not exactly `rise + inset`. On a sphere it
+ *      is exact; on this head it varies by a few per cent across the panel, which
+ *      is invisible on a 0.012 m step and is the price of (1) and (2).
+ *
+ * ## UVs
+ *
+ * `uv` is the footprint's own coordinate mapped to 0..1 over `halfW` by `halfH`,
+ * which is EXACTLY what `PlaneGeometry(2 * halfW, 2 * halfH)` produces. That is
+ * why the visor shader did not change by one character when the glyph stopped
+ * being a quad: plate space is defined as the glyph's UV space, `VISOR`'s
+ * half-extents are in plate space, and both survive the surface bending
+ * underneath them. The blink, the gaze and the six expressions are untouched.
+ */
+export function superellipsoidPatch(opts: SuperellipsoidPatchOptions): BufferGeometry {
+  const { host, outline, halfW, halfH, centreY, facing, inset, rise, rings, solid } = opts
+  const n = outline.length
+  if (n < 8) {
+    throw new Error(`robotGeometry: a patch outline needs at least 8 points, got ${n}`)
+  }
+  if (!(rise > 0)) {
+    throw new Error(`robotGeometry: a patch needs a positive rise, got ${rise}`)
+  }
+  if (!Number.isInteger(rings) || rings < 1) {
+    throw new Error(`robotGeometry: a patch needs at least 1 ring, got ${rings}`)
+  }
+  if (!(halfW > 0) || !(halfH > 0)) {
+    throw new Error(`robotGeometry: a patch needs positive half-extents, got ${halfW} x ${halfH}`)
+  }
+  const chamfer = solid ? opts.chamfer : 0
+  const chamferFrac = solid ? opts.chamferFrac : 0
+  if (solid) {
+    if (!(inset > 0)) {
+      throw new Error(`robotGeometry: a solid patch needs a positive inset, got ${inset}`)
+    }
+    if (!(chamfer > 0) || chamfer >= rise) {
+      throw new Error(
+        `robotGeometry: a patch chamfer of ${chamfer} does not fit inside a rise of ${rise}; ` +
+          `the rim would fold back through the host`,
+      )
+    }
+    if (!(chamferFrac > 0) || !(chamferFrac < 0.5)) {
+      throw new Error(`robotGeometry: a patch chamfer fraction must be in (0, 0.5), got ${chamferFrac}`)
+    }
+  }
+
+  const outer = superellipsoidOffset(host, rise)
+  const chamferShape = superellipsoidOffset(host, rise - chamfer)
+  const innerShape = superellipsoidOffset(host, -inset)
+
+  const positions: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+
+  /*
+    One vertex, from a footprint point and a shape. Throws rather than emitting
+    NaN: a footprint that runs off the host's silhouette is a panel whose rim
+    hangs in the air, and NaN positions render as an absent mesh with a healthy
+    triangle count, which is this codebase's signature failure. Loud at module
+    load is the only place this can be caught, because the shape is built once.
+  */
+  const push = (px: number, py: number, s: SuperellipsoidShape): number => {
+    const y = centreY + py
+    const z = superellipsoidZ(px, y, s)
+    if (!Number.isFinite(z)) {
+      throw new Error(
+        `robotGeometry: patch footprint point (${px.toFixed(4)}, ${py.toFixed(4)}) is outside the ` +
+          `host's silhouette at y ${y.toFixed(4)}; its rim would float off the surface`,
+      )
+    }
+    const index = positions.length / 3
+    positions.push(px, y, facing * z)
+    uvs.push(0.5 + px / (2 * halfW), 0.5 + py / (2 * halfH))
+    return index
+  }
+
+  /*
+    Radial ring levels for the outer surface. The last one stops short of the rim
+    by `chamferFrac` so the chamfer has somewhere to live; with `solid` false it
+    reaches the rim and there is no chamfer.
+  */
+  const outerMax = 1 - chamferFrac
+  const centreOuter = push(0, 0, outer)
+  const ringStart: number[] = []
+  for (let i = 1; i <= rings; i++) {
+    const t = (i / rings) * outerMax
+    ringStart.push(positions.length / 3)
+    for (const p of outline) push(p.x * t, p.y * t, outer)
+  }
+
+  // Centre fan, then one quad band per gap between rings.
+  const first = ringStart[0]
+  for (let k = 0; k < n; k++) {
+    indices.push(centreOuter, first + k, first + ((k + 1) % n))
+  }
+  for (let i = 0; i < rings - 1; i++) {
+    const lo = ringStart[i]
+    const hi = ringStart[i + 1]
+    for (let k = 0; k < n; k++) {
+      const k1 = (k + 1) % n
+      indices.push(lo + k, hi + k, hi + k1)
+      indices.push(lo + k, hi + k1, lo + k1)
+    }
+  }
+
+  if (solid) {
+    /*
+      The chamfer, then the rim wall, then the inner surface.
+
+      The chamfer ring SHARES its vertices with nothing: it is pushed fresh at
+      footprint 1.0 on `host + rise - chamfer`, and the ring before it is the
+      outer surface's last. `computeVertexNormals` therefore averages across the
+      join, which is what makes it read as a rounded edge rather than as a facet,
+      and it is why one step is enough. The reference brief is explicit that a
+      moulded plastic part has no 90 degree corner anywhere, and on a 0.012 m
+      step this bevel is most of what the eye reads because it is the only
+      surface that catches the key as a bright line.
+
+      The rim wall is a SEPARATE pair of rings duplicating the chamfer's outer
+      ring and the inner surface's, so the crease between chamfer and wall stays
+      hard. Averaging there would smear the panel's edge into the head and undo
+      the whole point of a visible step.
+    */
+    const chamferRing = positions.length / 3
+    for (const p of outline) push(p.x, p.y, chamferShape)
+    const lastOuter = ringStart[rings - 1]
+    for (let k = 0; k < n; k++) {
+      const k1 = (k + 1) % n
+      indices.push(lastOuter + k, chamferRing + k, chamferRing + k1)
+      indices.push(lastOuter + k, chamferRing + k1, lastOuter + k1)
+    }
+
+    const wallTop = positions.length / 3
+    for (const p of outline) push(p.x, p.y, chamferShape)
+    const wallBottom = positions.length / 3
+    for (const p of outline) push(p.x, p.y, innerShape)
+    for (let k = 0; k < n; k++) {
+      const k1 = (k + 1) % n
+      indices.push(wallTop + k, wallBottom + k, wallBottom + k1)
+      indices.push(wallTop + k, wallBottom + k1, wallTop + k1)
+    }
+
+    /*
+      The inner surface, as one fan and not a ring stack. It is buried by `inset`
+      on a CONVEX solid, so every chord of it is further inside the host than its
+      endpoints are, and no amount of coarseness can push it out through the
+      head. One fan is therefore not a shortcut that might bite later; it is the
+      correct resolution for a surface that cannot be seen and cannot poke out.
+    */
+    const innerRing = positions.length / 3
+    for (const p of outline) push(p.x, p.y, innerShape)
+    const centreInner = push(0, 0, innerShape)
+    for (let k = 0; k < n; k++) {
+      indices.push(centreInner, innerRing + ((k + 1) % n), innerRing + k)
+    }
+  }
+
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('uv', new Float32BufferAttribute(uvs, 2))
+  geometry.setIndex(indices)
+
+  /*
+    Wound so the outer surface faces away from the host, which for `facing` -1
+    means every triangle above has to reverse. Done here rather than by branching
+    each `indices.push` because eight winding decisions is eight chances to invert
+    one, and an inverted winding is precisely the defect this pass found on the
+    ear pods: a lathe built from a descending profile came out inside-out, and
+    with backface culling the pod showed nothing at all from the side.
+
+    `robotGeometry.test.ts` measures the signed volume of the result rather than
+    trusting either branch.
+  */
+  if (facing < 0) {
+    for (let i = 0; i < indices.length; i += 3) {
+      const t = indices[i + 1]
+      indices[i + 1] = indices[i + 2]
+      indices[i + 2] = t
+    }
+    geometry.setIndex(indices)
+  }
+
+  geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return geometry

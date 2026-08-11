@@ -1,9 +1,15 @@
 import { useEffect, useRef, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
-import { Color, Mesh, NormalBlending, PlaneGeometry, ShaderMaterial, Vector2 } from 'three'
+import { Color, Mesh, NormalBlending, ShaderMaterial, Vector2 } from 'three'
 import { GLOW, emissiveIntensityFor } from '@/art/materials'
 import { palette } from '@/art/palette'
-import { VISOR } from './robotGeometry'
+import {
+  FACE_PLATE,
+  HEAD_SHELL,
+  superellipsePoints,
+  superellipsoidPatch,
+  VISOR,
+} from './robotGeometry'
 import { writeVisorUniforms } from './rig'
 import type { Pose } from './robotPose'
 
@@ -314,7 +320,6 @@ export function RobotFace({
 
   return (
     <mesh
-      position={[0, 0, 0.02]}
       geometry={VISOR_GEOMETRY}
       ref={(o) => {
         if (!o) return
@@ -326,21 +331,58 @@ export function RobotFace({
 }
 
 /**
- * The glyph plane, 0.020 m in front of the plate's face.
+ * The glyph shell, 0.020 m in front of the plate's outer face.
  *
- * Still the full 0.56 x 0.38 of the plate even though the two lenses now occupy
- * far less of it than the bar did, and that is deliberate rather than waste: plate
- * space is defined as this quad's own UV space, so shrinking the quad would
- * rescale every half-extent in `VISOR` and the aspect multiply with it. A quad
- * costs two triangles and the fragments outside the lenses discard on an alpha of
- * zero.
+ * ## It is not a quad any more, and the shader did not notice
  *
- * Far enough that the depth test never fights at any camera angle inside
- * `CAMERA.minDistance`, and near enough that the parallax between plate and
- * glyph stays under a pixel. Not `polygonOffset`: a real offset in Z is more
- * predictable and costs nothing.
+ * It was `new PlaneGeometry(0.56, 0.38)` at a local z of 0.020, which was correct
+ * for as long as the plate it sat on was flat. The head is now a superellipsoid and
+ * the plate is a curved patch of it, so a flat quad in front of the plate would
+ * meet it at the centre and stand 0.11 m clear of it at the rim: a card floating in
+ * front of a visor, with the visor's own surface visible around its edge.
+ *
+ * So the glyph is the same patch generator on the same host at a larger rise, which
+ * makes it a shell 0.020 m off the plate's outer surface everywhere rather than at
+ * one point. **`solid: false`**, so it is one open surface with no rim and no inner
+ * face: this material is `transparent` with `depthWrite: false` and casts no shadow,
+ * so it has no inside to leak and nothing to catch a highlight on. Every other
+ * patch on the character is closed, for the reason the cape's hem caps record.
+ *
+ * ## Why plate space survived
+ *
+ * Still the full 0.56 x 0.38 of the plate even though the two lenses now occupy far
+ * less of it than the bar did, and that is deliberate rather than waste: plate space
+ * is defined as this surface's own UV space, so shrinking it would rescale every
+ * half-extent in `VISOR` and the aspect multiply with it.
+ *
+ * `superellipsoidPatch` maps `uv` from the footprint's own coordinate over the same
+ * half-extents `PlaneGeometry` would have, so `vUv` means exactly what it meant when
+ * this was a quad. That is the whole reason the blink, the gaze, the six
+ * expressions and every number in `VISOR` are untouched by a change that bent the
+ * surface they are drawn on. The cost is a measured 704 triangles where two used to
+ * do, which buys the curvature and nothing else - the fragments outside the lenses
+ * still discard on an alpha of zero.
+ *
+ * The 0.020 is unchanged and its reasoning with it: far enough that the depth test
+ * never fights at any camera angle inside `CAMERA.minDistance`, and near enough
+ * that the parallax between plate and glyph stays under a pixel. Not
+ * `polygonOffset`: a real offset along the surface is more predictable and costs
+ * nothing.
  */
-const VISOR_GEOMETRY = new PlaneGeometry(0.56, 0.38)
+const VISOR_GEOMETRY = superellipsoidPatch({
+  host: HEAD_SHELL,
+  outline: superellipsePoints(FACE_PLATE.a, FACE_PLATE.b, FACE_PLATE.n, FACE_PLATE.segments),
+  halfW: FACE_PLATE.a,
+  halfH: FACE_PLATE.b,
+  centreY: FACE_PLATE.y,
+  facing: 1,
+  inset: 0,
+  rise: FACE_PLATE.glyphRise,
+  chamfer: 0,
+  chamferFrac: 0,
+  rings: FACE_PLATE.rings,
+  solid: false,
+})
 
 function createVisorMaterial(detail: 'simple' | 'full'): ShaderMaterial {
   return new ShaderMaterial({

@@ -96,10 +96,16 @@ export const PROPORTIONS = {
 } as const
 
 /*
-  The antenna reaches 1.53 m and does not count toward the silhouette height,
+  The antenna reaches 1.525 m and does not count toward the silhouette height,
   because a thin protrusion does not read as mass. That is not a rounding
-  convenience: including it would give 2.83 head-heights, and the character
+  convenience: including it would give 2.82 head-heights, and the character
   would be correct on paper and wrong on screen.
+
+  "1.53 m" was written here when the head was shorter, and between then and now it
+  was 1.610: `REST.antennaBase.y` was 0.310, which put the bulb's top at head-local
+  0.520 and therefore at world 1.610. Lowering the base to 0.225 so the antenna
+  actually touches the head - see that block - brings it back to 1.525 and makes
+  this line true for the first time in three rounds.
 */
 
 export const REST = {
@@ -129,8 +135,40 @@ export const REST = {
    * Off-centre on purpose, and it is the one asymmetric feature on the
    * character. A perfectly mirror-symmetric toy reads as a product shot; one
    * thing out of line reads as a character.
+   *
+   * ## y was 0.310 and the antenna was not touching the head
+   *
+   * `AntennaLower` puts a 0.09 m cylinder at this node's `+0.045`, so the
+   * cylinder's bottom face is exactly at this node's y. The old head was a
+   * `RoundedBox` whose flat top was at head-local y 0.270, and 0.310 is 0.040
+   * ABOVE it. So the character's one asymmetric feature, the one the model's own
+   * header comment calls "the most visible piece of secondary motion on the
+   * build", has been floating 4 cm off the crown with clear air under it.
+   *
+   * That is not a consequence of this pass and it is not what this pass went
+   * looking for. It survived because every measurement anyone took of the antenna
+   * was about the deleted `Helmet` swallowing its BULB - `HEAD_CAP`'s comment
+   * carries three paragraphs of it - and nobody asked whether its ROOT reached the
+   * head. Both are the same class of defect and only one of them had a test.
+   *
+   * ## Where 0.225 comes from
+   *
+   * The head is now a superellipsoid, so the crown's height varies with x and z.
+   * `superellipsoidY(0.200, -0.040, HEAD_SHELL)` is 0.2468, and 0.225 buries the
+   * cylinder's base 0.0218 into the shell.
+   *
+   * 0.0218 and not less, because this node ROTATES: the antenna whips to nearly 30
+   * degrees and the base disc tilts with it, dropping its lowest rim point by
+   * `0.015 * sin(theta)`. At 0.015 of burial the antenna would break the surface at
+   * 90 degrees, which it cannot reach, and `robotGeometry.test.ts` asserts against
+   * the cylinder's full radius rather than against any particular whip angle so the
+   * margin holds for every pose the springs can produce.
+   *
+   * The knock-on is that the antenna's tip drops from world 1.610 to 1.525, which
+   * finally makes the "reaches 1.53 m" note below true. It was written when the
+   * head was 0.10 shorter and never re-taken.
    */
-  antennaBase: { x: 0.2, y: 0.31, z: -0.04 },
+  antennaBase: { x: 0.2, y: 0.225, z: -0.04 },
   antennaMid: { x: 0, y: 0.085, z: 0 },
   backpack: { x: 0, y: 0.06, z: -0.29 },
   capeRoot: { x: 0, y: 0.06, z: -0.29 },

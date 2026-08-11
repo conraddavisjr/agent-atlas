@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import type { BufferGeometry } from 'three'
 import { latheProfile } from '@/art/geometry'
 import {
   ARM_BAND,
@@ -7,6 +8,7 @@ import {
   CAPE_PANEL,
   CAPE_RIBBON,
   createCapeRibbon,
+  DIAPER,
   EAR_POD_SHAPE,
   FACE_PLATE,
   HAND,
@@ -16,13 +18,19 @@ import {
   skinCapeRibbon,
   SOLE_LIGHT,
   superellipsePoints,
+  superellipsoidField,
+  superellipsoidOffset,
+  superellipsoidPatch,
+  superellipsoidX,
+  superellipsoidY,
+  superellipsoidZ,
   sdRoundBox,
   taperedSuperellipsoid,
   TORSO,
   VISOR,
 } from './robotGeometry'
 import { CAPE } from './animTuning'
-import { REST, REST_ROTATION } from './robotPose'
+import { PROPORTIONS, REST, REST_ROTATION } from './robotPose'
 
 describe('superellipsePoints', () => {
   it('is an exact ellipse at n = 2', () => {
@@ -103,8 +111,10 @@ describe('roundedDiscProfile', () => {
     const pts = roundedDiscProfile(radius, halfThickness, fillet, filletSteps)
     expect(pts[0].x).toBe(0)
     expect(pts[pts.length - 1].x).toBe(0)
-    expect(pts[0].y).toBeCloseTo(halfThickness, 12)
-    expect(pts[pts.length - 1].y).toBeCloseTo(-halfThickness, 12)
+    // Ascending. It used to descend, and see "the lathed parts are wound outward"
+    // for what that cost: the shape was identical and the winding was inverted.
+    expect(pts[0].y).toBeCloseTo(-halfThickness, 12)
+    expect(pts[pts.length - 1].y).toBeCloseTo(halfThickness, 12)
   })
 
   it('actually reaches the full radius at the rim', () => {
@@ -389,133 +399,671 @@ describe('the eye lenses', () => {
 })
 
 /*
-  Signed distance to a rounded box in 3D, the standard iq form.
+  Is this part proud of the one under it, for a head that is no longer a box.
 
-  Here because every "is this part proud of the one under it" question on this
-  model is that one function, and every one of them has been answered by eye at
-  least once. `Helmet` was the worst case: an 0.84 hemisphere over a 0.72 head
-  with a 0.03 gap at the rim, none of it visible in a triangle count.
+  Every "how proud" question on this model used to be one call to `sdRoundBox3`,
+  which lived here, and `Helmet` was the worst case it caught: an 0.84 hemisphere
+  over a 0.72 head with a 0.03 gap at the rim, none of it visible in a triangle
+  count. The head is now a superellipsoid, which has no closed-form signed
+  distance, so the same questions are asked against `superellipsoidField` instead:
+  1 on the surface, above 1 outside, below 1 inside.
+
+  `sdRoundBox3` went with the box. Nothing else on the character needed it - the
+  sole light and the back port do their own arithmetic against their own housings -
+  and keeping a helper for a shape that no longer exists is how the stale numbers
+  in `HEAD_CAP`'s comment got there.
+
+  The field's MAGNITUDE is meaningless, so nothing below compares two field values
+  as if they were metres. Where a test wants a clearance in metres it solves for the
+  surface coordinate with `superellipsoidX/Y/Z`.
 */
-function sdRoundBox3(
-  px: number,
-  py: number,
-  pz: number,
-  hx: number,
-  hy: number,
-  hz: number,
-  r: number,
-): number {
-  const qx = Math.abs(px) - (hx - r)
-  const qy = Math.abs(py) - (hy - r)
-  const qz = Math.abs(pz) - (hz - r)
-  const outside = Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0))
-  return outside + Math.min(Math.max(qx, Math.max(qy, qz)), 0) - r
+const headField = (x: number, y: number, z: number) =>
+  superellipsoidField(x, y, z, HEAD_SHELL)
+
+/**
+ * The signed volume of a closed triangle soup, positive when every face winds
+ * outward.
+ *
+ * The single most useful assertion in this file, and it is here because the ear
+ * pods shipped inside out for three rounds while five tests measured their
+ * extents and passed. Winding is invisible to a bound, invisible to a vertex
+ * count, invisible to a bounding box, and with the default `FrontSide` it is the
+ * difference between a part and nothing at all.
+ */
+function signedVolume(g: BufferGeometry): number {
+  const pos = g.getAttribute('position')
+  const idx = g.getIndex()!
+  let v = 0
+  for (let i = 0; i < idx.count; i += 3) {
+    const a = idx.getX(i)
+    const b = idx.getX(i + 1)
+    const c = idx.getX(i + 2)
+    const ax = pos.getX(a), ay = pos.getY(a), az = pos.getZ(a)
+    const bx = pos.getX(b), by = pos.getY(b), bz = pos.getZ(b)
+    const cx = pos.getX(c), cy = pos.getY(c), cz = pos.getZ(c)
+    v += (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)) / 6
+  }
+  return v
 }
 
-/** The head shell`s own surface, as a signed distance in head-local space. */
-const headSd = (x: number, y: number, z: number) =>
-  sdRoundBox3(
-    x,
-    y,
-    z,
-    HEAD_SHELL.width / 2,
-    HEAD_SHELL.height / 2,
-    HEAD_SHELL.depth / 2,
-    HEAD_SHELL.radius,
-  )
+/** How many of a geometry's stored normals point radially outward, and how many in. */
+function radialNormalSense(g: BufferGeometry): { out: number; in: number } {
+  const pos = g.getAttribute('position')
+  const nrm = g.getAttribute('normal')
+  let outward = 0
+  let inward = 0
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i)
+    const z = pos.getZ(i)
+    const r = Math.hypot(x, z)
+    if (r < 1e-6) continue
+    const d = (nrm.getX(i) * x + nrm.getZ(i) * z) / r
+    if (d > 0.2) outward++
+    else if (d < -0.2) inward++
+  }
+  return { out: outward, in: inward }
+}
 
-describe('the copper cap on the back of the head', () => {
-  const back = HEAD_CAP.z - HEAD_CAP.depth / 2
-  const top = HEAD_CAP.y + HEAD_CAP.height / 2
-  const front = HEAD_CAP.z + HEAD_CAP.depth / 2
-  const side = HEAD_CAP.width / 2
-
-  it('stands proud of the head at the back and over the rear crown', () => {
-    // Proud means a positive signed distance from the head`s own surface. A cap
-    // that is not proud anywhere is a paint stripe, and this is the arithmetic
-    // that decides which one it is.
-    expect(headSd(0, HEAD_CAP.y, back)).toBeGreaterThan(0.015)
-    expect(headSd(0, top, HEAD_CAP.z)).toBeGreaterThan(0)
-    expect(headSd(side, top, back)).toBeGreaterThan(0.04)
+const earPodGeometry = () => {
+  const g = latheProfile({
+    points: roundedDiscProfile(
+      EAR_POD_SHAPE.radius,
+      EAR_POD_SHAPE.halfThickness,
+      EAR_POD_SHAPE.fillet,
+      EAR_POD_SHAPE.filletSteps,
+    ),
+    radialSegments: EAR_POD_SHAPE.radialSegments,
   })
+  g.rotateZ(Math.PI / 2)
+  return g
+}
 
-  it('stays inside the head`s own width, so the pods remain the widest thing', () => {
-    expect(side).toBeLessThan(HEAD_SHELL.width / 2)
+/*
+  The bug this whole pass turned on, and the reason it is tested by volume rather
+  than by extent.
+
+  `roundedDiscProfile` descended, from `+halfThickness` to `-halfThickness`, and
+  `LatheGeometry` takes both its winding and its normals from the profile's
+  direction of travel. The point set is symmetric in y, so the shape was identical
+  either way and every test that measured a radius, a half-thickness or a bounding
+  box passed. What was not identical was which way the faces pointed.
+*/
+describe('the lathed parts are wound outward, which the ear pods were not', () => {
+  it('gives the ear pod a positive volume and outward normals', () => {
+    const g = earPodGeometry()
+    /*
+      A can of radius 0.105 and length 0.21 is 0.007274 before the fillet takes
+      material off the two rims, so the expected answer is a little under that. The
+      descending profile measured -0.006906 for the same shape: same magnitude,
+      opposite sign, which is the whole signature of an inverted winding.
+    */
+    const v = signedVolume(g)
+    expect(v).toBeGreaterThan(0)
+    expect(v).toBeLessThan(Math.PI * 0.105 * 0.105 * 0.21)
+    expect(v).toBeGreaterThan(0.8 * Math.PI * 0.105 * 0.105 * 0.21)
+
+    const sense = radialNormalSense(g)
+    expect(sense.in).toBe(0)
+    expect(sense.out).toBeGreaterThan(100)
   })
 
   /*
-    The defect the deleted `Helmet` had and this must never repeat. The antenna
-    root is at head-local z -0.040 and its bulb reaches y 0.520; a cap whose front
-    face passed that z, or whose top passed that y, would swallow the one warm
-    light on the character exactly as the dome did.
+    The two rings on each upper arm come off the same generator and were inside out
+    too, at a measured -0.000712. Nobody reported them, because a ring drawn with
+    only its inner wall still puts a dark band round the arm - which is exactly why
+    this is asserted rather than left to a render.
   */
-  it('cannot enclose the antenna', () => {
-    expect(front).toBeLessThan(-0.04)
-    expect(top).toBeLessThan(0.31)
+  it('gives both arm rings a positive volume', () => {
+    for (const ring of [ARM_BAND, ARM_BEVEL]) {
+      const g = latheProfile({
+        points: roundedDiscProfile(ring.radius, ring.halfThickness, ring.fillet, ring.filletSteps),
+        radialSegments: ring.radialSegments,
+      })
+      expect(signedVolume(g)).toBeGreaterThan(0)
+      expect(radialNormalSense(g).in).toBe(0)
+    }
   })
 
   /*
-    Does not intersect the ear pods, tested against the cap`s real SURFACE rather
-    than against its bounding extents.
-
-    The first version of this test compared the cap`s front z (-0.090) with the
-    pod`s rear z (-0.125) and failed, which looked like a collision and is not one.
-    The bounding boxes genuinely do overlap - x 0.275 to 0.280, z -0.125 to -0.090 -
-    but a `RoundedBox` at radius 0.090 is only its full 0.280 wide away from its own
-    corner rounds: at the front face the cross-section has shrunk to the inner box
-    at 0.190, and the cap does not reach x 0.275 until z -0.150, which is 0.025
-    behind where the pod begins.
-
-    Recorded because the bounding-box version of this question is the one that is
-    easy to ask and it gives the wrong answer in both directions - it would also
-    have passed `Helmet`, whose sphere overlapped nothing it was not supposed to.
-    Sampling the pod`s own surface against the cap`s signed distance is the version
-    that is actually about the two shapes.
+    And the profile ascends, which is the property the two tests above depend on and
+    the one thing a future edit could quietly reverse. `roundedCylinder` in
+    `src/art/geometry.ts` ascends for the same reason, which is why nothing else in
+    the world was ever affected.
   */
-  it('does not intersect the ear pods', () => {
-    const axisX = Math.abs(REST.earPodL.x)
-    const inner = axisX - EAR_POD_SHAPE.halfThickness
-    let closest = Infinity
-    // The pod is a can whose axis lies along X. Walk its rim and its two faces.
-    for (let i = 0; i < 64; i++) {
-      const th = (i / 64) * Math.PI * 2
-      const y = REST.earPodL.y + EAR_POD_SHAPE.radius * Math.sin(th)
-      const z = REST.earPodL.z + EAR_POD_SHAPE.radius * Math.cos(th)
-      for (let j = 0; j <= 8; j++) {
-        const x = inner + (j / 8) * EAR_POD_SHAPE.halfThickness * 2
-        closest = Math.min(
-          closest,
-          sdRoundBox3(
-            x,
-            y - HEAD_CAP.y,
-            z - HEAD_CAP.z,
-            HEAD_CAP.width / 2,
-            HEAD_CAP.height / 2,
-            HEAD_CAP.depth / 2,
-            HEAD_CAP.radius,
-          ),
-        )
+  it('builds its profile from the bottom up', () => {
+    const pts = roundedDiscProfile(0.105, 0.105, 0.055, 6)
+    expect(pts[0].y).toBeCloseTo(-0.105, 12)
+    expect(pts[pts.length - 1].y).toBeCloseTo(0.105, 12)
+    for (let i = 1; i < pts.length; i++) {
+      expect(pts[i].y).toBeGreaterThanOrEqual(pts[i - 1].y - 1e-12)
+    }
+  })
+})
+
+describe('the head shell is an oblong and not a rounded rectangle', () => {
+  const head = () => taperedSuperellipsoid(HEAD_SHELL)
+
+  it('keeps the extents the proportion ladder is built on', () => {
+    const box = head().boundingBox!
+    expect(box.max.x - box.min.x).toBeCloseTo(HEAD_SHELL.width, 4)
+    expect(box.max.y - box.min.y).toBeCloseTo(HEAD_SHELL.height, 4)
+    expect(box.max.z - box.min.z).toBeCloseTo(HEAD_SHELL.depth, 4)
+    // The crown is what fixes PROPORTIONS.totalHeight at 1.36. REST puts the head
+    // node at world 1.090, so the half-height has to be exactly 0.270.
+    expect(HEAD_SHELL.b).toBeCloseTo(PROPORTIONS.headHeight / 2, 12)
+    expect(HEAD_SHELL.width).toBeCloseTo(PROPORTIONS.headWidth, 12)
+  })
+
+  /*
+    The defect this replaces, stated as the thing `Lighting.tsx` measured from the
+    other end: "0.32 m of its 0.54 m height - 59% ... is a single FLAT face with one
+    normal, which no light can put a gradient across."
+
+    So the test is not "is it a superellipsoid", it is "does the normal turn". Walking
+    up the front meridian, the surface normal's angle off +Z has to grow
+    monotonically and reach a real angle well before the silhouette, which is what
+    lets any light at any azimuth put a gradient on the face.
+  */
+  it('turns its normal continuously up the front, where the box had one flat', () => {
+    const m1 = 2 / HEAD_SHELL.e1
+    const angleAt = (frac: number) => {
+      const y = HEAD_SHELL.b * frac
+      const z = superellipsoidZ(0, y, HEAD_SHELL)
+      const gy = Math.pow(y / HEAD_SHELL.b, m1 - 1) / HEAD_SHELL.b
+      const gz = Math.pow(z / HEAD_SHELL.c, m1 - 1) / HEAD_SHELL.c
+      return (Math.atan2(gy, gz) * 180) / Math.PI
+    }
+    let last = -1
+    for (const frac of [0, 0.2, 0.4, 0.6, 0.8]) {
+      const a = angleAt(frac)
+      expect(a).toBeGreaterThan(last)
+      last = a
+    }
+    // The box was 0 degrees over the whole of |y| <= 0.160, which is 59% of the
+    // height. Two fifths of the way up, this has already turned 14.8.
+    expect(angleAt(0.4)).toBeGreaterThan(10)
+    expect(angleAt(0.6)).toBeGreaterThan(25)
+  })
+
+  it('is a closed solid wound outward', () => {
+    expect(signedVolume(head())).toBeGreaterThan(0)
+  })
+
+  /*
+    `superellipsoidField` is the inside/outside test every clearance below leans on,
+    so it is checked against the mesh the generator actually produced rather than
+    against its own algebra. Both directions matter: a field that said everything
+    was outside would pass every proud-ness test in this file.
+  */
+  it('has a field that agrees with the built surface', () => {
+    const pos = head().getAttribute('position')
+    for (let i = 0; i < pos.count; i++) {
+      expect(headField(pos.getX(i), pos.getY(i), pos.getZ(i))).toBeCloseTo(1, 5)
+    }
+    expect(headField(0, 0, 0)).toBeLessThan(1)
+    expect(headField(0.4, 0, 0)).toBeGreaterThan(1)
+    expect(headField(0, 0.3, 0)).toBeGreaterThan(1)
+    expect(headField(0, 0, 0.34)).toBeGreaterThan(1)
+  })
+
+  /*
+    `taperTop` 1 is not decoration. The taper is applied at every latitude including
+    the equator, so a tapered solid's widest point is not `a` and it has no implicit
+    form of the kind `superellipsoidField` needs. Every clearance argument on the
+    visor, the cap, the pods and the antenna would stop being checkable.
+  */
+  it('is untapered, which is what makes the field valid', () => {
+    expect(HEAD_SHELL.taperTop).toBe(1)
+  })
+})
+
+/*
+  The three patches on the head: the visor plate, the visor glyph and the copper
+  cap. Everything here is one question asked three times - is this panel outside the
+  helmet everywhere, or does it have a rim hanging in the air - and it is asked
+  against the BUILT geometry rather than against the numbers that produced it.
+
+  That is the lesson from the two invisible parts of the last pass. A sole light was
+  authored "recessed 1 mm above the sole plane" and sat entirely inside opaque
+  rubber; a three-ring port had its inner rings enclosed because a `cylinderGeometry`
+  is a disc and not a ring. Both had a test. Both tests asserted the position the
+  part was authored at, which was exactly the wrong thing, so both passed.
+*/
+describe('the curved panels on the head', () => {
+  const plateOutline = () =>
+    superellipsePoints(FACE_PLATE.a, FACE_PLATE.b, FACE_PLATE.n, FACE_PLATE.segments)
+
+  const plate = () =>
+    superellipsoidPatch({
+      host: HEAD_SHELL,
+      outline: plateOutline(),
+      halfW: FACE_PLATE.a,
+      halfH: FACE_PLATE.b,
+      centreY: FACE_PLATE.y,
+      facing: 1,
+      inset: FACE_PLATE.inset,
+      rise: FACE_PLATE.rise,
+      chamfer: FACE_PLATE.chamfer,
+      chamferFrac: FACE_PLATE.chamferFrac,
+      rings: FACE_PLATE.rings,
+      solid: true,
+    })
+
+  const glyph = () =>
+    superellipsoidPatch({
+      host: HEAD_SHELL,
+      outline: plateOutline(),
+      halfW: FACE_PLATE.a,
+      halfH: FACE_PLATE.b,
+      centreY: FACE_PLATE.y,
+      facing: 1,
+      inset: 0,
+      rise: FACE_PLATE.glyphRise,
+      chamfer: 0,
+      chamferFrac: 0,
+      rings: FACE_PLATE.rings,
+      solid: false,
+    })
+
+  const cap = () =>
+    superellipsoidPatch({
+      host: HEAD_SHELL,
+      outline: superellipsePoints(HEAD_CAP.halfW, HEAD_CAP.halfH, HEAD_CAP.n, HEAD_CAP.segments),
+      halfW: HEAD_CAP.halfW,
+      halfH: HEAD_CAP.halfH,
+      centreY: HEAD_CAP.y,
+      facing: -1,
+      inset: HEAD_CAP.inset,
+      rise: HEAD_CAP.rise,
+      chamfer: HEAD_CAP.chamfer,
+      chamferFrac: HEAD_CAP.chamferFrac,
+      rings: HEAD_CAP.rings,
+      solid: true,
+    })
+
+  /*
+    THE visibility proof, and the reason it is not a position assertion.
+
+    A patch's outer surface rides `host + rise` on every half-extent, and every point
+    of a larger superellipsoid is strictly outside the smaller one because each
+    `|x|/a` term exceeds its `|x|/(a + rise)` counterpart. So this is provable rather
+    than measurable - but "provable" is what the sole light and the back port both
+    were, so it is measured anyway, over every vertex the generator emitted, against
+    the head's own field.
+
+    A patch with an inner surface has vertices INSIDE the head by construction, which
+    is what attaches it. So the claim is about the outer half specifically: the
+    outermost `rings * n + 1` vertices are the outer shell, and all of them must clear
+    the head.
+  */
+  it('puts every outer-surface vertex strictly outside the helmet', () => {
+    for (const [name, g, outerCount] of [
+      ['plate', plate(), FACE_PLATE.rings * FACE_PLATE.segments + 1],
+      ['glyph', glyph(), FACE_PLATE.rings * FACE_PLATE.segments + 1],
+      ['cap', cap(), HEAD_CAP.rings * HEAD_CAP.segments + 1],
+    ] as const) {
+      const pos = g.getAttribute('position')
+      let worst = Infinity
+      for (let i = 0; i < outerCount; i++) {
+        worst = Math.min(worst, headField(pos.getX(i), pos.getY(i), pos.getZ(i)))
+      }
+      expect(worst, `${name} outer surface`).toBeGreaterThan(1)
+    }
+  })
+
+  /*
+    And the other half: a panel that is outside the head everywhere is a floating
+    tile. The rim has to be INSIDE, which is what makes the step read as a moulded
+    part rather than as a sticker with a shadow under it.
+  */
+  it('buries the rim of every solid panel inside the helmet', () => {
+    for (const [name, g] of [['plate', plate()], ['cap', cap()]] as const) {
+      const pos = g.getAttribute('position')
+      let deepest = -Infinity
+      let inside = 0
+      for (let i = 0; i < pos.count; i++) {
+        const f = headField(pos.getX(i), pos.getY(i), pos.getZ(i))
+        if (f < 1) inside++
+        deepest = Math.max(deepest, 1 - f)
+      }
+      expect(inside, `${name} has vertices inside the head`).toBeGreaterThan(0)
+      expect(deepest, `${name} is engaged`).toBeGreaterThan(0)
+    }
+  })
+
+  /*
+    The measurement that made all of this necessary, kept as a test so nobody
+    reintroduces a flat plate. Over the plate's own footprint the surface it mounts
+    on drops 0.1407 m from centre to rim, against a plate 0.032 m deep. A flat plate
+    would stand a hundred and forty millimetres off the head at its edge.
+  */
+  it('records how far a flat plate would have missed the helmet by', () => {
+    const centre = superellipsoidZ(0, FACE_PLATE.y, HEAD_SHELL)
+    let rimMin = Infinity
+    for (const p of plateOutline()) {
+      rimMin = Math.min(rimMin, superellipsoidZ(p.x, FACE_PLATE.y + p.y, HEAD_SHELL))
+    }
+    expect(centre).toBeCloseTo(0.309, 3)
+    expect(rimMin).toBeCloseTo(0.1683, 3)
+    expect(centre - rimMin).toBeGreaterThan(0.1)
+  })
+
+  it('closes both solid panels, wound outward', () => {
+    expect(signedVolume(plate())).toBeGreaterThan(0)
+    expect(signedVolume(cap())).toBeGreaterThan(0)
+  })
+
+  /*
+    The glyph is deliberately NOT closed, and that is the one place on this character
+    where an open surface is correct: it is `transparent` with `depthWrite: false`
+    and casts no shadow, so it has no inside to leak. Asserted so the exception stays
+    an exception - the cape's hem caps exist because an open tube leaks the shadow
+    pass, and every other patch here is solid.
+  */
+  it('leaves the glyph an open shell with no rim', () => {
+    expect(glyph().getAttribute('position').count).toBe(
+      FACE_PLATE.rings * FACE_PLATE.segments + 1,
+    )
+  })
+
+  /*
+    Plate space is the glyph's UV space, and `VISOR`'s half-extents, the blink, the
+    gaze and the six expressions are all expressed in it. The user singled the blink
+    out as excellent, so this is the assertion that says bending the surface did not
+    touch it: the patch has to emit exactly the UVs `PlaneGeometry(0.56, 0.38)`
+    emitted, which means 0 to 1 across the footprint with 0.5 at the centre.
+  */
+  it('maps the glyph`s UVs exactly as the quad it replaces did', () => {
+    const g = glyph()
+    const pos = g.getAttribute('position')
+    const uv = g.getAttribute('uv')
+    expect(uv.getX(0)).toBeCloseTo(0.5, 12)
+    expect(uv.getY(0)).toBeCloseTo(0.5, 12)
+    let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity
+    for (let i = 0; i < uv.count; i++) {
+      // The inverse mapping has to land back on the vertex's own footprint x, which
+      // is what `PlaneGeometry` guarantees and what the shader's `vUv` assumes.
+      expect((uv.getX(i) - 0.5) * 2 * FACE_PLATE.a).toBeCloseTo(pos.getX(i), 6)
+      expect((uv.getY(i) - 0.5) * 2 * FACE_PLATE.b).toBeCloseTo(pos.getY(i) - FACE_PLATE.y, 6)
+      uMin = Math.min(uMin, uv.getX(i)); uMax = Math.max(uMax, uv.getX(i))
+      vMin = Math.min(vMin, uv.getY(i)); vMax = Math.max(vMax, uv.getY(i))
+    }
+    expect(uMin).toBeCloseTo(0, 6)
+    expect(uMax).toBeCloseTo(1, 6)
+    expect(vMin).toBeCloseTo(0, 6)
+    expect(vMax).toBeCloseTo(1, 6)
+  })
+
+  /*
+    The glyph rides in front of the PLATE and not just in front of the head, which is
+    a different claim: both are patches on the same host, so it reduces to their
+    rises, and the difference is the 0.020 the quad used to carry as a local z.
+  */
+  it('holds the glyph 0.020 clear of the plate`s outer surface', () => {
+    expect(FACE_PLATE.glyphRise - FACE_PLATE.rise).toBeCloseTo(0.02, 12)
+  })
+
+  /*
+    A footprint that runs off the host's silhouette is a panel with its rim in the
+    air, and it is how the cap's own footprint was found: at the box cap's 0.56 by
+    0.34 the squircle wants x 0.236 at y 0.243, where the head only reaches 0.201.
+    The generator has to refuse rather than clamp, because a clamped point renders a
+    clean frame with a crescent gap under it.
+  */
+  it('refuses a footprint that runs off the helmet', () => {
+    expect(() =>
+      superellipsoidPatch({
+        host: HEAD_SHELL,
+        outline: superellipsePoints(0.28, 0.17, 4, 48),
+        halfW: 0.28,
+        halfH: 0.17,
+        centreY: 0.1,
+        facing: -1,
+        inset: 0.01,
+        rise: 0.014,
+        chamfer: 0.006,
+        chamferFrac: 0.05,
+        rings: 4,
+        solid: true,
+      }),
+    ).toThrow(/outside the host/)
+  })
+
+  /*
+    Finite positions and unit normals, which is the check that a generator did not
+    quietly produce a mesh that renders as nothing.
+
+    `computeVertexNormals` leaves an unreferenced vertex at (0, 0, 0), and
+    `Vector3.normalize` keeps that as (0, 0, 0) rather than turning it into a NaN
+    anything would report - the same trap `taperedSuperellipsoid` documents at its
+    poles. So the assertion is on the LENGTH and not just on finiteness.
+  */
+  it('produces finite positions and unit normals on all three panels', () => {
+    for (const [name, g] of [['plate', plate()], ['glyph', glyph()], ['cap', cap()]] as const) {
+      const pos = g.getAttribute('position')
+      const nrm = g.getAttribute('normal')
+      expect(pos.count, name).toBeGreaterThan(100)
+      for (let i = 0; i < pos.count; i++) {
+        expect(Number.isFinite(pos.getX(i)) && Number.isFinite(pos.getY(i)) && Number.isFinite(pos.getZ(i)), `${name} position ${i}`).toBe(true)
+        const len = Math.hypot(nrm.getX(i), nrm.getY(i), nrm.getZ(i))
+        expect(len, `${name} normal ${i}`).toBeCloseTo(1, 5)
       }
     }
-    // Every sampled pod point is strictly outside the cap.
-    expect(closest).toBeGreaterThan(0)
   })
 
   /*
-    And the cap cannot reach the pod`s own inner face at any z the pod occupies,
-    which is the closed-form version of the same claim.
+    The glyph faces the camera, which for an open one-sided shell is the whole of
+    whether it draws at all. This is the ear-pod defect in a different generator: the
+    pods were a closed solid wound inward and showed nothing in profile, and an open
+    shell wound inward shows nothing from anywhere.
   */
-  it('narrows away from the pods before it gets near them', () => {
-    const capHalfWidthAtFront = HEAD_CAP.width / 2 - HEAD_CAP.radius
-    const podInnerX = Math.abs(REST.earPodL.x) - EAR_POD_SHAPE.halfThickness
-    expect(capHalfWidthAtFront).toBeLessThan(podInnerX)
+  it('faces the glyph shell outward, since it has no second side to fall back on', () => {
+    const nrm = glyph().getAttribute('normal')
+    for (let i = 0; i < nrm.count; i++) expect(nrm.getZ(i)).toBeGreaterThan(0)
   })
 
-  it('bevels within what RoundedBoxGeometry will actually honour', () => {
-    // It clamps to half the smallest dimension without complaining, so an
-    // over-large radius quietly produces a pill rather than erroring.
-    const smallest = Math.min(HEAD_CAP.width, HEAD_CAP.height, HEAD_CAP.depth)
-    expect(HEAD_CAP.radius).toBeLessThanOrEqual(smallest / 2)
+  /*
+    The glyph never touches the plate, and this is the exact version of it: every
+    glyph vertex evaluated against the PLATE's own outer surface as a field, which is
+    a different and stronger claim than "its rise is larger". Both ride the same host,
+    so it reduces to the same term-by-term argument the visibility test uses, and it
+    is measured anyway for the same reason.
+  */
+  it('never lets the glyph touch the plate', () => {
+    const plateOuter = superellipsoidOffset(HEAD_SHELL, FACE_PLATE.rise)
+    const pos = glyph().getAttribute('position')
+    for (let i = 0; i < pos.count; i++) {
+      expect(superellipsoidField(pos.getX(i), pos.getY(i), pos.getZ(i), plateOuter))
+        .toBeGreaterThan(1)
+    }
+  })
+
+  /*
+    And the parallax between the two layers, measured where it can actually be seen.
+
+    The gap is NOT uniform, because both shells are offsets by scale rather than along
+    the normal: over the whole 0.56 by 0.38 footprint the separation in z runs from
+    0.020 at the centre out to 0.041 at the rim, where the surface is steep enough that
+    a scale offset opens up. That does not matter, and saying why is the point of this
+    test rather than a comment: the glyph's alpha is zero everywhere outside the two
+    lenses, so the only place the two layers are both visible is the lens footprint.
+
+    The lenses occupy `|x| <= 0.1938` and y from -0.1362 to -0.0070 in head-local
+    terms - `VISOR.lensOffset` plus `lensHalfW`, times `VISOR.metresPerUnit`, about
+    `FACE_PLATE.y + VISOR.y * metresPerUnit`. Over that region the gap has to stay near
+    the 0.020 the quad carried, or the eyes would sit visibly off the plate at their
+    outer edges.
+  */
+  it('holds the glyph near 0.020 off the plate everywhere the eyes are drawn', () => {
+    const plateOuter = superellipsoidOffset(HEAD_SHELL, FACE_PLATE.rise)
+    const glyphOuter = superellipsoidOffset(HEAD_SHELL, FACE_PLATE.glyphRise)
+    const mpu = VISOR.metresPerUnit
+    const lensReach = (VISOR.lensOffset + VISOR.lensHalfW) * mpu
+    const lensCentreY = FACE_PLATE.y + VISOR.y * mpu
+    const lensHalfY = VISOR.lensHalfH * mpu
+
+    expect(lensReach).toBeCloseTo(0.1938, 4)
+
+    /*
+      Measured PERPENDICULAR to the plate and not along z, which is the difference
+      between a number that means something and one that does not. Along z the gap
+      opens from 0.0204 at the plate's centre to 0.0248 at the lens's outer edge and
+      to 0.0410 out at the plate's rim, purely because the surface has tilted - 19.9
+      degrees at the lens's edge - and a scale offset opens up as it does. The visible
+      separation is that times the cosine of the tilt, and the tilt is taken from a
+      finite difference of the surface rather than from a hand-derived gradient,
+      because the analytic normal of a superellipsoid has the removable singularity
+      that made `taperedSuperellipsoid` use `computeVertexNormals` in the first
+      place.
+    */
+    const h = 1e-4
+    let gapMin = Infinity
+    let gapMax = -Infinity
+    for (let i = -8; i <= 8; i++) {
+      for (let j = -4; j <= 4; j++) {
+        const x = (i / 8) * lensReach
+        const y = lensCentreY + (j / 4) * lensHalfY
+        const dz = superellipsoidZ(x, y, glyphOuter) - superellipsoidZ(x, y, plateOuter)
+        const gx =
+          (superellipsoidZ(x + h, y, plateOuter) - superellipsoidZ(x - h, y, plateOuter)) / (2 * h)
+        const gy =
+          (superellipsoidZ(x, y + h, plateOuter) - superellipsoidZ(x, y - h, plateOuter)) / (2 * h)
+        const gap = dz / Math.hypot(gx, gy, 1)
+        gapMin = Math.min(gapMin, gap)
+        gapMax = Math.max(gapMax, gap)
+      }
+    }
+    /*
+      0.020 nominal, measured at 0.02000 to 0.02155 across both eyes. The 0.16 mm of
+      variation is what a scale offset costs over a normal offset, and it buys the two
+      properties a normal offset could not have: no NaN at the seams the plate's rim
+      crosses, and "strictly outside the host" as an algebraic fact rather than a
+      measurement.
+    */
+    expect(gapMin).toBeGreaterThan(0.0199)
+    expect(gapMax).toBeLessThan(0.0216)
+  })
+
+  /*
+    The chamfer has to move OUTWARD in footprint while moving INWARD in offset, and
+    those two have to not cross: if the chamfer ring ended up further from the host
+    than the outer surface's last ring, the rim would fold back on itself and the panel
+    would show its own inside along one edge.
+
+    Measured on the built geometry's own ring boundaries rather than on the parameters,
+    because the crossing depends on the host's curvature at the footprint's rim and not
+    only on `chamfer` against `rise`.
+  */
+  it('keeps the chamfer between the outer surface and the rim wall', () => {
+    for (const [name, opts] of [
+      ['plate', { halfW: FACE_PLATE.a, halfH: FACE_PLATE.b, y: FACE_PLATE.y, n: FACE_PLATE.n, segments: FACE_PLATE.segments, rise: FACE_PLATE.rise, chamfer: FACE_PLATE.chamfer, chamferFrac: FACE_PLATE.chamferFrac, inset: FACE_PLATE.inset, sign: 1 }],
+      ['cap', { halfW: HEAD_CAP.halfW, halfH: HEAD_CAP.halfH, y: HEAD_CAP.y, n: HEAD_CAP.n, segments: HEAD_CAP.segments, rise: HEAD_CAP.rise, chamfer: HEAD_CAP.chamfer, chamferFrac: HEAD_CAP.chamferFrac, inset: HEAD_CAP.inset, sign: -1 }],
+    ] as const) {
+      const outerShape = superellipsoidOffset(HEAD_SHELL, opts.rise)
+      const chamferShape = superellipsoidOffset(HEAD_SHELL, opts.rise - opts.chamfer)
+      const innerShape = superellipsoidOffset(HEAD_SHELL, -opts.inset)
+      for (const p of superellipsePoints(opts.halfW, opts.halfH, opts.n, opts.segments)) {
+        const lastOuter = 1 - opts.chamferFrac
+        const zOuter = superellipsoidZ(p.x * lastOuter, opts.y + p.y * lastOuter, outerShape)
+        const zChamfer = superellipsoidZ(p.x, opts.y + p.y, chamferShape)
+        const zInner = superellipsoidZ(p.x, opts.y + p.y, innerShape)
+        // Chamfer behind the outer surface, rim wall behind the chamfer, both by a
+        // real margin rather than by a rounding error.
+        expect(zChamfer, `${name} chamfer`).toBeLessThan(zOuter)
+        expect(zChamfer - zInner, `${name} rim wall height`).toBeGreaterThan(0.01)
+      }
+    }
+  })
+
+  it('refuses parameters that would fold the panel through its host', () => {
+    const base = {
+      host: HEAD_SHELL,
+      outline: plateOutline(),
+      halfW: FACE_PLATE.a,
+      halfH: FACE_PLATE.b,
+      centreY: FACE_PLATE.y,
+      facing: 1 as const,
+      inset: 0.016,
+      rise: 0.012,
+      chamfer: 0.006,
+      chamferFrac: 0.045,
+      rings: 6,
+      solid: true,
+    }
+    expect(() => superellipsoidPatch({ ...base, rise: 0 })).toThrow(/positive rise/)
+    expect(() => superellipsoidPatch({ ...base, inset: 0 })).toThrow(/positive inset/)
+    expect(() => superellipsoidPatch({ ...base, chamfer: 0.012 })).toThrow(/fold back/)
+    expect(() => superellipsoidPatch({ ...base, chamferFrac: 0.6 })).toThrow(/chamfer fraction/)
+    expect(() => superellipsoidPatch({ ...base, rings: 0 })).toThrow(/at least 1 ring/)
+  })
+})
+
+describe('the copper cap on the back of the head', () => {
+  /*
+    The cap is a patch now, so "stands proud" is settled by the generator and proved
+    over every vertex in the block above. What is left here is the two neighbours it
+    has to stay away from, which are placement questions rather than shape questions.
+  */
+  const capOutline = () =>
+    superellipsePoints(HEAD_CAP.halfW, HEAD_CAP.halfH, HEAD_CAP.n, HEAD_CAP.segments)
+
+  it('stays inside the head`s own width, so the pods remain the widest thing', () => {
+    expect(HEAD_CAP.halfW).toBeLessThan(HEAD_SHELL.width / 2)
+  })
+
+  /*
+    The defect the deleted `Helmet` had and this must never repeat: it sealed the
+    antenna inside itself, so the one warm light on the character rendered into the
+    inside of a hat. The antenna's root is at head-local (0.200, 0.225, -0.040) and
+    the cap is on the -z side, so the test is whether the footprint reaches that
+    column at all.
+  */
+  it('cannot enclose the antenna', () => {
+    // The squircle's own height at the antenna's x, which is where the cap's rim
+    // sits above it. `REST.antennaBase.z` is -0.040 and the cap's rim at that x is
+    // the first thing that could get near it.
+    const t = Math.abs(REST.antennaBase.x) / HEAD_CAP.halfW
+    expect(t).toBeLessThan(1)
+    const capTopAtAntennaX =
+      HEAD_CAP.y + HEAD_CAP.halfH * Math.pow(1 - Math.pow(t, HEAD_CAP.n), 1 / HEAD_CAP.n)
+    expect(capTopAtAntennaX).toBeLessThan(REST.antennaBase.y)
+  })
+
+  /*
+    Does not reach the ear pods, tested against the cap's real footprint rather than
+    against a bounding extent. The bounding-box version of this question is the one
+    that is easy to ask and it gives the wrong answer in both directions: it would
+    also have passed `Helmet`, whose sphere overlapped nothing it was not supposed
+    to.
+
+    Both parts live on the same host, so a pod point and a cap point can only meet if
+    their footprints overlap in the head's own (x, y) projection AND the cap's z
+    reaches the pod's. The cap is entirely on the -z side and the pod's rim reaches
+    z -0.125, so the honest test is the x one: the cap's footprint must not reach the
+    pod's inner face.
+  */
+  it('narrows away from the pods before it gets near them', () => {
+    const podInnerX = Math.abs(REST.earPodL.x) - EAR_POD_SHAPE.halfThickness
+    let widest = 0
+    for (const p of capOutline()) widest = Math.max(widest, Math.abs(p.x))
+    expect(widest).toBeLessThan(podInnerX)
+  })
+
+  /*
+    And the same claim measured on the surface, which is the version that is actually
+    about the two shapes: every point on the pod's rim has to be further out in x
+    than the cap's own footprint ever reaches.
+  */
+  it('does not intersect the ear pods', () => {
+    const podZFront = REST.earPodL.z + EAR_POD_SHAPE.radius
+    let capZNearest = -Infinity
+    for (const p of capOutline()) {
+      const z = superellipsoidZ(p.x, HEAD_CAP.y + p.y, superellipsoidOffset(HEAD_SHELL, HEAD_CAP.rise))
+      capZNearest = Math.max(capZNearest, -z)
+    }
+    // The cap's frontmost surface is still well behind the pod's frontmost rim, so
+    // even where their x ranges are closest they are separated in z.
+    expect(capZNearest).toBeLessThan(podZFront)
   })
 })
 
@@ -717,7 +1265,6 @@ describe('the circular port on the back of the pack', () => {
 
 describe('the ear pods stand proud of the head', () => {
   const socketX = Math.abs(REST.earPodL.x)
-  const headSide = HEAD_SHELL.width / 2
   const outer = socketX + EAR_POD_SHAPE.halfThickness
 
   it('reaches the outer extent the width ladder is built on', () => {
@@ -729,34 +1276,89 @@ describe('the ear pods stand proud of the head', () => {
   })
 
   /*
-    The regression this file exists to prevent. At the half-thickness this
-    shipped with, `outer` was 0.420 against a head side of 0.360, so the pod
-    stood 0.06 proud, was seen nearly end on, and read as a crescent-shaped hole
-    in the cheek rather than as a pod. Anything under about 0.10 puts it back
-    there.
-  */
-  it('protrudes far enough to read as a pod rather than as a hole in the cheek', () => {
-    expect(outer - headSide).toBeGreaterThan(0.1)
-  })
+    The pod's burial, measured against the curved cheek rather than against a flat
+    box side.
 
-  it('stays buried in the shell, so it cannot float free of the head', () => {
-    const inner = socketX - EAR_POD_SHAPE.halfThickness
-    expect(inner).toBeLessThan(headSide)
-    expect(headSide - inner).toBeGreaterThan(0.05)
+    On the `RoundedBox` head this was one subtraction, because the pod sat on a face
+    at a constant x 0.360. The helmet now curves away under the pod's rim, so the
+    burial varies around it and the question becomes whether the SHALLOWEST point on
+    the rim is still inside the shell. If any of it is not, the pod has a crescent
+    gap between its rim and the cheek, which is the exact artefact both round 1
+    reviewers read as "there is a hole in the character's face".
+
+    Measured: 0.0727 to 0.0809 all the way round, a tighter spread than the flat box
+    gave, because the pod's footprint is small enough that the cheek is locally
+    almost flat over it.
+
+    ## The condition is against the FILLET, not against zero
+
+    This is the part the burial number alone gets wrong, and the fillet growing from
+    0.030 to 0.055 is what exposed it. The pod is only at its full 0.105 radius over
+    `|x - socket| <= halfThickness - fillet`, so its widest section starts at
+    `innerFace + fillet` and not at `innerFace`. For the rim to cross the cheek
+    cleanly all the way round rather than emerging and re-entering, the head's surface
+    has to be beyond that: 0.055 against a shallowest 0.0727, so the pod's widest
+    circle begins 0.0177 inside the shell. Below that the pod's rounded shoulder,
+    rather than its rim, would be what meets the head, and it would leave a crescent
+    of the shoulder standing free - which is the same artefact by a third route.
+  */
+  it('buries its whole rim in the shell, so it cannot float free of the head', () => {
+    const innerFace = socketX - EAR_POD_SHAPE.halfThickness
+    let shallowest = Infinity
+    for (let i = 0; i < 256; i++) {
+      const th = (i / 256) * Math.PI * 2
+      const y = REST.earPodL.y + EAR_POD_SHAPE.radius * Math.sin(th)
+      const z = REST.earPodL.z + EAR_POD_SHAPE.radius * Math.cos(th)
+      const surfaceX = superellipsoidX(y, z, HEAD_SHELL)
+      expect(Number.isFinite(surfaceX)).toBe(true)
+      shallowest = Math.min(shallowest, surfaceX - innerFace)
+    }
+    expect(shallowest).toBeCloseTo(0.0727, 3)
+    // The full-radius section has to START inside the shell, everywhere round the rim.
+    expect(shallowest).toBeGreaterThan(EAR_POD_SHAPE.fillet)
+    // And the pod must not be so deep that its far face pokes out the other cheek.
+    expect(shallowest).toBeLessThan(2 * superellipsoidX(0, REST.earPodL.z, HEAD_SHELL))
   })
 
   /*
-    A RoundedBox is only flat away from its corner rounds. A pod straddling one
-    would leave a crescent gap between its own rim and the shell, which is the
-    same artefact by a different route.
+    The regression this file exists to prevent. At the half-thickness the pods
+    shipped with, `outer` was 0.420 against a cheek at 0.360, so five sixths of the
+    pod was buried and the only thing on screen was a 0.06 m crescent of its own rim,
+    seen almost end on. Anything under about 0.10 of protrusion puts it back there.
   */
-  it('lands entirely on the flat part of the shell side', () => {
-    expect(Math.abs(REST.earPodL.y) + EAR_POD_SHAPE.radius).toBeLessThanOrEqual(
-      HEAD_SHELL.height / 2 - HEAD_SHELL.radius,
-    )
-    expect(Math.abs(REST.earPodL.z) + EAR_POD_SHAPE.radius).toBeLessThanOrEqual(
-      HEAD_SHELL.depth / 2 - HEAD_SHELL.radius,
-    )
+  it('protrudes far enough to read as a pod rather than as a hole in the cheek', () => {
+    const cheekX = superellipsoidX(REST.earPodL.y, REST.earPodL.z, HEAD_SHELL)
+    expect(outer - cheekX).toBeGreaterThan(0.1)
+    expect(outer - cheekX).toBeCloseTo(0.1251, 3)
+  })
+
+  /*
+    Why the pods still will not break the head's outline in profile, which is the
+    honest limit on the user's third note.
+
+    Seen from the side the pod's end cap projects to a disc of radius 0.105 about
+    head-local (y 0, z -0.02), and the head's profile silhouette is 0.54 by 0.62. The
+    disc is inside it by 0.165 in y and 0.185 in z, so no shading and no material can
+    make the ears part of the outline from that angle. Recorded as a test rather than
+    as a comment because it is the reason the fix is a winding fix plus a fillet
+    rather than a placement change, and because the next person to read the note will
+    reach for the placement.
+  */
+  it('cannot break the head`s profile outline, which is why the fix is shading', () => {
+    expect(EAR_POD_SHAPE.radius).toBeLessThan(HEAD_SHELL.b)
+    expect(Math.abs(REST.earPodL.y) + EAR_POD_SHAPE.radius).toBeLessThan(HEAD_SHELL.b - 0.1)
+    expect(Math.abs(REST.earPodL.z) + EAR_POD_SHAPE.radius).toBeLessThan(HEAD_SHELL.c - 0.1)
+  })
+
+  /*
+    The fillet is the pod's only bright line in profile, since its outer face is a
+    single normal pointing at the camera and goes dark whenever the key does not. At
+    0.030 on a 0.21 object it was barely over a pixel at playing distance.
+  */
+  it('carries a fillet big enough to read at playing distance', () => {
+    expect(EAR_POD_SHAPE.fillet).toBeGreaterThan(0.04)
+    expect(EAR_POD_SHAPE.fillet).toBeLessThan(EAR_POD_SHAPE.radius)
+    expect(EAR_POD_SHAPE.fillet).toBeLessThan(EAR_POD_SHAPE.halfThickness)
   })
 
   it('is mirrored, which is half of what the critique said it was missing', () => {
@@ -766,22 +1368,15 @@ describe('the ear pods stand proud of the head', () => {
   })
 
   /*
-    Builds the pod exactly as `robotParts.tsx` does and checks it is a solid of
-    the right size. A generator that returns an empty buffer is this codebase's
-    signature failure: the mesh vanishes, the frame looks clean and the counters
-    stay healthy.
+    Builds the pod exactly as `robotParts.tsx` does and checks it is a solid of the
+    right size. A generator that returns an empty buffer is this codebase's signature
+    failure: the mesh vanishes, the frame looks clean and the counters stay healthy.
+
+    The winding, which every one of these extent checks was blind to, is asserted in
+    "the lathed parts are wound outward".
   */
   it('lathes into a non-empty solid of the right extent', () => {
-    const g = latheProfile({
-      points: roundedDiscProfile(
-        EAR_POD_SHAPE.radius,
-        EAR_POD_SHAPE.halfThickness,
-        EAR_POD_SHAPE.fillet,
-        EAR_POD_SHAPE.filletSteps,
-      ),
-      radialSegments: EAR_POD_SHAPE.radialSegments,
-    })
-    g.rotateZ(Math.PI / 2)
+    const g = earPodGeometry()
     g.computeBoundingBox()
     const pos = g.getAttribute('position')
     expect(pos.count).toBeGreaterThan(100)
@@ -791,6 +1386,162 @@ describe('the ear pods stand proud of the head', () => {
     expect(box.max.x).toBeCloseTo(EAR_POD_SHAPE.halfThickness, 6)
     expect(box.max.y).toBeCloseTo(EAR_POD_SHAPE.radius, 6)
     expect(box.max.z).toBeCloseTo(EAR_POD_SHAPE.radius, 6)
+  })
+})
+
+/*
+  The antenna's ROOT, which nobody had ever measured.
+
+  Every measurement anyone took of the antenna was about the deleted `Helmet`
+  swallowing its BULB - `HEAD_CAP`'s comment carries three paragraphs of it, and a
+  test above asserts the cap cannot repeat it. Nobody asked whether the other end
+  reached the head, and it did not: `REST.antennaBase.y` was 0.310 against a
+  `RoundedBox` crown at 0.270, so the character's one asymmetric feature had 0.040 m
+  of clear air under it.
+*/
+describe('the antenna is attached to the head', () => {
+  /*
+    `AntennaLower` puts a 0.09 m cylinder at the node's `+0.045`, so the cylinder's
+    bottom face is exactly at the node's own y. Anything at or above the crown is a
+    floating antenna.
+  */
+  const ANTENNA_RADIUS = 0.015
+
+  it('sinks the lower segment`s base into the shell', () => {
+    const crown = superellipsoidY(REST.antennaBase.x, REST.antennaBase.z, HEAD_SHELL)
+    expect(Number.isFinite(crown)).toBe(true)
+    expect(REST.antennaBase.y).toBeLessThan(crown)
+    expect(crown - REST.antennaBase.y).toBeCloseTo(0.0218, 3)
+  })
+
+  /*
+    And it stays attached through the whip, which is what decides how deep the burial
+    has to be. This node ROTATES: `robotPose.ts` clamps the antenna spring so it
+    whips to nearly 30 degrees, and the base disc tilts with it, dropping its lowest
+    rim point by `radius * sin(theta)`.
+
+    Asserted against the full radius rather than against `sin(30 deg)`, so the margin
+    holds for any angle the springs could ever be retuned to reach. That is the
+    difference between a test that pins today's tuning and one that pins the
+    relationship.
+  */
+  it('stays attached at any whip angle the springs can reach', () => {
+    const crown = superellipsoidY(REST.antennaBase.x, REST.antennaBase.z, HEAD_SHELL)
+    expect(crown - REST.antennaBase.y).toBeGreaterThan(ANTENNA_RADIUS)
+  })
+
+  /*
+    The emissive bulb still has to be in open air, which is the `Helmet` defect from
+    the other direction. Its top is at the base plus 0.085 for `antennaMid`, plus
+    0.075 for the bulb's own offset, plus its 0.05 radius.
+  */
+  it('keeps the bulb clear of the shell and of the copper cap', () => {
+    const bulbTop = REST.antennaBase.y + REST.antennaMid.y + 0.075 + 0.05
+    expect(bulbTop).toBeGreaterThan(HEAD_SHELL.b)
+    expect(superellipsoidField(REST.antennaBase.x, bulbTop, REST.antennaBase.z, HEAD_SHELL))
+      .toBeGreaterThan(1)
+    // World height, which `robotPose.ts` quotes as "reaches 1.53 m".
+    expect(1.09 + bulbTop).toBeCloseTo(1.525, 6)
+  })
+})
+
+/*
+  The hips.
+
+  The user's note is "his hips look odd and bubbly", and the brief for this pass
+  suspected `RoundedBoxGeometry` was silently clamping the corner radius. It was not.
+  The clamp is half the smallest dimension, 0.28 / 2 = 0.14, and the radius was 0.13,
+  so it was honoured exactly - which is the problem rather than the reprieve.
+*/
+describe('the diaper is a cushion and not a pillow', () => {
+  const diaper = () => taperedSuperellipsoid(DIAPER)
+
+  /*
+    The measurement that says "bubbly". 0.13 against a half-height of 0.14 leaves
+    0.020 of flat top, 7.1% of the height, so the box was fully rounded in y and its
+    front outline was a 0.62 by 0.28 stadium. Kept as a test so the number is on
+    record rather than in a comment: it is the whole diagnosis.
+  */
+  it('records the flat fraction the box it replaces had', () => {
+    const boxHalfHeight = 0.14
+    const boxRadius = 0.13
+    expect(boxRadius).toBeLessThanOrEqual(boxHalfHeight)
+    expect((2 * (boxHalfHeight - boxRadius)) / (2 * boxHalfHeight)).toBeCloseTo(0.0714, 3)
+  })
+
+  /*
+    The width and depth are unchanged, and that matters more than it looks:
+    `PROPORTIONS.torsoWidthMax` is 0.62, the head-over-torso inversion is the thing
+    that makes this character read as an infant rather than as a short adult, and the
+    silhouette test in `05-character-vfx.md` compares scanlines against it.
+
+    Measured on the built geometry, because `a` is 0.2871 rather than 0.31: the taper
+    multiplies every latitude including the equator, so the solid's widest half-width
+    is `a * max(taper * rim)`, which is a numeric maximum and not a closed form. A
+    comment claiming the factor would be exactly the kind of thing this file keeps
+    finding wrong.
+  */
+  it('keeps the hip width and depth the proportion ladder is built on', () => {
+    const box = diaper().boundingBox!
+    expect(box.max.x - box.min.x).toBeCloseTo(PROPORTIONS.torsoWidthMax, 3)
+    expect(box.max.z - box.min.z).toBeCloseTo(0.52, 3)
+    expect(box.max.y - box.min.y).toBeCloseTo(0.28, 3)
+  })
+
+  /*
+    The form change, which is the answer to "bubbly": widest at the hip line and
+    tucking under toward the legs, so the legs emerge from a tuck rather than from the
+    widest band. The box was widest at its exact middle and symmetric about it.
+  */
+  it('is widest above its own middle and tucks under below it', () => {
+    /*
+      Measured per latitude RING rather than by bucketing on a height, because
+      `taperedSuperellipsoid` samples v uniformly and `e1` 0.50 then clusters the rows
+      toward the poles: there is no row within 6 mm of y 0.060 to bucket. The rings
+      are what the generator actually emits, so they are what gets measured.
+    */
+    const pos = diaper().getAttribute('position')
+    const rings = new Map<string, number>()
+    for (let i = 0; i < pos.count; i++) {
+      const key = pos.getY(i).toFixed(6)
+      rings.set(key, Math.max(rings.get(key) ?? 0, Math.abs(pos.getX(i))))
+    }
+    const rows = [...rings.entries()]
+      .map(([y, w]) => ({ y: Number(y), w }))
+      .sort((p, q) => p.y - q.y)
+
+    const widest = rows.reduce((m, r) => (r.w > m.w ? r : m), rows[0])
+    // The box was widest at its exact middle and symmetric about it. This is widest
+    // at the hip line, which is where the torso meets it.
+    expect(widest.y).toBeGreaterThan(0.03)
+    expect(widest.y).toBeLessThan(0.1)
+
+    const at = (y: number) => rows.reduce((m, r) => (Math.abs(r.y - y) < Math.abs(m.y - y) ? r : m), rows[0])
+    expect(at(0).w).toBeLessThan(widest.w)
+    // The box held 80.4% of its width at y -0.12, so this is a real tuck and not a
+    // rounding difference.
+    expect(at(-0.12).w / widest.w).toBeLessThan(0.804)
+  })
+
+  /*
+    The shin has to emerge from the garment rather than from beside it. Its top is at
+    hips-local y -0.135 spanning |x| 0.105 to 0.275, and the diaper has to still be
+    wide enough there to overlap it. `DIAPER.z` is not in this arithmetic because both
+    parts are near z 0 at their closest and the overlap that matters is lateral.
+  */
+  it('still meets the top of the shin, so no leg floats free', () => {
+    const pos = diaper().getAttribute('position')
+    let w = 0
+    for (let i = 0; i < pos.count; i++) {
+      if (pos.getY(i) > -0.13) continue
+      w = Math.max(w, Math.abs(pos.getX(i)))
+    }
+    const shinInnerX = Math.abs(REST.legL.x) - 0.085
+    expect(w).toBeGreaterThan(shinInnerX)
+  })
+
+  it('is a closed solid wound outward', () => {
+    expect(signedVolume(diaper())).toBeGreaterThan(0)
   })
 })
 

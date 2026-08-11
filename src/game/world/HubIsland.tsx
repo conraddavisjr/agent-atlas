@@ -11,8 +11,8 @@ import {
 import { band, palette } from '@/art/palette'
 import { GLOW, emissive, mattePlastic, plastic } from '@/art/materials'
 import {
+  applyLightmapUV,
   boxProjectUV,
-  kerb,
   mergeProp,
   nodeCore,
   pad,
@@ -21,11 +21,20 @@ import {
   puck,
   shard,
   slab,
+  packLightmapAtlas,
+  propPartVertexCounts,
   trace,
   tubeFromCurve,
+  type LightmapMesh,
   type PropPart,
 } from '@/art/geometry'
-import { DECAL_KINDS, createDecalMaps, createPanelFillMap } from '@/art/decalTextures'
+import { DECAL_KINDS, createDecalMaps, createPanelFillMap, panelFillSize } from '@/art/decalTextures'
+import {
+  HUB_LIGHTMAP_INTENSITY,
+  assertLightmapBound,
+  lightmapStaleness,
+  useHubLightmap,
+} from '@/art/lightmap'
 import { mulberry32, type Exclusion } from '@/art/placement'
 import { useQuality } from '@/art/useQuality'
 import { Grass } from '@/art/Grass'
@@ -48,9 +57,24 @@ import { PORTAL_JAMB, Portal } from './Portal'
 import { LessonTotems, TOTEM, totemPlinth, type TotemPlacement } from './LessonTotem'
 import { Terrain, PLATEAU_RADIUS } from './Terrain'
 import {
+  BRIDGE,
+  CORE_PUCKS,
+  DECKS,
+  EAST_PUCKS,
+  HUB_LIGHTMAP_ATLAS,
+  KERBS,
+  KERB_DEPTH,
+  KERB_HEIGHT,
+  SPURS,
+  SPUR_RADIUS,
+  STEP,
+  TOTEM_SPURS,
   TRACE,
+  WEST_PILE,
   arcsWithBothEnds,
   assertDrawable,
+  hubDeckParts,
+  hubTrimParts,
   monolithArc,
   orthoTrace,
   pathLength,
@@ -204,143 +228,6 @@ const NODE_CORE = '#c9bfff'
 // ---------------------------------------------------------------------------
 
 /**
- * The vertical grid everything walkable sits on, and why it is 0.40 rather than
- * 0.45.
- *
- * `BODY.autostepHeight` is 0.50, so a 0.40 riser is climbed automatically with
- * 0.10 of margin, which is 20% of the threshold. The main path from the lawn to
- * the portal is seven of these steps and contains no jump and no ramp,
- * deliberately: the most unambiguous route is the one the player walks up
- * without ever being asked to time anything. Expression lives in the optional
- * east jump route and the west toy pile.
- *
- * Descent is covered too. `BODY.snapToGroundDistance` is 0.50, so walking DOWN
- * a 0.40 step is snapped rather than becoming a fall, and the player never gets
- * a spurious airborne frame coming off the Core.
- */
-const STEP = 0.4
-
-/** The Core: three stacked pucks, walked over on the way to the portal. */
-const CORE_PUCKS = [
-  { radius: 6, base: 0 },
-  { radius: 4, base: STEP },
-  { radius: 2.2, base: 2 * STEP },
-] as const
-
-/**
- * The four spur lobes, centred at radius 7.071 on the diagonals.
- *
- * Their inner edge sits at radius 5.571 against Puck A's 6.00, so they fuse
- * into it by 0.43 m and the whole thing reads as one four-lobed dais rather
- * than as five separate objects.
- */
-const SPURS = [
-  { id: 'NE', x: 5, z: -5 },
-  { id: 'NW', x: -5, z: -5 },
-  { id: 'SW', x: -5, z: 5 },
-  { id: 'SE', x: 5, z: 5 },
-] as const
-
-const SPUR_RADIUS = 1.5
-
-/**
- * The bridge, whose south edge touches Puck C at z = -2.20 and whose north edge
- * touches T1 at z = -6.60, which is what makes both risers a clean 0.40.
- */
-const BRIDGE = { x: 0, z: -4.4, radius: 2.2, height: 4 * STEP }
-
-/**
- * The three portal decks.
- *
- * Solid from the lawn up rather than floating slabs, which is why each
- * collider's half-height is half the FULL height and its centre is not its top.
- * T3's corners sit at radius 15.52 against a plateau of 16, the tightest fit in
- * the layout and deliberate: the portal deck is meant to feel like it is right
- * at the edge of the world.
- */
-const DECKS = [
-  { id: 'T1', x: 0, z: -8.6, width: 12, depth: 4, height: 5 * STEP },
-  { id: 'T2', x: 0, z: -11.5, width: 8, depth: 1.8, height: 6 * STEP },
-  { id: 'T3', x: 0, z: -13.7, width: 8, depth: 2.6, height: 7 * STEP },
-] as const
-
-/**
- * The optional east jump route: lawn to T1, skipping the Core entirely.
- *
- * Every gap is under 60% of what the jump arc allows for its rise, which leaves
- * room for a mistimed takeoff. The route gets easier as it goes, which is the
- * right shape: the first step advertises that this is a jump route, and the
- * last is forgiving so a player who committed is not punished at the end.
- */
-const EAST_PUCKS = [
-  { x: 9, z: -2.6, radius: 1.1, height: 2 * STEP, colliderRadius: 1 },
-  { x: 9.6, z: -6.4, radius: 1.1, height: 4 * STEP, colliderRadius: 1 },
-  { x: 8.4, z: -10, radius: 1.1, height: 5 * STEP, colliderRadius: 1 },
-] as const
-
-/**
- * The west toy pile, where the jump, the coyote time and the autostep get
- * tested without leaving the hub.
- *
- * The yaws are small and deliberately not multiples of each other. A stack of
- * blocks at the same angle reads as a staircase; a stack at jostled angles
- * reads as a pile someone dropped. Every level of the world, 0.40 through 2.00,
- * appears in one five-metre clump, and the gaps are all far inside budget. That
- * is correct: it is a playground, not a challenge.
- */
-const WEST_PILE = [
-  { kind: 'slab', x: -9.6, z: 2.4, width: 3.2, depth: 3.2, height: 2 * STEP, yaw: 0.122, radius: 0, colliderRadius: 0 },
-  { kind: 'puck', x: -7.6, z: 1.2, width: 0, depth: 0, height: 3 * STEP, yaw: 0, radius: 1.3, colliderRadius: 1.2 },
-  { kind: 'slab', x: -10.4, z: 0.4, width: 2.4, depth: 2.4, height: 4 * STEP, yaw: -0.192, radius: 0, colliderRadius: 0 },
-  { kind: 'puck', x: -11.6, z: 2.6, width: 0, depth: 0, height: 5 * STEP, yaw: 0, radius: 0.9, colliderRadius: 0.8 },
-  { kind: 'slab', x: -7.8, z: 3.8, width: 2, depth: 2, height: STEP, yaw: 0.332, radius: 0, colliderRadius: 0 },
-] as const
-
-const KERB_HEIGHT = 0.6
-const KERB_DEPTH = 0.36
-/** Kerbs are inset half their depth so the outer face is flush with the deck below. */
-const KERB_INSET = KERB_DEPTH / 2
-
-/**
- * Every exposed deck edge that is not part of the route.
- *
- * A kerb is band 2 on a band 1 deck, so it draws the platform's outline as a
- * dark line, and that line is what makes a raised deck read as raised in a
- * greyscale frame where a value change across a flat top does not.
- *
- * Eleven runs, not the ten the spec's summary claims; its own table lists six
- * on T1, two on T2 and three on T3.
- */
-const KERBS = [
-  // T1. Open at the bridge mouth in the south and up to T2 in the north.
-  { x: -4.1, z: -6.6 + KERB_INSET, length: 3.8, yaw: 0, top: 5 * STEP },
-  { x: 4.1, z: -6.6 + KERB_INSET, length: 3.8, yaw: 0, top: 5 * STEP },
-  /*
-    These two are T1's NORTH edge, at z = -10.60, and the inset has to run in +z
-    to reach the deck. They read `- KERB_INSET` until this pass, which put them at
-    z = -10.78: a 0.36 m kerb spanning -10.96 to -10.60, touching T1 along one
-    line and hanging entirely off the deck into open air beyond it. Every other
-    entry in this table insets toward the deck - `6 - INSET`, `-6 + INSET`,
-    `4 - INSET`, `-4 + INSET`, `-15 + INSET` - so the sign was the only thing
-    wrong and the fix is consistent with all nine of them.
-
-    Their colliders come from this same table, so nothing was ever functionally
-    broken; there was simply an invisible wall in the same wrong place as the mesh.
-  */
-  { x: -5, z: -10.6 + KERB_INSET, length: 2, yaw: 0, top: 5 * STEP },
-  { x: 5, z: -10.6 + KERB_INSET, length: 2, yaw: 0, top: 5 * STEP },
-  { x: 6 - KERB_INSET, z: -8.6, length: 4, yaw: Math.PI / 2, top: 5 * STEP },
-  { x: -6 + KERB_INSET, z: -8.6, length: 4, yaw: Math.PI / 2, top: 5 * STEP },
-  // T2. Open south from T1 and north to T3.
-  { x: 4 - KERB_INSET, z: -11.5, length: 1.8, yaw: Math.PI / 2, top: 6 * STEP },
-  { x: -4 + KERB_INSET, z: -11.5, length: 1.8, yaw: Math.PI / 2, top: 6 * STEP },
-  // T3. Open south from T2 only.
-  { x: 4 - KERB_INSET, z: -13.7, length: 2.6, yaw: Math.PI / 2, top: 7 * STEP },
-  { x: -4 + KERB_INSET, z: -13.7, length: 2.6, yaw: Math.PI / 2, top: 7 * STEP },
-  { x: 0, z: -15 + KERB_INSET, length: 8, yaw: 0, top: 7 * STEP },
-] as const
-
-/**
  * The perimeter pylon ring, which is the near frame.
  *
  * Its job is horizon rather than decoration, and it is also the mitigation for
@@ -483,25 +370,6 @@ const BACKDROP_FAR = '#bccfe0'
  * than any single pylon.
  */
 const BACKDROP_SLABS = 13
-
-/**
- * Where each hub lesson's totem stands, keyed by lesson id.
- *
- * The reading order runs anticlockwise from the spawn, so the two you meet
- * first sit on the near side of the Core and the two you meet last face the
- * portal.
- *
- * Held here rather than in `src/state/lessons.ts`, where the spec asks for it,
- * because that file is content and belongs to another stream. A totem falls
- * back to its lesson's own position if it is not listed, so adding a fifth
- * basics lesson degrades to the old behaviour rather than to a crash.
- */
-const TOTEM_SPURS: Record<string, [number, number, number]> = {
-  'what-is-ai': [-5, STEP, 5],
-  'what-is-an-llm': [5, STEP, 5],
-  'popular-models': [-5, STEP, -5],
-  'what-is-a-prompt': [5, STEP, -5],
-}
 
 /**
  * Where the portal stands, as a constant rather than as a literal in the JSX.
@@ -862,10 +730,25 @@ export function HubIsland() {
    * lands the darkest panel at 0.627, with the whole distribution inside the
    * 0.56-0.74 gameplay band and off the ceiling it had been resting on.
    */
-  const deckAlbedo = useMemo(
-    () => (quality.surfaceMapSize ? createPanelFillMap({ size: quality.surfaceMapSize }) : null),
-    [quality.surfaceMapSize],
-  )
+  const deckAlbedo = useMemo(() => {
+    /*
+      The panel map's resolution is decoupled from `surfaceMapSize`, at 2048 on
+      high, and that decoupling is the whole reason the marks are visible at all.
+
+      MEASURED: the deck covers about 470 px for 12 m in `hub-establishing`, so one
+      screen pixel is 26 mm of deck - while a 1024 map spread over the island's
+      40 m span has 39 mm texels. **The texture was the limit rather than the
+      display**, and every mark in the vocabulary was being authored below what the
+      player can resolve. That is the same Nyquist failure as the 2.5 mm panel
+      groove, one level up: it is not enough for a mark to be printed rather than
+      cut, it also has to be bigger than a texel and bigger than a pixel.
+
+      16 MB of VRAM and almost no CPU, because unlike `createDecalMaps` this
+      function never calls `getImageData`.
+    */
+    const size = panelFillSize(quality.surfaceMapSize)
+    return size ? createPanelFillMap({ size }) : null
+  }, [quality.surfaceMapSize])
 
   /**
    * Every walkable piece in the level, merged into one geometry.
@@ -882,62 +765,72 @@ export function HubIsland() {
    * The two band-1 values ride on a vertex colour rather than on two materials,
    * which is what keeps it to one draw call. See `paintByFacing`.
    */
-  const deckBatch = useMemo(() => {
-    const parts: PropPart[] = []
-
-    for (const { radius, base } of CORE_PUCKS) {
-      parts.push({ geometry: puck(radius, STEP), position: [0, base, 0] })
-    }
-    for (const spur of SPURS) {
-      parts.push({ geometry: puck(SPUR_RADIUS, STEP), position: [spur.x, 0, spur.z] })
-    }
-    parts.push({ geometry: puck(BRIDGE.radius, BRIDGE.height), position: [BRIDGE.x, 0, BRIDGE.z] })
-
-    for (const deck of DECKS) {
-      parts.push({ geometry: slab(deck.width, deck.height, deck.depth), position: [deck.x, 0, deck.z] })
-    }
-    for (const east of EAST_PUCKS) {
-      parts.push({ geometry: puck(east.radius, east.height), position: [east.x, 0, east.z] })
-    }
-    for (const piece of WEST_PILE) {
-      parts.push(
-        piece.kind === 'slab'
-          ? {
-              geometry: slab(piece.width, piece.height, piece.depth),
-              position: [piece.x, 0, piece.z],
-              rotation: [0, piece.yaw, 0],
-            }
-          : { geometry: puck(piece.radius, piece.height), position: [piece.x, 0, piece.z] },
-      )
-    }
-
-    // The totem plinths, folded in from LessonTotem rather than drawn there.
+  const walkable = useMemo(() => {
+    /*
+      Both batches are built in ONE memo because they share one lightmap atlas, and
+      `packLightmapAtlas` has to see them together to place their charts. Splitting
+      them back into two memos would mean two atlases, two textures and two
+      manifests, for no gain: a chart's placement does not depend on which mesh it
+      came from, so packing them together only improves occupancy.
+    */
     const plinth = totemPlinth()
-    for (const position of Object.values(TOTEM_SPURS)) parts.push({ geometry: plinth, position })
+    const deckParts = hubDeckParts(plinth)
+    const trimParts = hubTrimParts()
 
-    const merged = mergeProp(parts)
+    const deck = mergeProp(deckParts)
+    const trim = mergeProp(trimParts)
     plinth.dispose()
-    boxProjectUV(merged, DECAL_KINDS.deck.metresPerTile)
+
+    /*
+      UV set 1: the lightmap atlas. A unique, non-overlapping parameterisation, which
+      is the exact opposite of what `boxProjectUV` produces below and why this needs a
+      second set rather than a second scale on the first.
+
+      **This runs the SAME functions the offline bake ran**, on parts built by the
+      same `hubDeckParts`/`hubTrimParts`. That is the whole integrity argument: there
+      is no second description of the layout for the two to drift apart on, and
+      `lightmapStaleness` hashes the result so that a layout change that outdates the
+      PNG is a console error rather than the old layout's shadows in the new layout's
+      places.
+    */
+    const meshes: LightmapMesh[] = [
+      { geometry: deck, partVertexCounts: propPartVertexCounts(deckParts) },
+      { geometry: trim, partVertexCounts: propPartVertexCounts(trimParts) },
+    ]
+    const atlas = packLightmapAtlas(meshes, HUB_LIGHTMAP_ATLAS)
+    applyLightmapUV(meshes, atlas)
+
+    // UV set 0: the tiling, world-scale projection every detail map depends on.
+    boxProjectUV(deck, DECAL_KINDS.deck.metresPerTile)
+    boxProjectUV(trim, DECAL_KINDS.trim.metresPerTile)
 
     /*
       The changeover sits at a normal Y of 0.55, which puts it on the fillet
       rather than on either flat face, so the dark side value climbs into the
       light top value across the bevel instead of switching along a hard line.
     */
-    return paintByFacing(merged, { up: BAND.deckTop, side: BAND.deckSide })
+    paintByFacing(deck, { up: BAND.deckTop, side: BAND.deckSide })
+
+    return { deck, trim, atlas }
   }, [])
 
-  /** Every kerb, merged. */
-  const trimBatch = useMemo(() => {
-    const merged = mergeProp(
-      KERBS.map((run) => ({
-        geometry: kerb(run.length, KERB_HEIGHT, KERB_DEPTH),
-        position: [run.x, run.top, run.z] as [number, number, number],
-        rotation: [0, run.yaw, 0] as [number, number, number],
-      })),
-    )
-    return boxProjectUV(merged, DECAL_KINDS.trim.metresPerTile)
-  }, [])
+  /**
+   * The baked occlusion map, and the check that it still describes this layout.
+   *
+   * The warning is an effect rather than an inline `console.error`, so it fires once
+   * per mount instead of once per render, and it is a warning rather than a throw
+   * because a stale lightmap still renders a playable world - it just renders the
+   * previous layout's shadows, which is precisely the failure that is invisible
+   * without being told.
+   */
+  const lightmap = useHubLightmap()
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const stale = lightmapStaleness(walkable.atlas)
+    if (stale) console.error(stale)
+    assertLightmapBound(walkable.deck, lightmap, 'the deck batch')
+    assertLightmapBound(walkable.trim, lightmap, 'the trim batch')
+  }, [walkable, lightmap])
 
   /**
    * Band 2 furniture: the Core's struts and collar, the pylon masts and caps,
@@ -1288,18 +1181,40 @@ export function HubIsland() {
       <Flowers radius={PLATEAU_RADIUS} exclusions={exclusions} />
       <Scatter radius={PLATEAU_RADIUS} exclusions={exclusions} />
 
-      {/* Every walkable surface: one geometry, one material, one draw. */}
-      <mesh geometry={deckBatch} castShadow receiveShadow>
+      {/*
+        Every walkable surface: one geometry, one material, one draw.
+
+        `castShadow` stays. The runtime shadow map is still what draws the SUN's
+        shadows here, deck onto deck and kerb onto deck, and the baked map does not
+        touch that term - see `src/art/lightmap.ts` for why `aoMap` arithmetically
+        cannot. Turning static casters off to let a bake own the sun was priced and
+        rejected: the statics also cast onto the lawn, which is `Terrain.tsx` and has
+        no lightmap, and onto the character, which nothing static can ever bake.
+      */}
+      <mesh geometry={walkable.deck} castShadow receiveShadow>
         <meshPhysicalMaterial
           {...mattePlastic('#ffffff', { vertexColors: true })}
           {...(deckMaps
             ? {
                 normalMap: deckMaps.normalMap,
                 roughnessMap: deckMaps.roughnessMap,
-                aoMap: deckMaps.aoMap,
                 roughness: deckMaps.roughness,
               }
             : {})}
+          {...(/*
+            The baked sky occlusion, on UV set 1, in the slot the generated ORM pack
+            used to hold.
+
+            **It replaces that pack's occlusion channel rather than joining it, and
+            it has to.** `createDecalMaps` returns `roughnessMap: orm, aoMap: orm` -
+            one `Texture` in two slots - and `channel` is a property of the texture,
+            so there is no way to sample the ORM on UV 0 and this on UV 1 in one
+            material. What is given up is measured and it is nothing: the note on
+            `deckAlbedo` above records that switching the generated maps on moved a
+            lit deck's p5-p95 from 0.0387 to 0.039. Roughness and metalness are
+            untouched, because they are the same texture still bound at `roughnessMap`.
+          */
+          lightmap ? { aoMap: lightmap, aoMapIntensity: HUB_LIGHTMAP_INTENSITY } : {})}
           {...(/*
             `map` multiplies the vertex colour, which is what carries the two band
             values here, so the panel map has to be centred on WHITE with its
@@ -1312,17 +1227,17 @@ export function HubIsland() {
 
       {/* Kerbs. Never tier gated: a kerb with a collider and no mesh is an
           invisible wall, which is strictly worse than no kerb at all. */}
-      <mesh geometry={trimBatch} castShadow receiveShadow>
+      <mesh geometry={walkable.trim} castShadow receiveShadow>
         <meshPhysicalMaterial
           {...mattePlastic(BAND.trim)}
           {...(trimMaps
             ? {
                 normalMap: trimMaps.normalMap,
                 roughnessMap: trimMaps.roughnessMap,
-                aoMap: trimMaps.aoMap,
                 roughness: trimMaps.roughness,
               }
             : {})}
+          {...(lightmap ? { aoMap: lightmap, aoMapIntensity: HUB_LIGHTMAP_INTENSITY } : {})}
         />
       </mesh>
 

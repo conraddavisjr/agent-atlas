@@ -821,6 +821,23 @@ The second is below the minimum and should go to 0.22 to 0.155.
 Without this rule the surface system produces objects that are simultaneously panel-lined, vented, ejector-marked, decalled and parted, and the result reads as a greeble rather than as a toy.
 **[DOC]** The brief's own composition rules point the same way: give playable and decorative geometry different shape languages, and use decoration to fill unused space rather than to fill every surface.
 
+#### The unit is a PANEL, not a face
+
+Amended, because "one mark type per face" was written for a 0.3 m moulded part where a face is one mould facet, and it does not survive being applied to a surface a hundred times that size.
+
+The hub's largest walkable face is about 113 square metres.
+Read literally, the rule grants that face exactly one mark, which is not restraint - it is round 1's finding that the decks carried "literally zero surface detail", restated as a rule.
+Three of the four generated kinds already broke it, carrying panel lines and ejector circles on the same face.
+
+So the unit is re-scoped one level down:
+
+> A face carries the seams that divide it into panels, plus **at most one mark inside each panel**.
+
+The intent is preserved exactly - nothing is simultaneously perforated and hazarded and traced - and only the granularity changes.
+A deck under this scoping carries two of the six: seams, and one fill per panel.
+
+**And a mark below the pixel is not restraint either, it is absence.** The reason this needed amending at all is that the first attempt at deck detail was invisible, and the dominant cause was scale rather than channel: at the game's framing one screen pixel is about 26 mm of deck, so the 2.5 mm groove this section specifies is a tenth of a pixel, erased by the mip chain whether it is printed or cut and at any contrast. The reference's inter-panel insets are visibly centimetres wide. A mark's width has to be specified against the resolution it will be seen at, and 2.5 mm is a specification for an object held in the hand.
+
 ---
 
 ## 8. Emissive policy

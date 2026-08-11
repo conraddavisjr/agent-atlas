@@ -160,6 +160,60 @@ export function lobeRatio(baseRoughness: number, clearcoatRoughness: number): nu
 }
 
 /**
+ * Whether a `clearcoatRoughnessMap` is safe on a preset, and WHY the deck's
+ * roughness map never did anything.
+ *
+ * ## The mechanism, which the null measurement was blamed on the wrong thing
+ *
+ * `decalTextures.ts` records that the deck's normal and ORM maps changed a deck
+ * patch's p5-p95 by 0.0003, and attributes it to the key's elevation - perturbing
+ * a normal that already points at the light barely moves `N.L`. That is true of
+ * the NORMAL half. It does not explain the ROUGHNESS half, and the roughness half
+ * has a separate and completely sufficient explanation that nothing had written
+ * down:
+ *
+ * **`roughnessMap` cannot touch the only tight lobe `mattePlastic` has.** The
+ * preset is `roughness: 0.75` with `clearcoat: 0.4` at `clearcoatRoughness: 0.26`.
+ * In three, `roughnessMap` multiplies `roughness` and nothing else -
+ * `clearcoatRoughness` has its OWN map slot and is untouched. So the deck's
+ * roughness ladder was modulating a lobe at roughness 0.75, which is
+ * near-Lambertian and has essentially no specular shape to break, while the one
+ * lobe on the surface narrow enough to produce a visible highlight sat at a
+ * uniform 0.26 across all 113 square metres. A `+/- 0.14` swing on the diffuse
+ * lobe of a matte surface under a soft key is not a subtle effect, it is
+ * arithmetically almost nothing.
+ *
+ * That matters because it predicts the brief's own falsification: a ROUGHNESS
+ * contrast between panels can read where a normal map cannot, but only if it is
+ * applied to the coat. The same ORM image already carries the right signal in its
+ * green channel - a dust trap is rougher in both lobes - and three reads
+ * `clearcoatRoughnessMap` from green too, so the experiment costs one extra
+ * material property and no new texture, no new canvas and no new sampler.
+ *
+ * ## What this function guards
+ *
+ * The map is a MULTIPLIER, so a green channel spanning 161 to 247 takes
+ * `clearcoatRoughness` from 0.26 down to 0.164 at the smoothest texel. Smoother
+ * means a TIGHTER highlight, which is the direction that risks both the two-lobe
+ * rule and bloom, so the floor is what has to be checked rather than the ceiling.
+ * Returns the resulting lobe ratio at the map's smoothest texel; the caller
+ * asserts it is at or above `TWO_LOBE_MIN_RATIO`.
+ *
+ * **NOT MEASURED.** This stream is forbidden from driving the browser, so the
+ * prediction above is arithmetic and not a frame. It is offered as a one-line A/B
+ * for the integrator with the numbers attached, and the binding is deliberately
+ * separate from the rest of the deck material in the diff so it can be reverted on
+ * its own.
+ */
+export function coatLobeRatioUnderMap(
+  baseRoughness: number,
+  clearcoatRoughness: number,
+  minGreenByte: number,
+): number {
+  return lobeRatio(baseRoughness, clearcoatRoughness * (minGreenByte / 255))
+}
+
+/**
  * Below this linear luminance, an emissive colour must not be normalised.
  *
  * See `emissive()` for what that means and why. The number is the art bible's,

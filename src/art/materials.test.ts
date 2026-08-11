@@ -12,6 +12,7 @@ import {
   bloomFarFieldWeight,
   bloomMipWeights,
   chrome,
+  coatLobeRatioUnderMap,
   crystal,
   emissive,
   emissiveIntensityFor,
@@ -34,6 +35,7 @@ import {
   vinyl,
   visorPlate,
 } from './materials'
+import { DECAL_KINDS, ROUGHNESS_MID_BYTE, roughnessByte } from './decalTextures'
 import { palette } from './palette'
 
 /*
@@ -515,5 +517,58 @@ describe('anodised', () => {
     expect(radiance).toBeCloseTo(1.088, 3)
     expect(radiance).toBeLessThan(BLOOM_THRESHOLD)
     expect(radiance).toBeLessThanOrEqual(1.6)
+  })
+})
+
+describe('the coat roughness map, and why the deck ladder read as nothing', () => {
+  /*
+    The brief for this pass asked this stream to attack its own central claim: if
+    printed value is the whole fix because relief cannot read, is that actually
+    true, or does the deck simply have no specular to modulate?
+
+    It has one, and the roughness map could never reach it. `mattePlastic` is
+    roughness 0.75 with a coat at clearcoatRoughness 0.26, and in three
+    `roughnessMap` multiplies `roughness` alone - `clearcoatRoughness` has its own
+    slot. So the ORM ladder was breaking up a lobe at roughness 0.75, which is
+    near-Lambertian, while the only lobe narrow enough to make a highlight stayed
+    uniform across all 113 square metres of deck. That is a second, sufficient
+    explanation for the 0.0003 null result, independent of the `N.L` argument the
+    file records, and it points at a fix the file had not considered.
+  */
+  const DECK = mattePlastic('#ffffff')
+
+  it('shows the base lobe the ladder modulated is too broad to make a highlight', () => {
+    // GGX lobe width goes as roughness squared, so the ratio between what the map
+    // could reach and what it could not is the square of the roughness ratio.
+    const base = DECK.roughness as number
+    const coat = DECK.clearcoatRoughness as number
+    expect(base).toBe(0.75)
+    expect(coat).toBe(0.26)
+    expect((base * base) / (coat * coat)).toBeGreaterThan(TWO_LOBE_MIN_RATIO)
+  })
+
+  it('keeps the two-lobe rule at the smoothest texel the deck ORM can write', () => {
+    /*
+      The guard on the proposed experiment. The map multiplies, and the deck's
+      green channel bottoms out at `roughnessByte(0.72 - 0.14, 0.72)` - so the
+      coat would reach 0.26 * that fraction. Smoother is a TIGHTER highlight, which
+      is the direction that threatens both the two-lobe rule and bloom, so the
+      floor is what has to be checked.
+    */
+    const floorByte = roughnessByte(0.72 - DECAL_KINDS.deck.swing, 0.72)
+    const ratio = coatLobeRatioUnderMap(0.75, 0.26, floorByte)
+    expect(floorByte).toBeLessThan(ROUGHNESS_MID_BYTE)
+    expect(ratio).toBeGreaterThanOrEqual(TWO_LOBE_MIN_RATIO)
+    // And it stays under the clearcoat ceiling question entirely, because this
+    // changes the coat's ROUGHNESS and never its weight.
+    expect(DECK.clearcoat as number).toBeLessThanOrEqual(MAX_CLEARCOAT)
+  })
+
+  it('refuses to pretend a mirror coat is safe', () => {
+    // The failure this guard exists for: a map that reaches byte 0 would take
+    // clearcoatRoughness to zero, which is the sub-pixel firefly the bible's
+    // section 8.4 floor exists to prevent. Infinity is not a pass.
+    expect(coatLobeRatioUnderMap(0.75, 0.26, 0)).toBe(Infinity)
+    expect(coatLobeRatioUnderMap(0.75, 0.26, 255)).toBeCloseTo(lobeRatio(0.75, 0.26), 6)
   })
 })

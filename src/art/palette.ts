@@ -5,8 +5,23 @@
  * material: saturated but never neon, a warm key against cool shadows, and
  * surfaces that read as injection-moulded plastic rather than real materials.
  *
- * Deliberately distinct from Astro: the robot is warm amber on off-white with a
- * horizontal cyan visor, not blue-and-white with two round eyes and a chrome dome.
+ * **This file used to say "deliberately distinct from Astro: the robot is warm
+ * amber on off-white with a horizontal cyan visor, not blue-and-white with two
+ * round eyes and a chrome dome." That goal has been abandoned, on purpose, and
+ * every clause of it is now false.**
+ *
+ * The owner asked for the reference to be copied outright - "quite literally
+ * attempt to steal Astro's look, completely one-to-one, even if it's blue, with
+ * the antenna override" - and chose that over two options that would have kept
+ * some distinctness. So the character is now blue-and-white with two round eyes,
+ * and the chrome dome is gone rather than kept: it was a cosmetic hemisphere that
+ * enclosed the antenna entirely and was the only thing in the game crossing the
+ * bloom threshold, which is the budget exactly inverted.
+ *
+ * What survives from the old direction is everything that was not about being
+ * unlike Astro: saturated but never neon, a warm key against cool shadows, and
+ * surfaces that read as injection-moulded plastic rather than as real materials.
+ * The antenna is ours and stays.
  */
 
 export const palette = {
@@ -16,7 +31,26 @@ export const palette = {
   /** The robot's single accent. Warm amber, chosen to sit clear of PlayStation blue. */
   accent: '#ff9a3c',
   accentDeep: '#e0651a',
-  /** Emissive cyan for the visor bar and every "this is powered" cue in the world. */
+  /**
+   * The helmet blue, promoted from a local const in `robotParts.tsx`.
+   *
+   * Display luma **0.406**, which puts it in the empty 0.38-0.56 gap between the
+   * midground and gameplay bands, and that placement is deliberate rather than
+   * lazy. A brighter blue near 0.49 would sit 0.01 from `accentDeep` and the
+   * helmet would merge with the copper rear cap in greyscale, which is the F6
+   * defect three critique rounds have been fighting. 0.406 buys 0.072 of value
+   * separation from the cap plus the maximum available hue distance.
+   *
+   * The gap is for SURFACES, and a character is not a surface. Section 8's bands
+   * are about telling walkable ground from unwalkable ground; the hero is
+   * explicitly the value anomaly the composition is built around.
+   *
+   * Known open note: rendered on the head under the current rig it reads more
+   * lavender than cobalt, which is the environment's cool wrap plus the shell
+   * preset's clearcoat and sheen desaturating it. The hex is not the problem.
+   */
+  helmet: '#2f6fc4',
+  /** Emissive cyan for the eye lenses and every "this is powered" cue in the world. */
   visor: '#4de2ff',
   visorDim: '#1b7f96',
 

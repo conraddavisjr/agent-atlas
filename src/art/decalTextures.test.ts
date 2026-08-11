@@ -2,18 +2,27 @@ import { describe, expect, it } from 'vitest'
 import {
   DECAL_KINDS,
   DECK_LIT_LUMA,
+  DECK_SIDE_LUMA,
   PANEL_FILL_CELL,
+  PANEL_FILL_SHARES,
   PANEL_FILL_SPAN,
+  PANEL_MARK_DROPS,
+  PANEL_TINT_TILTS,
   PANEL_TONE_DROPS,
   ROUGHNESS_MID,
   ROUGHNESS_MID_BYTE,
+  SEAM_CORE_DROP,
+  SEAM_LIP_DROP,
   albedoByte,
   albedoDrop,
+  chipTracePaths,
   decalMarks,
   normalFromHeight,
   ormFromHeight,
+  panelFillSize,
   panelLines,
   panelRegions,
+  panelTintBytes,
   panelToneBytes,
   roughnessBias,
   roughnessByte,
@@ -23,6 +32,9 @@ import {
   type DecalKind,
   type Mark,
 } from './decalTextures'
+import { linearToSrgb, srgbToLinear } from './materials'
+import { VALUE_BANDS } from './palette'
+import { mulberry32 } from './placement'
 
 /*
   Everything tested here is the half of the module that decides WHERE marks go
@@ -441,7 +453,25 @@ describe('the albedo ladder', () => {
     */
     expect(albedoByte(0)).toBe(255)
     expect(albedoDrop(255)).toBeCloseTo(0, 12)
-    expect(panelToneBytes()[0]).toBe(255)
+  })
+
+  it('leaves room ABOVE the lightest panel, which is what pays for the bevel lip', () => {
+    /*
+      The ladder used to start at 0 and byte 255, so nothing on the deck could be
+      brighter than a panel and the reference's bright bevel beside every seam was
+      inexpressible. Giving up the top rung is what buys it: every panel is at
+      least 0.016 down, so `SEAM_LIP_DROP` at 0.008 is brighter than all six.
+
+      This is the whole mechanism by which a map that can only multiply toward
+      black produces a two-sided mark, and it is worth an assertion because the
+      obvious "optimisation" of putting the lightest panel back at 255 silently
+      deletes every lip and every sub-panel border in the world.
+    */
+    expect(SEAM_LIP_DROP).toBeLessThan(Math.min(...PANEL_TONE_DROPS))
+    expect(albedoByte(SEAM_LIP_DROP)).toBeLessThan(255)
+    expect(albedoByte(SEAM_LIP_DROP)).toBeGreaterThan(Math.max(...panelToneBytes()))
+    // And the inner border of a sub-panel is brighter than its own panel.
+    expect(PANEL_MARK_DROPS.subPanelBorder).toBeLessThan(0)
   })
 
   it('cannot brighten, which is what the gameplay band has room for', () => {
@@ -462,23 +492,88 @@ describe('the albedo ladder', () => {
     }
   })
 
-  it('keeps the whole ladder inside the gameplay band on a real deck', () => {
+  it('keeps every printed value inside the gameplay band on a real lit deck', () => {
     /*
-      The acceptance row, stated as arithmetic. p5 to p95 of the printed deck is
-      the lightest tone to the darkest tone, since the fills are flat regions
-      rather than a distribution with tails.
+      The acceptance row, stated as arithmetic, and it now covers the WHOLE
+      printed range rather than the panel tones alone: the lip is the brightest
+      thing on the deck and the seam core the darkest, so those two are the
+      extremes and the panels sit between them.
+
+      Measured base, not authored: 0.6869 off
+      `.critique/astro/maps-on--hub-establishing.png` at 760,620,36,24.
     */
-    const bytes = panelToneBytes()
-    const values = bytes.map((byte) => DECK_LIT_LUMA - albedoDrop(byte))
+    const extremes = [SEAM_LIP_DROP, SEAM_CORE_DROP, ...PANEL_TONE_DROPS]
+    const values = extremes.map((drop) => DECK_LIT_LUMA - albedoDrop(albedoByte(drop)))
     const p95 = Math.max(...values)
     const p5 = Math.min(...values)
 
     expect(p95).toBeLessThanOrEqual(0.74)
     expect(p5).toBeGreaterThanOrEqual(0.56)
-    // And the spread has to fit with room, because the surface also carries the
-    // 0.039 the lighting already puts on it and a cast shadow on top of that.
     expect(p95 - p5).toBeLessThan(0.18)
-    expect(p95 - p5).toBeCloseTo(0.06, 2)
+    /*
+      0.0910 of PRINTED span - brightest printed value to darkest - up from the
+      0.0607 the panel fills alone spent. This is the number the user's "make them
+      more pronounced" turns into, and it is 0.092 before quantisation rather than
+      the 0.100 of `SEAM_CORE_DROP`, because the lip is itself 0.008 down and
+      nothing on the deck is left at the surface's own value.
+    */
+    expect(p95 - p5).toBeCloseTo(0.091, 3)
+    // The separate number: how far the DARKEST printed value sits below the
+    // surface's own rendered 0.6869, which is what the band floor has to absorb.
+    expect(DECK_LIT_LUMA - p5).toBeCloseTo(0.0993, 3)
+    expect(p5).toBeCloseTo(0.5876, 3)
+  })
+
+  it('reserves margin above the band floor for the concurrent lightmap bake', () => {
+    /*
+      A `lightMap` or an `aoMap` multiplies albedo exactly as this map does, so a
+      bake landing on the same material COMPOUNDS with this span rather than
+      replacing it. The two budgets are one budget. This pins what is left, so a
+      bake that eats more than it announces itself as a failing test rather than
+      as an out-of-band deck nobody measured.
+    */
+    const darkest = DECK_LIT_LUMA - albedoDrop(albedoByte(SEAM_CORE_DROP))
+    expect(darkest - 0.56).toBeGreaterThan(0.025)
+    expect(darkest - 0.56).toBeLessThan(0.04)
+  })
+
+  it('takes the step risers INTO the midground band rather than out of one', () => {
+    /*
+      The measurement the brief given to this stream got wrong, and the reason it
+      matters. A step riser measures 0.3836 with p5 0.3758 and p95 0.3931
+      (950,490,44,26): p5 is inside midground 0.20-0.38 and p95 is in the
+      0.38-0.56 gap that is meant to be empty, so every riser in the game already
+      fails band membership by straddling the ceiling.
+
+      0.38 is the midground CEILING, not its floor, so there is 0.184 of room
+      downward and not 0.004. Printing on a riser moves it toward legality.
+    */
+    const [lo, hi] = VALUE_BANDS.midground
+    expect(DECK_SIDE_LUMA).toBeGreaterThan(hi)
+    const printed = [SEAM_LIP_DROP, SEAM_CORE_DROP, ...PANEL_TONE_DROPS].map(
+      (drop) => DECK_SIDE_LUMA - albedoDrop(albedoByte(drop), DECK_SIDE_LUMA),
+    )
+    expect(Math.min(...printed)).toBeGreaterThan(lo)
+    // The darkest printed riser lands at 0.325, inside midground for the first
+    // time, with 0.125 of margin above the floor.
+    expect(Math.min(...printed)).toBeCloseTo(0.325, 2)
+  })
+
+  it('delivers the same CONTRAST RATIO on every surface, which is why one ladder is right', () => {
+    /*
+      The stronger form of the under-delivery property below. A multiplier is a
+      ratio, so the seam core is 14.45% below a lit deck top at 0.6869 and 15.30%
+      below a riser at 0.3836 - the same apparent strength on surfaces 0.30 of luma
+      apart. The objection that a ladder sized for band 1 would vanish on the
+      darker risers is simply not what the arithmetic does, and that is the reason
+      `deckBatch` does not need a per-face ladder.
+    */
+    const byte = albedoByte(SEAM_CORE_DROP)
+    const onTop = albedoDrop(byte, DECK_LIT_LUMA) / DECK_LIT_LUMA
+    const onSide = albedoDrop(byte, DECK_SIDE_LUMA) / DECK_SIDE_LUMA
+    expect(onTop).toBeCloseTo(0.1445, 3)
+    expect(onSide).toBeCloseTo(0.153, 3)
+    expect(Math.abs(onSide - onTop)).toBeLessThan(0.01)
   })
 
   it('under-delivers rather than over-delivers on a darker surface', () => {
@@ -509,6 +604,95 @@ describe('the albedo ladder', () => {
     for (let i = 1; i < bytes.length; i++) {
       expect(bytes[i - 1] - bytes[i], `step ${i}`).toBeGreaterThanOrEqual(4)
     }
+  })
+
+  it('clamps every in-panel mark at the seam core, so seams stay the darkest thing', () => {
+    /*
+      The property that makes the vocabulary band-safe by construction. Marks are
+      offsets from their own panel's tone, so the darkest panel plus the deepest
+      mark is what has to be checked - and the clamp in `createPanelFillMap`'s
+      `tone()` is what guarantees it. Without the clamp, the darkest panel at
+      0.086 plus a via pad at 0.034 is 0.120, which is past the seam and 0.008
+      from the band floor.
+    */
+    const deepest = Math.max(...Object.values(PANEL_MARK_DROPS))
+    const worst = Math.max(...PANEL_TONE_DROPS) + deepest
+    expect(worst).toBeGreaterThan(SEAM_CORE_DROP)
+    expect(DECK_LIT_LUMA - albedoDrop(albedoByte(worst))).toBeLessThan(0.56 + 0.01)
+    // Which is exactly why the clamp exists, and why it is at the seam value.
+    expect(Math.min(worst, SEAM_CORE_DROP)).toBe(SEAM_CORE_DROP)
+  })
+})
+
+describe('the hue tilt', () => {
+  /*
+    The user asked for "variation in hues and colors" as the thing that makes the
+    reference beautiful, and this is the part of the ask that costs the value
+    bands nothing. The band rule is a statement about Rec.709 DISPLAY luma, so a
+    colour change that holds display luma fixed is invisible to it - hue is an
+    entirely unbudgeted axis, where the tone ladder had to fight for 0.099 of the
+    0.127 available.
+  */
+  const luma = (bytes: [number, number, number], base = DECK_LIT_LUMA) => {
+    // What the surface renders at once three multiplies this map in linear space.
+    const lit = srgbToLinear(base)
+    return (
+      0.2126 * linearToSrgb(lit * srgbToLinear(bytes[0] / 255)) +
+      0.7152 * linearToSrgb(lit * srgbToLinear(bytes[1] / 255)) +
+      0.0722 * linearToSrgb(lit * srgbToLinear(bytes[2] / 255))
+    )
+  }
+
+  it('costs the value band less than one byte, at every tilt and every rung', () => {
+    for (const drop of PANEL_TONE_DROPS) {
+      for (const tilt of PANEL_TINT_TILTS) {
+        const got = luma(panelTintBytes(drop, tilt))
+        // One byte buys 0.0026 of display luma at this end of the curve, so a
+        // tilt costing under that is below the resolution of the medium itself.
+        expect(Math.abs(got - (DECK_LIT_LUMA - drop)), `drop ${drop} tilt ${tilt}`).toBeLessThan(0.0026)
+      }
+    }
+  })
+
+  it('holds luma on a riser too, where the curve is steeper', () => {
+    for (const tilt of PANEL_TINT_TILTS) {
+      const got = luma(panelTintBytes(0.044, tilt, DECK_SIDE_LUMA), DECK_SIDE_LUMA)
+      expect(Math.abs(got - (DECK_SIDE_LUMA - 0.044))).toBeLessThan(0.0026)
+    }
+  })
+
+  it('actually shifts hue by enough to see, and not by enough to read as paint', () => {
+    /*
+      Both halves matter. Too little and the user's ask is unmet; too much and the
+      panels stop being one material in different mould shots and become a paint
+      job, which is the failure that separates the reference from cheap sci-fi
+      flooring. The measure is the red-to-blue byte spread between a full-warm and
+      a full-cool panel at the same tone.
+    */
+    const warm = panelTintBytes(0.044, 1)
+    const cool = panelTintBytes(0.044, -1)
+    expect(warm[0] - cool[0]).toBeGreaterThan(8)
+    expect(warm[0] - cool[0]).toBeLessThan(32)
+    expect(cool[2] - warm[2]).toBeGreaterThan(8)
+    // Green is left alone on purpose: it carries 71.52% of the luma, so moving it
+    // is the expensive way to change hue.
+    expect(Math.abs(warm[1] - cool[1])).toBeLessThanOrEqual(2)
+  })
+
+  it('is neutral grey at zero tilt, so the tint cannot drift the deck warm or cool', () => {
+    for (const drop of PANEL_TONE_DROPS) {
+      const [r, g, b] = panelTintBytes(drop, 0)
+      expect(r).toBe(g)
+      expect(g).toBe(b)
+      // And agrees with the greyscale path to the byte, or the two ladders would
+      // have quietly diverged.
+      expect(g).toBe(albedoByte(drop))
+    }
+  })
+
+  it('refuses the same impossible inputs the greyscale path refuses', () => {
+    expect(() => panelTintBytes(0.7, 0)).toThrow(/to or below black/)
+    expect(() => panelTintBytes(0.1, 0, 0)).toThrow(/renderedLuma/)
   })
 })
 
@@ -607,15 +791,82 @@ describe('panel fills', () => {
     expect(regions.length).toBeGreaterThan(200)
   })
 
-  it('keeps the perforated panels a minority, per the restraint rule', () => {
-    // A perforation grid is one KIND of panel rather than a second mark laid over
-    // the panels, which is what keeps the deck's top face at one mark type under
-    // section 7.7. That argument only holds while most panels are plain.
+  it('keeps the filled panels a minority, per the restraint rule', () => {
+    /*
+      A fill is one KIND of panel rather than a second mark laid over the panels,
+      which is the argument that keeps the deck's top face legal under section
+      7.7 - and it only holds while most panels are plain. The reference fills
+      SOME panels and not others; a vocabulary applied to every panel is the
+      greeble the rule exists to prevent.
+    */
     const regions = panelRegions({ cells: CELLS })
-    const share = regions.filter((r) => r.perforated).length / regions.length
-    expect(share).toBeGreaterThan(0.03)
-    expect(share).toBeLessThan(0.25)
-    expect(panelRegions({ cells: CELLS, perforatedShare: 0 }).some((r) => r.perforated)).toBe(false)
+    const filled = regions.filter((r) => r.fill !== 'flat').length / regions.length
+    const wanted = Object.values(PANEL_FILL_SHARES).reduce((a, c) => a + c, 0)
+    expect(wanted).toBeLessThan(0.5)
+    expect(filled).toBeGreaterThan(wanted * 0.6)
+    expect(filled).toBeLessThan(wanted * 1.4)
+  })
+
+  it('carries exactly one mark per panel, which is the re-scoped restraint rule', () => {
+    // The union type is the enforcement: a panel cannot hold two fills. This
+    // asserts the vocabulary is complete rather than that the type compiles.
+    const kinds = new Set(panelRegions({ cells: CELLS }).map((r) => r.fill))
+    for (const kind of ['flat', 'dots', 'hex', 'hazard', 'trace', 'sub'] as const) {
+      expect(kinds, `every mark in the vocabulary appears at ${CELLS} cells`).toContain(kind)
+    }
+  })
+
+  it('lets a tier drop the marks it cannot resolve without moving the panels', () => {
+    /*
+      `medium` is 512 over 40 m, which is 78 mm texels, so a 0.25 m perforation
+      pitch is 3.2 texels and moires rather than reads. Dropping those fills must
+      not perturb the layout or the tones underneath, because they are the marks
+      that survive at every tier and they are what carries the read.
+    */
+    const full = panelRegions({ cells: CELLS })
+    const coarse = panelRegions({ cells: CELLS, fillShares: { dots: 0, hex: 0, hazard: 0 } })
+    expect(coarse.some((r) => r.fill === 'dots' || r.fill === 'hex' || r.fill === 'hazard')).toBe(false)
+    expect(coarse.some((r) => r.fill === 'trace')).toBe(true)
+    expect(coarse.map((r) => [r.x, r.y, r.w, r.h, r.tone, r.tilt])).toEqual(
+      full.map((r) => [r.x, r.y, r.w, r.h, r.tone, r.tilt]),
+    )
+  })
+
+  it('never puts a sub-panel in a cell too small to rasterise one', () => {
+    /*
+      A one-cell panel is 0.5 m, which at the shipped 2048 over 40 m is 26 px. An
+      inset tray inside it is fine there; at `medium`'s 512 it would be a 3 px
+      rectangle with a 1 px border, whose value comes from the antialiaser rather
+      than from the ladder. Caught in the pure half so it is testable.
+    */
+    const only = { dots: 0, hex: 0, hazard: 0, trace: 0, sub: 1 }
+    for (const cells of [8, 16, 40, 80]) {
+      for (const region of panelRegions({ cells, fillShares: only })) {
+        if (region.w < 2 || region.h < 2) expect(region.fill).toBe('flat')
+        else expect(region.fill).toBe('sub')
+      }
+    }
+  })
+
+  it('varies hue independently of value, so two axes come out of one set of panels', () => {
+    /*
+      The user asked for "variation in hues and colors" specifically. Tone and
+      tilt are drawn from the same stream but separately, so panels that share a
+      tone mostly differ in temperature. If the two ever became correlated the
+      deck would collapse back to one axis of variation with more steps.
+    */
+    const regions = panelRegions({ cells: CELLS })
+    const tilts = new Set(regions.map((r) => r.tilt))
+    expect(tilts.size).toBe(PANEL_TINT_TILTS.length)
+
+    // Correlation between tone index and tilt index, which must be near zero.
+    const n = regions.length
+    const mx = regions.reduce((a, r) => a + r.tone, 0) / n
+    const my = regions.reduce((a, r) => a + r.tilt, 0) / n
+    const cov = regions.reduce((a, r) => a + (r.tone - mx) * (r.tilt - my), 0) / n
+    const sx = Math.sqrt(regions.reduce((a, r) => a + (r.tone - mx) ** 2, 0) / n)
+    const sy = Math.sqrt(regions.reduce((a, r) => a + (r.tilt - my) ** 2, 0) / n)
+    expect(Math.abs(cov / (sx * sy))).toBeLessThan(0.1)
   })
 
   it('spans the whole walkable island in one copy', () => {
@@ -641,5 +892,311 @@ describe('panel fills', () => {
     */
     const spec = DECAL_KINDS.deck
     expect(spec.metresPerTile / spec.panelPitch).toBe(Math.round(spec.metresPerTile / spec.panelPitch))
+  })
+})
+
+describe('the chip-trace routine, lifted out of groundTexture', () => {
+  /*
+    THE TRAP, and the reason this test exists rather than a comment saying to be
+    careful.
+
+    `createGroundTexture` drew these traces inline from a `mulberry32(20260805)`
+    stream that it SHARES with the 26-circle mottling pass immediately above them.
+    Extracting the routine and giving it its own seed would have left the ground's
+    own call drawing from a different point in that stream, so the lawn's mottle
+    and its traces would both have moved - a change to the largest surface in the
+    frame, arriving as a side effect of a refactor, with no error and nothing in
+    any test to catch it.
+
+    So the extracted function takes `rand` rather than a seed, and this asserts
+    that it consumes that stream in exactly the order the original inline code did,
+    against a reimplementation of the original rather than against a snapshot. A
+    snapshot would pass if both sides were wrong in the same way.
+  */
+  const SIZE = 1024
+  const GRID = SIZE / 16
+
+  /** The original inline code from `createGroundTexture`, verbatim in structure. */
+  function original(rand: () => number, count: number) {
+    const directions: [number, number][] = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+      [1, 1],
+      [-1, 1],
+      [1, -1],
+      [-1, -1],
+    ]
+    const out: { path: [number, number][]; width: number; alpha: number }[] = []
+    for (let i = 0; i < count; i++) {
+      let x = Math.round(rand() * 16) * GRID
+      let y = Math.round(rand() * 16) * GRID
+      const segments = 2 + Math.floor(rand() * 4)
+      const path: [number, number][] = [[x, y]]
+      let [dx, dy] = directions[Math.floor(rand() * directions.length)]
+      for (let s = 0; s < segments; s++) {
+        const length = (1 + Math.floor(rand() * 3)) * GRID
+        x += dx * length
+        y += dy * length
+        path.push([x, y])
+        const turn = directions[Math.floor(rand() * directions.length)]
+        if (turn[0] !== -dx || turn[1] !== -dy) [dx, dy] = turn
+      }
+      out.push({ path, width: 2 + rand() * 5, alpha: 0.1 + rand() * 0.12 })
+    }
+    return out
+  }
+
+  it('reproduces the original inline code exactly, path for path', () => {
+    expect(chipTracePaths({ rand: mulberry32(20260805), count: 26, grid: GRID })).toEqual(
+      original(mulberry32(20260805), 26),
+    )
+  })
+
+  it('consumes the shared stream at the same rate, so what follows it does not move', () => {
+    /*
+      The half of byte-identity a value comparison misses. Even with identical
+      output, a function that drew one extra number would leave every later
+      consumer of the ground's stream shifted - and `createGroundTexture` draws
+      more after the traces.
+    */
+    const a = mulberry32(20260805)
+    chipTracePaths({ rand: a, count: 26, grid: GRID })
+    const b = mulberry32(20260805)
+    original(b, 26)
+    expect(a()).toBe(b())
+  })
+
+  it('ends every run in a pad position, which is what says circuit not scratch', () => {
+    const traces = chipTracePaths({ rand: mulberry32(7), count: 40, grid: GRID })
+    for (const run of traces) {
+      // At least one segment, so the pad is never drawn on top of the start.
+      expect(run.path.length).toBeGreaterThanOrEqual(3)
+      expect(run.width).toBeGreaterThan(0)
+    }
+  })
+
+  it('turns only on the eight fixed headings', () => {
+    // The single constraint that makes these read as a circuit. A crack wanders;
+    // a trace turns at angles a mask could be etched at.
+    for (const run of chipTracePaths({ rand: mulberry32(11), count: 60, grid: GRID })) {
+      for (let p = 1; p < run.path.length; p++) {
+        const dx = run.path[p][0] - run.path[p - 1][0]
+        const dy = run.path[p][1] - run.path[p - 1][1]
+        const ok = dx === 0 || dy === 0 || Math.abs(dx) === Math.abs(dy)
+        expect(ok, `segment ${p} of ${JSON.stringify(run.path)}`).toBe(true)
+      }
+    }
+  })
+})
+
+describe('the panel map resolution', () => {
+  it('is finer than the screen at high, which is the point of decoupling it', () => {
+    /*
+      MEASURED off the establishing frame: the deck around the origin covers about
+      470 px for 12 m, so one screen pixel is 26 mm of deck. At 1024 over a 40 m
+      span the map's texel is 39 mm - COARSER than the display, so every mark in
+      the reference vocabulary was being drawn below the resolution the player
+      could see, and no amount of contrast could have fixed that. 2048 halves the
+      texel to 20 mm and puts the map just inside the screen.
+    */
+    const screenMm = (12 / 470) * 1000
+    const texelMm = (PANEL_FILL_SPAN / panelFillSize(1024)) * 1000
+    expect(texelMm).toBeLessThan(screenMm)
+    expect((PANEL_FILL_SPAN / 1024) * 1000).toBeGreaterThan(screenMm)
+  })
+
+  it('leaves the tiers that cannot afford it alone', () => {
+    expect(panelFillSize(0)).toBe(0)
+    expect(panelFillSize(512)).toBe(512)
+    expect(panelFillSize(1024)).toBe(2048)
+  })
+
+  it('resolves the seam it has to draw', () => {
+    // A 60 mm core with a 30 mm lip either side is 3 px and 1.5 px at high. Below
+    // about 2 px of core the mark stops being a core with lips and becomes a grey
+    // smear whose value comes from the antialiaser.
+    const perTexel = PANEL_FILL_SPAN / panelFillSize(1024)
+    expect(0.06 / perTexel).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('the printed deck as a DISTRIBUTION, which is what the band rule asks for', () => {
+  /*
+    Section 8.1 is explicit that band membership is judged on a surface's p5 to
+    p95 and not on its mean, and that "a clean patch is the wrong statistic". Every
+    other assertion in this file checks the EXTREMES of the ladder, which is a
+    weaker claim: a pattern whose darkest value is legal can still put 10% of a
+    surface in the wrong band if that darkest value covers 10% of the area.
+
+    So this is the real acceptance row. It builds the area-weighted histogram of
+    every printed value from the actual `panelRegions` layout at the shipped
+    resolution, and takes percentiles off it. The areas are computed from the same
+    expressions `createPanelFillMap` rasterises with, which is the closest a node
+    test can get to the image without a canvas - and it is close enough to be
+    useful, because the seam bands turn out to be 19% of the surface and that is
+    exactly the kind of share an extremes-only check cannot see.
+  */
+  const SIZE = 2048
+  const CELLS = PANEL_FILL_SPAN / PANEL_FILL_CELL
+  const PER_TEXEL = PANEL_FILL_SPAN / SIZE
+
+  /** Area-weighted map from printed drop to pixel count, over one whole map. */
+  function histogram() {
+    const core = 0.06 / PER_TEXEL
+    const lip = core + (2 * 0.03) / PER_TEXEL
+    const px = (c: number) => Math.round((c * SIZE) / CELLS)
+    const bins = new Map<number, number>()
+    const add = (drop: number, area: number) => {
+      // The same clamp `createPanelFillMap` applies, which is what puts a hard
+      // floor under the distribution whatever a caller asks for.
+      const d = Math.max(0, Math.min(SEAM_CORE_DROP, drop))
+      bins.set(d, (bins.get(d) ?? 0) + Math.max(0, area))
+    }
+
+    let seamCore = 0
+    let seamLip = 0
+    for (const r of panelRegions({ cells: CELLS })) {
+      const w = px(r.x + r.w) - px(r.x)
+      const h = px(r.y + r.h) - px(r.y)
+      const perimeter = 2 * (w + h)
+      // The stroke is centred on the boundary, so half of each band falls inside
+      // this region and half inside its neighbour. Summing halves over all
+      // regions counts every boundary exactly once.
+      seamCore += (perimeter * core) / 2
+      seamLip += (perimeter * (lip - core)) / 2
+      let area = w * h - (perimeter * lip) / 2
+      const base = PANEL_TONE_DROPS[r.tone]
+
+      if (r.fill === 'dots' || r.fill === 'hex') {
+        const step = 0.25 / PER_TEXEL
+        const radius = Math.max(1.5, 0.06 / PER_TEXEL)
+        const holes = Math.min(area, (w / step) * (h / step) * Math.PI * radius * radius)
+        add(base + PANEL_MARK_DROPS.perforation, holes)
+        area -= holes
+      } else if (r.fill === 'hazard') {
+        // Stripes at half duty cycle: `lineWidth = period / 2`.
+        add(base + PANEL_MARK_DROPS.hazard, area * 0.5)
+        area *= 0.5
+      } else if (r.fill === 'trace') {
+        const inked = area * 0.14
+        add(base + PANEL_MARK_DROPS.trace, inked * 0.8)
+        add(base + PANEL_MARK_DROPS.via, inked * 0.2)
+        area -= inked
+      } else if (r.fill === 'sub') {
+        const inset = Math.max(2, Math.min(w, h) * 0.22)
+        const rw = w - 2 * inset
+        const rh = h - 2 * inset
+        const border = 2 * (rw + rh) * Math.max(1, inset * 0.3)
+        const recess = Math.max(0, rw * rh - border)
+        add(base + PANEL_MARK_DROPS.subPanelRecess, recess)
+        add(base + PANEL_MARK_DROPS.subPanelBorder, border)
+        area -= recess + border
+      }
+      add(base, area)
+    }
+    add(SEAM_CORE_DROP, seamCore)
+    add(SEAM_LIP_DROP, seamLip)
+
+    const rows = [...bins.entries()].sort((a, b) => a[0] - b[0])
+    const total = rows.reduce((sum, r) => sum + r[1], 0)
+    return { rows, total, seamShare: (seamCore + seamLip) / total }
+  }
+
+  /** Percentiles of rendered DISPLAY luma on a surface rendering at `base`. */
+  function percentiles(base: number) {
+    const { rows, total } = histogram()
+    // Drops ascending is luma descending, so a luma percentile walks from the end.
+    const at = (p: number) => {
+      let acc = 0
+      for (let i = rows.length - 1; i >= 0; i--) {
+        acc += rows[i][1] / total
+        if (acc >= p) return base - albedoDrop(albedoByte(rows[i][0]), base)
+      }
+      return base - albedoDrop(albedoByte(rows[0][0]), base)
+    }
+    return { p5: at(0.05), p50: at(0.5), p95: at(0.95) }
+  }
+
+  it('fits inside the gameplay band on a lit deck top, as a distribution', () => {
+    const [floor, ceiling] = VALUE_BANDS.gameplay
+    const { p5, p50, p95 } = percentiles(DECK_LIT_LUMA)
+    expect(p5).toBeCloseTo(0.5877, 3)
+    expect(p50).toBeCloseTo(0.6291, 3)
+    expect(p95).toBeCloseTo(0.6787, 3)
+    expect(p5).toBeGreaterThan(floor)
+    expect(p95).toBeLessThan(ceiling)
+    expect(p95 - p5).toBeLessThan(0.18)
+  })
+
+  it('moves the deck OFF the band ceiling it was resting on, to the band centre', () => {
+    /*
+      The result that matters most and the one an extremes check cannot state. The
+      deck was a single value at 0.6869 in a band running 0.56 to 0.74 - pinned
+      0.053 from the ceiling with 0.127 unused below, which is why it had nowhere
+      to put a pattern. Its median is now 0.6291 against a band centre of 0.65.
+
+      That is the shape a surface carrying printed detail is supposed to have, and
+      it is a stronger argument for the palette promotion this stream is asking
+      for: the base wants to come UP so the distribution can straddle 0.65 instead
+      of hanging below it.
+    */
+    const centre = (VALUE_BANDS.gameplay[0] + VALUE_BANDS.gameplay[1]) / 2
+    const { p50 } = percentiles(DECK_LIT_LUMA)
+    expect(DECK_LIT_LUMA - p50).toBeCloseTo(0.0579, 3)
+    expect(Math.abs(p50 - centre)).toBeLessThan(0.025)
+    expect(Math.abs(p50 - centre)).toBeLessThan(Math.abs(DECK_LIT_LUMA - centre))
+  })
+
+  it('cuts the step risers band violation by most of it, without closing it', () => {
+    /*
+      Honest about a limit rather than asserting a win. Convolving the printed
+      pattern with the riser's OWN measured lighting spread - p5 0.3758 to p95
+      0.3931 at 950,490,44,26 - gives p5 0.3246 and p95 0.3817 against a midground
+      ceiling of 0.38. That is down from 0.3931, so 87% of the violation is gone
+      and 0.0017 of it remains.
+
+      It CANNOT be closed from this file. A multiplier delivers a constant contrast
+      RATIO, so pulling the riser's brightest texel below 0.38 needs a 3.3% relative
+      drop on the lightest printed value, which on the lit deck is 0.023 - and
+      spending that would take the deck's own p5 to 0.573, leaving 0.013 of margin
+      and nothing for the lightmap. The riser's real defect is that it renders 0.208
+      below its authored `bandDeckSide` albedo of 0.592, which is a lighting or
+      vertex-colour question and not a texture one.
+    */
+    const [, ceiling] = VALUE_BANDS.midground
+    const { rows, total } = histogram()
+    const samples: number[] = []
+    for (let i = 0; i < 400; i++) {
+      const lit = 0.3758 + (0.3931 - 0.3758) * (i / 399)
+      for (const [drop, area] of rows) {
+        const v = lit - albedoDrop(albedoByte(drop), lit)
+        for (let k = 0; k < Math.max(1, Math.round((area / total) * 1000)); k++) samples.push(v)
+      }
+    }
+    samples.sort((a, b) => a - b)
+    const q = (p: number) => samples[Math.floor(p * samples.length)]
+
+    expect(q(0.05)).toBeCloseTo(0.3246, 3)
+    expect(q(0.95)).toBeCloseTo(0.3817, 3)
+    // Better than the 0.3931 it starts at, and still not inside. Both halves are
+    // the claim: an improvement that is not yet a pass.
+    expect(q(0.95)).toBeLessThan(0.3931)
+    expect(q(0.95) - ceiling).toBeLessThan(0.002)
+    expect(q(0.05)).toBeGreaterThan(VALUE_BANDS.midground[0])
+  })
+
+  it('shows why an extremes-only check was not enough: the seams are 19% of the deck', () => {
+    /*
+      The justification for this whole describe block. The seam bands are a fifth
+      of the surface, so they are a genuine mode of the distribution rather than a
+      hairline - which means the darkest printed value is carried by enough area to
+      move p5, and a check that only looked at the ladder's endpoints could not
+      have known that.
+    */
+    const { seamShare } = histogram()
+    expect(seamShare).toBeGreaterThan(0.15)
+    expect(seamShare).toBeLessThan(0.25)
   })
 })
