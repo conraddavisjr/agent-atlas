@@ -40,6 +40,26 @@ function adoptLegacySave() {
 
 adoptLegacySave()
 
+/**
+ * A fresh, unshared copy of the starting progress.
+ *
+ * `INITIAL_PROGRESS` is a module constant, so its `completedLessons` array and
+ * its `lessonData` object are single instances shared by every reader.
+ * `set({ ...INITIAL_PROGRESS })` copies the object but not those two, which
+ * means the live store and the module default would be the same array. Nothing
+ * mutates them today - `completeLesson` spreads rather than pushes - so this is
+ * a latent hazard rather than a live bug, and it is worth closing now precisely
+ * because the admin panel turns "reset" from a thing that never happened into a
+ * button: one future `state.completedLessons.push(id)` would otherwise poison
+ * both the default and every subsequent reset, and `migrate()` below merges onto
+ * that same object.
+ */
+const freshProgress = (): ProgressState => ({
+  ...INITIAL_PROGRESS,
+  completedLessons: [...INITIAL_PROGRESS.completedLessons],
+  lessonData: { ...INITIAL_PROGRESS.lessonData },
+})
+
 type GameStore = ProgressState & {
   /** Runtime-only. Deliberately excluded from persistence via partialize below. */
   activeTotemId: string | null
@@ -49,13 +69,33 @@ type GameStore = ProgressState & {
   setActiveTotem: (id: string | null) => void
   setTransitioning: (value: boolean) => void
   travelTo: (sceneId: string, spawnId: string) => void
+
+  /**
+   * Wipe progression back to the start.
+   *
+   * Everything the player can see is derived from these four fields rather than
+   * cached anywhere - the totems re-bucket their instance batches from the
+   * `completed` prop every frame, the Core node's arc geometry is memoised on
+   * `[completed, total]`, the water trace writes `uProgress` per frame, the
+   * portal's lock plate and its blocking collider are plain conditional JSX, and
+   * the cosmetics are recomputed by `earnedCosmetics` - so this one write is
+   * enough to undo all of it with no remount and no reload.
+   *
+   * What it deliberately does NOT do is move the player. It resets
+   * `currentSceneId` to the hub, but the mounted scene is owned by
+   * `useSceneTravel`, which seeds itself once at mount and has no path from the
+   * store back to the world. Calling this from the cave therefore leaves the
+   * canvas in the cave while the HUD titles itself from the store, and relocating
+   * the player is the caller's job because only the caller holds `travel`. See
+   * the reset handler in App.tsx.
+   */
   resetProgress: () => void
 }
 
 export const useGameStore = create<GameStore>()(
   persist(
     (set) => ({
-      ...INITIAL_PROGRESS,
+      ...freshProgress(),
       activeTotemId: null,
       isTransitioning: false,
 
@@ -71,9 +111,21 @@ export const useGameStore = create<GameStore>()(
       setActiveTotem: (id) => set({ activeTotemId: id }),
       setTransitioning: (value) => set({ isTransitioning: value }),
 
-      travelTo: (sceneId, spawnId) => set({ currentSceneId: sceneId, currentSpawnId: spawnId }),
+      /*
+        Arriving somewhere new clears the interact prompt.
 
-      resetProgress: () => set({ ...INITIAL_PROGRESS }),
+        `useProximity` fires `onExit` on a transition out of range, and unmounting
+        is not a transition - it just stops running. So a player who walks into a
+        portal, or is sent home by the admin reset, while standing at a totem
+        carries that totem's id into the next scene, and the HUD goes on offering
+        to complete a lesson that is no longer anywhere on screen. Clearing it on
+        arrival rather than in `resetProgress` puts the fix where the cause is:
+        the scene swap orphans the id, and portal travel orphans it identically.
+      */
+      travelTo: (sceneId, spawnId) =>
+        set({ currentSceneId: sceneId, currentSpawnId: spawnId, activeTotemId: null }),
+
+      resetProgress: () => set(freshProgress()),
     }),
     {
       name: STORAGE_KEY,
@@ -101,12 +153,14 @@ export const useGameStore = create<GameStore>()(
 
         if (version < 1) {
           // Pre-versioning saves, if any ever existed, get merged onto defaults.
-          state = { ...INITIAL_PROGRESS, ...state }
+          state = { ...freshProgress(), ...state }
         }
 
         // Defensive merge: a save written by a newer build, or hand-edited local
-        // storage, must never leave a required field undefined.
-        return { ...INITIAL_PROGRESS, ...state } as ProgressState
+        // storage, must never leave a required field undefined. Fresh defaults, so
+        // a save missing a field does not end up sharing the module constant's
+        // array with every future reset.
+        return { ...freshProgress(), ...state } as ProgressState
       },
     },
   ),

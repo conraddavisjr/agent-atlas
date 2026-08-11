@@ -20,6 +20,7 @@ import { CONTACT_TINT } from './art/contactTint'
 import { PostFX } from './art/PostFX'
 import { useQuality } from './art/useQuality'
 import { HUD } from './ui/HUD'
+import { AdminPanel } from './ui/AdminPanel'
 import { useGameStore, useProgress } from './state/gameStore'
 import { COSMETICS, LESSONS } from './state/lessons'
 import { earnedCosmetics } from './state/progression'
@@ -66,6 +67,7 @@ export default function App() {
   const storedSpawn = useGameStore((s) => s.currentSpawnId)
   const travelTo = useGameStore((s) => s.travelTo)
   const completeLesson = useGameStore((s) => s.completeLesson)
+  const resetProgress = useGameStore((s) => s.resetProgress)
   const progress = useProgress()
 
   /**
@@ -125,6 +127,44 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [covering, completeLesson])
+
+  /**
+   * The admin panel's reset, which is the store write plus the one thing the
+   * store cannot do for itself.
+   *
+   * `resetProgress` sets `currentSceneId` back to the hub, but the mounted scene
+   * belongs to `useSceneTravel`, which seeds `displayed` from `initial` once and
+   * never reads the store again - the direction of truth is world to store, via
+   * `onArrive`, and there is no path back. So resetting from inside the cave
+   * leaves the canvas in the cave while the HUD, which titles itself from
+   * `currentSceneId`, announces the hub and counts the hub's lessons. Nothing
+   * throws, the world does not desync from its own idea of where it is, and it
+   * silently repairs itself the next time the player walks through a portal -
+   * which is exactly the shape of bug that gets shipped.
+   *
+   * Travelling only when the scene actually differs, and reading the destination
+   * out of the store rather than hardcoding 'hub', so this follows
+   * INITIAL_PROGRESS if the starting scene ever changes. Already being in the hub
+   * needs no travel: the player keeps standing where they are, which is both less
+   * disruptive and correct, since travelling to the scene you are already in does
+   * not reposition anyone anyway - `displayed.spawnId` is unchanged, `getSpawn`
+   * returns the registry's own stable array, and PlayerController's spawn effect
+   * never re-runs.
+   *
+   * The guard on `covering` is not decoration. `travel` refuses a request while
+   * one is in flight, so without it a reset issued mid-transition would wipe
+   * progress and then quietly fail to move the player, leaving precisely the
+   * divergence this function exists to prevent. The panel disables the button for
+   * the same reason; this is the half that cannot be styled away.
+   */
+  const onAdminReset = useCallback(() => {
+    if (covering) return
+    resetProgress()
+    const home = useGameStore.getState()
+    if (displayed.sceneId !== home.currentSceneId) {
+      travel({ sceneId: home.currentSceneId, spawnId: home.currentSpawnId }, 'Starting over')
+    }
+  }, [covering, resetProgress, displayed.sceneId, travel])
 
   const scene = getScene(displayed.sceneId)
   const SceneComponent = scene.Component
@@ -307,6 +347,17 @@ export default function App() {
       </Canvas>
 
       <HUD />
+      {/*
+        Outside the HUD rather than inside it. The HUD's root is a full-viewport
+        `pointerEvents: none` layer whose children opt back in one at a time, and
+        an admin surface that has to swallow whole gestures - wheel, drag, keys -
+        does not belong in a tree built on the opposite assumption.
+      */}
+      <AdminPanel
+        displayedSceneId={displayed.sceneId}
+        busy={covering}
+        onResetProgress={onAdminReset}
+      />
       <Transition active={covering} label={label} />
     </>
   )

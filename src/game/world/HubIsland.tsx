@@ -1406,6 +1406,22 @@ function CoreNode({ shells, completed, total }: { shells: boolean; completed: nu
    * stays constant across all three sizes - which is the property that lets the
    * pylons work as a depth ruler at all.
    */
+  /*
+    Rebuilt whenever progress changes, and **disposed on the way out**, which it
+    was not.
+
+    r3f disposes a `geometry` prop when the mesh unmounts; it does not dispose the
+    one it is replacing. So every change of `completed` allocated a fresh core, a
+    fresh shell and a fresh pair of arc torii and abandoned the previous set on the
+    GPU. That was survivable while progression only ever went up a handful of times
+    in a session, and it stopped being survivable the moment the admin panel added
+    a reset button: complete, reset, complete, reset is now a loop a user can sit
+    on, and each turn of it leaks four geometries.
+
+    This file already disposes by hand in two other places - `plinth.dispose()` and
+    the contact material - so the omission was an oversight rather than a
+    convention. Found by the stream that added the button, in a file it did not own.
+  */
   const geometries = useMemo(
     () => ({
       core: nodeCore(1.15),
@@ -1414,6 +1430,15 @@ function CoreNode({ shells, completed, total }: { shells: boolean; completed: nu
     }),
     [completed, total],
   )
+
+  useEffect(() => {
+    // Captured by value so the cleanup frees the set it was created with, not
+    // whatever the next render happens to have put in the ref.
+    const owned = geometries
+    return () => {
+      for (const geometry of Object.values(owned)) geometry?.dispose()
+    }
+  }, [geometries])
 
   useFrame((state) => {
     if (!group.current) return
