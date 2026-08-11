@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tools.tsbuildinfo",
+    "target": "ES2023",
+    // DOM is here only because three's own declarations reference it. Nothing in
+    // `tools` touches a browser API; the bake runs in Node.
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    // The bake imports `totemPlinth` from a .tsx, so this project has to be able to
+    // parse JSX even though nothing in `tools` contains any.
+    "jsx": "react-jsx",
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
+    "types": ["node", "vite/client"]
+  },
+  // The bake is TypeScript and was in no project at all until this file existed, so
+  // `npm run typecheck` never looked at roughly a thousand lines of it. The driver
+  // is `.mjs` deliberately and stays out.
+  "include": ["tools/**/*.ts"]
+}

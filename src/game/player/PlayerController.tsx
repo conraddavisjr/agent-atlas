@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import { useFrame, useThree } from '@react-three/fiber'
+import { useEffect, useMemo, useRef } from 'react'
+import { useFrame } from '@react-three/fiber'
 import {
   CapsuleCollider,
   RigidBody,
@@ -9,12 +9,24 @@ import {
   type RapierRigidBody,
 } from '@react-three/rapier'
 import { Vector3, type Group } from 'three'
-import { BODY, JUMP, MOVEMENT, SQUASH } from './tuning'
-import { approachAngle, stepHorizontal, stepVertical } from './movement'
+import { BODY, JUMP, MOVEMENT, REVIVAL, SQUASH } from './tuning'
+import { SHADOW } from './animTuning'
+import { headingVector, stepDrive, stepHorizontal, stepVertical } from './movement'
 import { RobotModel } from './RobotModel'
-import { createRobotAnimState } from './robotAnim'
+import { ContactBlob } from './ContactBlob'
+import { createRobotAnimState, EV, pushEvent, pushSquash } from './robotAnim'
+import {
+  createAnimRuntime,
+  createGroundSample,
+  createPose,
+  type AnimRuntime,
+  type GroundSample,
+  type Pose,
+} from './robotPose'
+import { cameraFrame } from '../camera/cameraFrame'
 import type { InputIntent } from '../input/useInput'
 import type { SocketName } from '@/state/types'
+import { devBridge } from '@/dev/devBridge'
 
 /** Derived from the world handle so no direct dependency on the rapier package is needed. */
 type CharacterController = ReturnType<RapierContext['world']['createCharacterController']>
@@ -40,7 +52,10 @@ export function PlayerController({
   spawn,
   cosmetics,
   playerRef,
+  contactTint,
   inputLocked,
+  killY,
+  onDeath,
 }: {
   intent: React.RefObject<InputIntent>
   sampleInput: () => void
@@ -49,14 +64,31 @@ export function PlayerController({
   cosmetics: Partial<Record<SocketName, string>>
   /** Exposed so the camera can follow without prop-drilling per frame. */
   playerRef: React.RefObject<Group | null>
+  /** The contact blob's centre tint, from the scene's light rig. */
+  contactTint: string
   inputLocked: React.RefObject<boolean>
+  /** Fall below this and the scene kills you. Owned by the scene registry. */
+  killY: number
+  /** Fired once when the kill plane is crossed. */
+  onDeath: () => void
 }) {
   const bodyRef = useRef<RapierRigidBody>(null)
   const visualRef = useRef<Group>(null)
-  const { world } = useRapier()
-  const camera = useThree((s) => s.camera)
+  const { world, rapier } = useRapier()
 
   const anim = useRef(createRobotAnimState())
+
+  /*
+    The animation buffers live here rather than inside RobotModel, because the
+    contact shadow is not a child of the character and still needs the pose the
+    solver produces. One owner, two consumers, no duplicated state.
+  */
+  const rtRef = useRef<AnimRuntime | null>(null)
+  if (rtRef.current === null) rtRef.current = createAnimRuntime(0xa71a5)
+  const poseRef = useRef<Pose | null>(null)
+  if (poseRef.current === null) poseRef.current = createPose()
+  const groundRef = useRef<GroundSample | null>(null)
+  if (groundRef.current === null) groundRef.current = createGroundSample()
 
   /** Velocity we integrate ourselves, since the body is kinematic. */
   const velocity = useRef(new Vector3(0, 0, 0))
@@ -64,10 +96,19 @@ export function PlayerController({
   const bufferTimer = useRef(0)
   const wasGrounded = useRef(true)
   const facing = useRef(0)
-  const squashVelocity = useRef(0)
+
+  /**
+   * True from the moment the robot is placed above the spawn until it first
+   * touches down. Input stays locked for that window so the fall cannot be
+   * steered, which is what makes it read as an arrival rather than as a jump
+   * the player somehow started mid-air.
+   */
+  const reviving = useRef(true)
+  /** Latches so a body still below the kill plane cannot fire death every step. */
+  const dead = useRef(false)
 
   /** Dev-only counters, sampled per physics step. See window.__player. */
-  const debug = useRef({ peakY: 0, jumps: 0 })
+  const debug = useRef({ peakY: 0, jumps: 0, steps: 0 })
 
   /**
    * Scratch vectors, allocated once and mutated every physics step.
@@ -78,23 +119,26 @@ export function PlayerController({
    */
   const scratchRef = useRef<{
     desired: Vector3
-    camForward: Vector3
-    camRight: Vector3
     move: Vector3
-    up: Vector3
+    /** The downward ground ray, mutated in place every frame. */
+    ray: InstanceType<RapierContext['rapier']['Ray']>
   } | null>(null)
   if (scratchRef.current === null) {
     scratchRef.current = {
       desired: new Vector3(),
-      camForward: new Vector3(),
-      camRight: new Vector3(),
       move: new Vector3(),
-      up: new Vector3(0, 1, 0),
+      ray: new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 }),
     }
   }
   const scratch = scratchRef.current
 
   const controllerRef = useRef<CharacterController | null>(null)
+
+  /** Where the body is seeded: the spawn, lifted by the revival drop height. */
+  const dropSpawn = useMemo<[number, number, number]>(
+    () => [spawn[0], spawn[1] + REVIVAL.dropHeight, spawn[2]],
+    [spawn],
+  )
 
   /**
    * The character controller is a WASM-backed resource, so it is created and
@@ -134,15 +178,25 @@ export function PlayerController({
     }
   }, [world])
 
-  /** Place the robot at the scene's spawn point on mount. */
+  /**
+   * Place the robot above the scene's spawn point on mount, so it drops in.
+   *
+   * The drop is the revival: the character falls the last short stretch into
+   * the world while the iris opens around them, then lands with a spring. See
+   * REVIVAL in tuning.ts for the height and for why it is not literally 50px.
+   */
   useEffect(() => {
     const body = bodyRef.current
     if (!body) return
-    body.setNextKinematicTranslation({ x: spawn[0], y: spawn[1], z: spawn[2] })
-    body.setTranslation({ x: spawn[0], y: spawn[1], z: spawn[2] }, true)
+    const y = spawn[1] + REVIVAL.dropHeight
+    body.setNextKinematicTranslation({ x: spawn[0], y, z: spawn[2] })
+    body.setTranslation({ x: spawn[0], y, z: spawn[2] }, true)
     velocity.current.set(0, 0, 0)
     coyoteTimer.current = 0
     bufferTimer.current = 0
+    reviving.current = true
+    dead.current = false
+    pushEvent(anim.current.events, EV.Revive, 0, spawn[0], spawn[1], spawn[2], 0, 1, 0, 1, 0)
   }, [spawn])
 
   useBeforePhysicsStep(() => {
@@ -158,7 +212,11 @@ export function PlayerController({
 
     sampleInput()
     const input = intent.current
-    const locked = inputLocked.current
+    // Two independent locks. The scene machine owns the first, for the frames
+    // where the world is being torn down and rebuilt. The controller owns the
+    // second, for the fall on arrival, because only it knows when the feet
+    // actually touch down.
+    const locked = inputLocked.current || reviving.current
 
     // During a transition the world is being torn down and rebuilt. Reading input
     // here would let the player walk into geometry that no longer exists.
@@ -167,23 +225,38 @@ export function PlayerController({
     const jumpPressed = locked ? false : input.jumpPressed
     const jumpHeld = locked ? false : input.jumpHeld
 
+    if (import.meta.env.DEV) debug.current.steps += 1
+
     const grounded = controller.computedGrounded()
 
-    // ---- Horizontal movement, camera relative ------------------------------
-    // Forward always means away from the camera, which is the only scheme that
-    // stays intuitive while the camera is orbiting.
-    camera.getWorldDirection(scratch.camForward)
-    scratch.camForward.y = 0
-    scratch.camForward.normalize()
-    scratch.camRight.crossVectors(scratch.camForward, scratch.up).normalize()
+    // ---- Turning and driving -----------------------------------------------
+    /*
+      Tank controls. Left and right rotate the robot where it stands; forward
+      and back drive it along whatever direction it is now pointing. Held
+      together they arc, without either being a special case.
 
-    scratch.desired
-      .set(0, 0, 0)
-      .addScaledVector(scratch.camRight, moveX)
-      .addScaledVector(scratch.camForward, -moveY)
+      Facing is state here, not a reading taken from velocity. That is what
+      makes turning on the spot possible at all: a heading recovered from
+      velocity can only ever report where the character has already been.
+    */
+    const previousFacing = facing.current
+    const drive = stepDrive({ moveX, moveY, facing: facing.current, dt })
+    facing.current = drive.facing
 
-    const hasInput = scratch.desired.lengthSq() > 0.0001
-    if (hasInput) scratch.desired.normalize()
+    const heading = headingVector(facing.current)
+    scratch.desired.set(heading.x * drive.throttle, 0, heading.z * drive.throttle)
+
+    const hasInput = Math.abs(drive.throttle) > 0.0001
+    // Already a unit heading scaled by throttle, so normalising would throw the
+    // throttle away and make a nudge accelerate as hard as a full press.
+    if (hasInput) scratch.desired.normalize().multiplyScalar(Math.abs(drive.throttle))
+
+    /*
+      Published for the camera, which realigns only while the player is driving.
+      Turning counts even at a standstill, because a rotation on the spot is
+      exactly when the camera most needs to come round.
+    */
+    cameraFrame.following = hasInput || moveX !== 0
 
     const targetX = scratch.desired.x * MOVEMENT.maxSpeed
     const targetZ = scratch.desired.z * MOVEMENT.maxSpeed
@@ -203,11 +276,26 @@ export function PlayerController({
     coyoteTimer.current = vertical.coyote
     bufferTimer.current = vertical.buffer
 
+    const t0 = body.translation()
+
     if (vertical.jumped) {
       // Stretch on takeoff. Squash and stretch does more for the toy feel than
-      // any material in the game.
-      anim.current.squash = SQUASH.takeoffStretch
-      squashVelocity.current = 0
+      // any material in the game. The recovery is the solver's; this states only
+      // how far and on which of the three spring profiles.
+      pushSquash(anim.current, SQUASH.takeoffStretch, 'takeoff')
+
+      /*
+        One push, several consumers. The solver reads it here to snap the
+        antenna and lift the head; the VFX system will read the same slot for
+        the jump puff without either of them knowing about the other.
+      */
+      const launch = Math.min(1, Math.abs(velocity.current.y) / JUMP.velocity)
+      pushEvent(
+        anim.current.events, EV.Jump, anim.current.groundTime,
+        t0.x, t0.y - 0.7, t0.z,
+        0, 1, 0,
+        launch, bufferTimer.current > 0 ? 1 : 0,
+      )
 
       if (import.meta.env.DEV) debug.current.jumps += 1
     }
@@ -215,17 +303,45 @@ export function PlayerController({
     if (import.meta.env.DEV) {
       // Sampled per physics step rather than per rendered frame, so a jump arc
       // that completes inside a burst of catch-up steps is still observable.
-      const t = body.translation()
-      debug.current.peakY = Math.max(debug.current.peakY, t.y)
+      debug.current.peakY = Math.max(debug.current.peakY, t0.y)
     }
 
     // ---- Landing -----------------------------------------------------------
     if (grounded && !wasGrounded.current) {
-      const impact = Math.abs(anim.current.verticalVelocity)
-      if (impact > SQUASH.minLandSpeed) {
-        const strength = Math.min(1, impact / Math.abs(JUMP.maxFallSpeed))
-        anim.current.squash = 1 - (1 - SQUASH.landSquash) * strength
-        squashVelocity.current = 0
+      if (reviving.current) {
+        /*
+          The revival landing ignores impact speed and squashes to a fixed
+          depth. Scaling it by velocity the way an ordinary landing does would
+          make the bounce depend on REVIVAL.dropHeight, so tuning the drop for
+          how it looks would silently retune how the landing feels.
+
+          There is still no separate bounce animation: the rebound is the
+          recovery spring overshooting on its way back to neutral. What is new
+          is that it now does. REVIVAL.landSquash's comment has promised that
+          bounce since it was written, against a spring damped at exactly 1.0,
+          which by definition cannot overshoot. The 'revival' profile is
+          underdamped at zeta 0.55, so the promise is finally kept.
+        */
+        pushSquash(anim.current, REVIVAL.landSquash, 'revival')
+        pushEvent(
+          anim.current.events, EV.Land, anim.current.airTime,
+          t0.x, t0.y - 0.7, t0.z,
+          0, 1, 0,
+          1, 1,
+        )
+        reviving.current = false
+      } else {
+        const impact = Math.abs(anim.current.verticalVelocity)
+        if (impact > SQUASH.minLandSpeed) {
+          const strength = Math.min(1, impact / Math.abs(JUMP.maxFallSpeed))
+          pushSquash(anim.current, 1 - (1 - SQUASH.landSquash) * strength, 'land')
+          pushEvent(
+            anim.current.events, EV.Land, anim.current.airTime,
+            t0.x, t0.y - 0.7, t0.z,
+            0, 1, 0,
+            strength, 0,
+          )
+        }
       }
     }
     wasGrounded.current = grounded
@@ -245,7 +361,27 @@ export function PlayerController({
     // If the solver cancelled our vertical motion we hit a ceiling, so drop the
     // upward velocity rather than pressing into it for the rest of the arc.
     if (velocity.current.y > 0 && corrected.y < scratch.move.y * 0.5) {
+      pushEvent(
+        anim.current.events, EV.Bonk, anim.current.airTime,
+        t.x, t.y + 0.7, t.z,
+        0, -1, 0,
+        Math.min(1, velocity.current.y / JUMP.velocity), 0,
+      )
       velocity.current.y = 0
+    }
+
+    // ---- Kill plane --------------------------------------------------------
+    // Latched, because the body keeps falling for the whole close of the iris
+    // and would otherwise re-fire death on every step of the way down.
+    if (!dead.current && t.y + corrected.y < killY) {
+      dead.current = true
+      pushEvent(
+        anim.current.events, EV.Death, anim.current.airTime,
+        t.x, t.y, t.z,
+        0, 1, 0,
+        1, 0,
+      )
+      onDeath()
     }
 
     // ---- Feed the animation ------------------------------------------------
@@ -253,13 +389,47 @@ export function PlayerController({
     anim.current.speedNorm = Math.min(1, horizontalSpeed / MOVEMENT.maxSpeed)
     anim.current.grounded = grounded
     anim.current.verticalVelocity = velocity.current.y
+    /*
+      Turn and throttle come from the input rather than from velocity, and they
+      have to. A pivot on the spot produces no velocity at all, so anything
+      derived from it reports a stationary character and the robot rotates with
+      its feet planted. These two are what let the model animate a turn.
+    */
+    anim.current.turnNorm = moveX
+    anim.current.throttle = drive.throttle
 
-    // Face the direction of travel. Rotating toward movement rather than toward
-    // the camera means the robot never moonwalks when strafing.
-    if (horizontalSpeed > 0.4) {
-      const targetFacing = Math.atan2(velocity.current.x, velocity.current.z)
-      facing.current = approachAngle(facing.current, targetFacing, MOVEMENT.turnSpeed * dt)
+    /*
+      Everything the solver and the effects need about where the body is,
+      copied once per step.
+
+      Copied rather than read on demand so that no consumer has to call into
+      Rapier. The contact shadow, the foot IK and eventually the emitters all
+      want the same six numbers, and three separate `translation()` calls per
+      frame is three WASM boundary crossings for data that cannot have changed
+      between them.
+    */
+    anim.current.facing = facing.current
+    anim.current.turnRate = (facing.current - previousFacing) / dt
+    anim.current.worldX = t.x + corrected.x
+    anim.current.worldY = t.y + corrected.y
+    anim.current.worldZ = t.z + corrected.z
+    anim.current.velX = velocity.current.x
+    anim.current.velY = velocity.current.y
+    anim.current.velZ = velocity.current.z
+    anim.current.reviving = reviving.current
+    if (grounded) {
+      anim.current.airTime = 0
+      anim.current.groundTime += dt
+    } else {
+      anim.current.airTime += dt
+      anim.current.groundTime = 0
     }
+
+    /*
+      Facing is not recomputed here any more. It was previously read back from
+      velocity, which is what made it lag the input and made turning on the spot
+      impossible; it is now set directly by stepDrive at the top of this step.
+    */
 
     endInputFrame()
   })
@@ -268,28 +438,108 @@ export function PlayerController({
    * Visual-only work runs per frame rather than per physics step so it stays
    * smooth at any refresh rate.
    */
-  useFrame((_, delta) => {
-    const dt = Math.min(delta, 0.05)
-
+  useFrame(() => {
     if (visualRef.current) {
       visualRef.current.rotation.y = facing.current
     }
 
-    // Spring the squash back toward neutral. A critically damped spring rather
-    // than a lerp, so it overshoots very slightly and reads as springy plastic.
-    const displacement = anim.current.squash - 1
-    const springForce = -displacement * SQUASH.recovery * SQUASH.recovery
-    const damping = -squashVelocity.current * 2 * SQUASH.recovery
-    squashVelocity.current += (springForce + damping) * dt
-    anim.current.squash += squashVelocity.current * dt
+    /*
+      The squash spring used to be integrated here, and it has moved into the
+      solver in robotPose.ts.
+
+      Two reasons. It was untestable in a useFrame, and it was wrong: the form
+      was `-x * w^2` against `-v * 2 * w`, which is a damping ratio of exactly
+      1.0, while the comment above it claimed it "overshoots very slightly and
+      reads as springy plastic". A critically damped spring has zero overshoot
+      by definition, so that bounce had never happened. Second, a landing moves
+      eleven joints and they all have to recover together or the beat reads as
+      eleven things happening near each other; one spring in the solver can
+      drive all of them, and a spring in here can only drive the scale.
+    */
+
+    /*
+      The ground ray. One per frame, on every tier.
+
+      Three consumers pay for it: the contact shadow's position and orientation,
+      the foot IK's reference plane, and eventually the emitters' ground point
+      and normal for dust and impact rings. That is why `GroundSample` is a
+      named type handed to the solver rather than the shadow quietly doing its
+      own cast, and it is why the ray lives here rather than in whichever
+      component happened to need it first.
+
+      Run in the frame loop rather than the physics step, because the shadow has
+      to sit under the INTERPOLATED position the player can see. Sampling it at
+      the fixed rate would make the shadow stutter against a character that does
+      not, which is more visible than either error alone.
+    */
+    const ground = groundRef.current!
+    const body = bodyRef.current
+    const collider = body?.collider(0)
+    if (body && collider) {
+      const t = body.translation()
+      /*
+        Origin 0.10 above the sole plane, which is `capsuleHalfHeight +
+        capsuleRadius` below the body centre.
+
+        `filterExcludeCollider` is mandatory, not defensive. Without it the ray
+        starts inside the character's own capsule, and with `solid = true`
+        Rapier reports an immediate hit on the player at distance zero. The
+        shadow then pins to the character's feet and never moves, which looks
+        almost right and is completely wrong.
+      */
+      scratch.ray.origin.x = t.x
+      scratch.ray.origin.y = t.y - 0.6
+      scratch.ray.origin.z = t.z
+      const hit = world.castRayAndGetNormal(
+        scratch.ray,
+        SHADOW.maxCastDistance,
+        true,
+        undefined,
+        undefined,
+        collider,
+      )
+      if (hit) {
+        ground.hit = true
+        ground.y = scratch.ray.origin.y - hit.timeOfImpact
+        // The ray starts 0.10 above the sole, so that much of the impact is the
+        // gap the character is standing in rather than height off the ground.
+        ground.distance = Math.max(0, hit.timeOfImpact - 0.1)
+        ground.nx = hit.normal.x
+        ground.ny = hit.normal.y
+        ground.nz = hit.normal.z
+      } else {
+        ground.hit = false
+        ground.distance = SHADOW.maxCastDistance
+      }
+    }
 
     // Keep the follow target in sync with the interpolated physics transform.
     if (playerRef.current && bodyRef.current) {
       const t = bodyRef.current.translation()
       playerRef.current.position.set(t.x, t.y, t.z)
+      /*
+        Publish the heading too. The follow target is the one thing the camera
+        already holds a reference to, so writing facing onto it is what lets the
+        camera swing round behind the player without a per-frame prop or a
+        second subscription. The visual group above uses the same value.
+      */
+      playerRef.current.rotation.y = facing.current
     }
 
     if (import.meta.env.DEV) {
+      /*
+        The VISUAL group, not the follow target. `playerRef` carries position
+        and heading for the camera and has no renderable children at all, so a
+        bounding box taken from it comes back empty - which is exactly what
+        happened, and it reported "no character" rather than "wrong object".
+
+        Published per frame rather than once in an effect, because the ref is
+        not guaranteed to be populated at the moment an effect with a stable
+        dependency list runs, and that effect never runs again to correct it.
+        A single assignment is cheaper than the bug it avoids.
+      */
+      devBridge.playerObject = visualRef.current
+
       /*
         Dev-only telemetry. Feel tuning is a play-adjust-play loop, and being able
         to read exact velocity, grounded state and timer values beats inferring
@@ -301,10 +551,48 @@ export function PlayerController({
         vx: velocity.current.x, vy: velocity.current.y, vz: velocity.current.z,
         speed: Math.hypot(velocity.current.x, velocity.current.z),
         grounded: anim.current.grounded,
+        /*
+          Physics steps taken since mount.
+
+          Here because "the character did not move" and "the character was never
+          asked to move" look identical from outside and have opposite fixes.
+          The screenshot harness teleports the capsule and expects it to fall the
+          rest of the way; when it did not, every other reading - position,
+          velocity, grounded - was a plausible-looking value left over from the
+          last step that actually ran, and there was nothing to distinguish a
+          settled character from a frozen one.
+        */
+        steps: debug.current.steps,
         coyote: coyoteTimer.current,
         buffer: bufferTimer.current,
+        /*
+          The depth and profile of the last squash impulse, not the live scale.
+          The live value is the solver's spring and is visible on the character
+          itself; what is useful here is what was asked for, because a landing
+          that looks wrong is nearly always a wrong depth rather than a wrong
+          recovery.
+        */
         squash: anim.current.squash,
+        squashMode: anim.current.squashMode,
+        squashSeq: anim.current.squashSeq,
+        /*
+          Events pushed, and events a consumer fell behind far enough to lose.
+          Exposed so a stall is visible rather than silent; the ring drops on
+          purpose rather than blocking the producer, and a dropped dust puff is
+          nothing, but a steadily climbing counter is a real problem.
+        */
+        events: anim.current.events.head,
+        eventsDropped: anim.current.events.dropped,
         facing: facing.current,
+        reviving: reviving.current,
+        dead: dead.current,
+        /*
+          The camera's angle and whether it is currently chasing. `camYaw`
+          against `facing` is the question worth asking now: half a turn apart
+          means the camera has caught up.
+        */
+        camYaw: cameraFrame.yaw,
+        following: cameraFrame.following,
         peakY: debug.current.peakY,
         jumps: debug.current.jumps,
         resetPeak: () => {
@@ -314,21 +602,72 @@ export function PlayerController({
     }
   })
 
+  /*
+    Let the screenshot harness place the character.
+
+    Registered here rather than reached into from outside because the body is
+    kinematic: the controller integrates the velocity itself, so a teleport that
+    only moved the body would leave the two disagreeing and the character would
+    slide back under its own momentum. Zeroing velocity and clearing the death
+    latch is what makes the move actually stick.
+  */
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    devBridge.teleport = (x, y, z, nextFacing) => {
+      /*
+        Both calls are needed, and setNextKinematicTranslation alone silently
+        does nothing here.
+
+        It sets where the body should be after the next step, but this
+        controller opens every step by reading the body's CURRENT translation
+        and setting the next one to current-plus-movement. So a pending target
+        is overwritten before it is ever applied. setTranslation moves the body
+        now, which is what the following step then reads.
+      */
+      bodyRef.current?.setTranslation({ x, y, z }, true)
+      bodyRef.current?.setNextKinematicTranslation({ x, y, z })
+      velocity.current.x = 0
+      velocity.current.y = 0
+      velocity.current.z = 0
+      if (nextFacing !== undefined) facing.current = nextFacing
+      dead.current = false
+      anim.current.squash = 1
+    }
+    return () => {
+      devBridge.teleport = null
+    }
+  }, [])
+
   return (
-    <RigidBody
-      ref={bodyRef}
-      type="kinematicPosition"
-      colliders={false}
-      position={spawn}
-      // Rotation is driven visually rather than physically; a rotating capsule
-      // buys nothing and complicates the collision response.
-      enabledRotations={[false, false, false]}
-    >
-      <CapsuleCollider args={[BODY.capsuleHalfHeight, BODY.capsuleRadius]} />
-      <group ref={visualRef} position={[0, -(BODY.capsuleHalfHeight + BODY.capsuleRadius), 0]}>
-        <RobotModel anim={anim} cosmetics={cosmetics} />
-      </group>
-    </RigidBody>
+    <>
+      <RigidBody
+        ref={bodyRef}
+        type="kinematicPosition"
+        colliders={false}
+        // The drop height is applied here as well as in the effect above. The
+        // effect runs after the first commit, so seeding the body at ground level
+        // would render one frame of the robot standing at the spawn before it
+        // teleports up to fall, which is visible as a flicker.
+        position={dropSpawn}
+        // Rotation is driven visually rather than physically; a rotating capsule
+        // buys nothing and complicates the collision response.
+        enabledRotations={[false, false, false]}
+      >
+        <CapsuleCollider args={[BODY.capsuleHalfHeight, BODY.capsuleRadius]} />
+        <group ref={visualRef} position={[0, -(BODY.capsuleHalfHeight + BODY.capsuleRadius), 0]}>
+          <RobotModel anim={anim} cosmetics={cosmetics} rt={rtRef} pose={poseRef} ground={groundRef} />
+        </group>
+        </RigidBody>
+
+      {/*
+        Outside the RigidBody, and that is the whole point.
+
+        Under the character's root the quad would inherit the squash scale, and
+        a shadow that squashes with the body is the classic tell of a fake
+        contact shadow. It is positioned in world space from the ray above.
+      */}
+      <ContactBlob pose={poseRef} color={contactTint} />
+    </>
   )
 }
 

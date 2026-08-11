@@ -1,34 +1,83 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useRapier } from '@react-three/rapier'
-import { Vector3, type Group } from 'three'
+import { Vector3, type Group, type PerspectiveCamera } from 'three'
 import { CAMERA } from '../player/tuning'
-import type { InputIntent } from '../input/useInput'
+import { stepCameraYaw } from '../player/movement'
+import { cameraFrame, resetCameraFrame } from './cameraFrame'
 
 /**
- * Third-person follow camera with spring damping and collision pull-in.
+ * Third-person follow camera with spring damping, collision pull-in, and
+ * automatic realignment behind the direction of travel.
  *
  * The collision handling is not a later polish item here. Portal scenes are
  * interiors such as caves and rooms, so the camera spends most of its life close
  * to walls. Without a pull-in raycast the player would spend that time looking
  * through geometry at the skybox.
+ *
+ * Realignment defers to the player without needing a timer. Dragging the mouse
+ * suppresses it for exactly the frames the mouse is moving, and moving the
+ * character resumes it immediately, which is the behaviour players expect from
+ * a third-person platformer: the camera tidies up after you, but never argues
+ * while you are actively aiming it.
+ *
+ * This component owns both angles in cameraFrame. The distinction between them
+ * is the difference between a camera that trails the player forever and one
+ * that arrives; the reasoning lives in cameraFrame.ts and stepInputYaw.
  */
 export function FollowCamera({
   target,
-  intent,
+  consumeLook,
   inputLocked,
+  cameraScale,
 }: {
   target: React.RefObject<Group | null>
-  intent: React.RefObject<InputIntent>
+  /**
+   * Reads the frame's orbit delta and zeroes it, from the input layer that owns
+   * it. See `useInput.consumeLook` for why the consumer clears it rather than the
+   * end-of-frame sweep.
+   */
+  consumeLook: () => { x: number; y: number }
   inputLocked: React.RefObject<boolean>
+  /**
+   * Per-scene multiplier on the rest offset, from `SceneDefinition`.
+   *
+   * Both components are scaled by it rather than only the distance, which is
+   * what preserves the rest pitch: how far down the camera looks is an art
+   * decision that belongs to the whole game, and how far back it can sit
+   * belongs to the room.
+   */
+  cameraScale: number
 }) {
   const camera = useThree((s) => s.camera)
   const { world, rapier } = useRapier()
 
   const yaw = useRef(0)
   const pitch = useRef(0.25)
+
+  /**
+   * Seconds of realignment suppression still owed to a manual orbit.
+   *
+   * A timer rather than a per-frame flag, because the thing being protected is a
+   * camera position the player chose, and they did not stop choosing it the
+   * instant their hand stopped moving.
+   */
+  const manualHold = useRef(0)
+
+  /*
+    The frame is a module singleton, so it outlives this component. Since the
+    camera is keyed by scene and its own yaw restarts at zero on every remount,
+    the shared copy has to be put back in step or the new scene would resolve
+    movement input against the previous scene's orientation.
+  */
+  useEffect(() => {
+    resetCameraFrame(yaw.current)
+  }, [])
+  const restDistance = CAMERA.distance * cameraScale
+  const restHeight = CAMERA.height * cameraScale
+
   /** Current distance, which eases back out after a collision rather than popping. */
-  const distance = useRef<number>(CAMERA.distance)
+  const distance = useRef<number>(restDistance)
 
   /**
    * Scratch vectors, allocated once and mutated every frame.
@@ -66,27 +115,135 @@ export function FollowCamera({
   /** Reused collision ray. Rapier's Ray is a plain JS object, so no free is needed. */
   const rayRef = useRef<InstanceType<typeof rapier.Ray> | null>(null)
 
-  useFrame((_, delta) => {
+
+  useFrame((state, delta) => {
     const focus = target.current
     if (!focus) return
 
+    /*
+      A pinned camera short-circuits everything below.
+
+      Placed here rather than by unmounting this component, because it is keyed
+      by scene: unmounting and remounting would re-run the first-frame snap on
+      release instead of resuming the spring from where it was.
+
+      The camera comes off the frame state rather than the one captured at
+      render, because changing the field of view is a property assignment and
+      the hooks lint rule rightly objects to mutating a render-scope binding.
+
+      **The yaw is published before the return, and leaving it out was expensive.**
+      The write at the bottom of this function is the only one there was, so a
+      pinned camera left `cameraFrame.yaw` frozen at whatever it last held -
+      zero, for a capture session that never moved the camera by hand. Every
+      consumer read that stale value for the whole of every screenshot.
+
+      The rim light is the one that mattered. It aims itself at
+      `cameraFrame.yaw` by design, because that is exactly the azimuth it needs
+      and it saves the lighting rig doing any camera maths. At `hub-backlit`,
+      whose entire purpose is to judge the rim and which is deliberately sited
+      on the key's own bearing, the rim should have been at 60.9 degrees and was
+      instead at 158.9: ninety-eight degrees off, a side light rather than a
+      backlight. Two independent reviewers then examined those screenshots and
+      both concluded the game had no rim light. It does; no shot ever contained
+      it. `camYaw` in the dev telemetry was reading zero for the same reason.
+    */
+    const override = cameraFrame.override
+    if (override) {
+      const cam = state.camera as PerspectiveCamera
+      cam.position.set(override.position[0], override.position[1], override.position[2])
+      cam.lookAt(override.lookAt[0], override.lookAt[1], override.lookAt[2])
+      if (cam.isPerspectiveCamera && cam.fov !== override.fov) {
+        cam.fov = override.fov
+        cam.updateProjectionMatrix()
+      }
+      /*
+        Azimuth of the direction the camera is now looking, in the same
+        convention `stepCameraYaw` uses: measured from +Z toward +X, which is
+        `atan2(-forward.x, -forward.z)` for a camera whose local forward is -Z.
+      */
+      cameraFrame.yaw = Math.atan2(
+        override.position[0] - override.lookAt[0],
+        override.position[2] - override.lookAt[2],
+      )
+      // Left false so releasing the pin does not immediately whip the camera
+      // round to wherever the robot happens to be pointing.
+      initialised.current = false
+      // Drained even here. See consumeLook below: the accumulator has exactly one
+      // consumer and it must be emptied on every frame that consumer runs, or a
+      // pinned or covered beat banks up every pixel of drag and applies the whole
+      // sum at once on the frame the pin releases.
+      consumeLook()
+      return
+    }
+
     const dt = Math.min(delta, 0.05)
 
-    // Orbit. Input is already accumulated for the frame by the input layer.
+    /*
+      Read the orbit delta and zero it in the same statement.
+
+      **This function owns the look accumulator.** It used to be cleared by
+      `endInputFrame()`, which runs at the end of `useBeforePhysicsStep` - and
+      Rapier's stepper is subscribed before this component, so on every frame the
+      physics accumulator took a step the delta was zeroed before it was ever
+      read. At 60 Hz that is most frames, which is why dragging felt throttled
+      rather than broken, and the gamepad right stick was completely dead because
+      `sample()` added to it inside the same step that cleared it.
+
+      A value cleared by the thing that reads it cannot be cleared before the
+      read, which is why ownership moved here rather than the call order being
+      rearranged. There is only one consumer, so there is nothing to share with.
+    */
+    const look = consumeLook()
+    const lookingManually = look.x !== 0 || look.y !== 0
+
     if (!inputLocked.current) {
-      yaw.current -= intent.current.lookX * CAMERA.mouseSensitivity
-      pitch.current += intent.current.lookY * CAMERA.mouseSensitivity
+      yaw.current += -look.x * CAMERA.mouseSensitivity
+      pitch.current += look.y * CAMERA.mouseSensitivity
       pitch.current = Math.max(CAMERA.minPitch, Math.min(CAMERA.maxPitch, pitch.current))
     }
+
+    /*
+      How long ago the player last moved the camera by hand.
+
+      Realignment is suppressed for `CAMERA.manualHold` after that, rather than
+      only on the exact frames a look delta arrived. The old test was
+      frame-instantaneous, so the moment a hand paused mid-drag - or on any frame
+      that happened to produce no `mousemove` - the spring took 8.8% of the way
+      back to behind the character, at a 126 ms half-life. Holding the camera
+      anywhere other than directly behind was impossible while moving, which is
+      the whole of "I cannot rotate round to see the character's face".
+    */
+    if (lookingManually) manualHold.current = CAMERA.manualHold
+    else manualHold.current = Math.max(0, manualHold.current - dt)
+
+    // ---- Realign behind the direction the robot is pointing ----------------
+    /*
+      Whether the player is driving comes from the controller rather than from
+      measuring how fast the follow target is moving. Under tank controls those
+      are different questions: rotating on the spot has no speed at all, and it
+      is precisely when the camera most needs to come round.
+    */
+    if (!inputLocked.current) {
+      // Heading is published onto the follow target by PlayerController.
+      yaw.current = stepCameraYaw({
+        yaw: yaw.current,
+        facing: focus.rotation.y,
+        following: cameraFrame.following,
+        lookingManually: manualHold.current > 0,
+        dt,
+      })
+    }
+
+    cameraFrame.yaw = yaw.current
 
     scratch.lookAt.copy(focus.position)
     scratch.lookAt.y += CAMERA.lookHeight
 
     // Ideal camera position on a sphere around the look target.
-    const horizontal = Math.cos(pitch.current) * CAMERA.distance
+    const horizontal = Math.cos(pitch.current) * restDistance
     scratch.offset.set(
       Math.sin(yaw.current) * horizontal,
-      CAMERA.height + Math.sin(pitch.current) * CAMERA.distance,
+      restHeight + Math.sin(pitch.current) * restDistance,
       Math.cos(yaw.current) * horizontal,
     )
 

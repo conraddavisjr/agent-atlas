@@ -1,4 +1,4 @@
-import { JUMP, MOVEMENT } from './tuning'
+import { CAMERA, JUMP, MOVEMENT } from './tuning'
 
 /**
  * The parts of the character controller that decide how movement FEELS,
@@ -126,4 +126,131 @@ export function approachAngle(current: number, target: number, maxDelta: number)
   while (diff < -Math.PI) diff += Math.PI * 2
   if (Math.abs(diff) <= maxDelta) return target
   return current + Math.sign(diff) * maxDelta
+}
+
+/** Wrap an angle into [-PI, PI]. */
+export function wrapAngle(angle: number): number {
+  let a = angle
+  while (a > Math.PI) a -= Math.PI * 2
+  while (a < -Math.PI) a += Math.PI * 2
+  return a
+}
+
+export type RealignInput = {
+  /** Current camera orbit angle. */
+  yaw: number
+  /** The direction the robot is pointing, which is now driven straight by input. */
+  facing: number
+  /**
+   * Whether the player is actively driving, by moving or by turning.
+   *
+   * Turning counts, and that is the point. Under tank controls a rotation on
+   * the spot has no speed at all, and gating on speed the way this used to
+   * would leave the camera parked on the character's side through every turn.
+   */
+  following: boolean
+  /** True on any frame the player moved the mouse or the right stick. */
+  lookingManually: boolean
+  dt: number
+}
+
+/**
+ * One step of the camera swinging back behind the player.
+ *
+ * Pure and separate from FollowCamera for the same reason the jump rules are:
+ * "does dragging the mouse still win while turning" is a question with an exact
+ * answer, and answering it by playing the game is slower and less reliable than
+ * answering it in a test.
+ *
+ * Manual look always wins, because a player actively aiming the camera is
+ * making a decision the game should not overrule. Otherwise the camera follows
+ * whenever the player is driving, and holds still when they are not, so a view
+ * someone deliberately set does not creep back on its own.
+ *
+ * The step is exponential rather than a constant rate, which is the same
+ * frame-rate independent damping the camera already uses for its position. A
+ * fixed radians-per-second cannot be right at both ends of the range: slow
+ * enough that a two degree correction is invisible is far too slow to bring the
+ * camera round from half a turn, and fast enough to do that whips the view on
+ * every small heading change. Damping is proportional to the error, so it is
+ * both at once.
+ */
+export function stepCameraYaw(input: RealignInput): number {
+  const { yaw, facing, following, lookingManually, dt } = input
+
+  if (lookingManually) return yaw
+  if (!following) return yaw
+
+  /*
+    The camera sits behind the player, so the target is the heading turned
+    around. The offset in FollowCamera is built from sin(yaw)/cos(yaw), which
+    points from the player toward the camera, whereas facing points the way the
+    player is going. Half a turn apart.
+  */
+  const target = facing + Math.PI
+  const error = wrapAngle(target - yaw)
+
+  if (Math.abs(error) < CAMERA.realignDeadzone) return yaw
+
+  return yaw + error * (1 - Math.exp(-CAMERA.realignDamping * dt))
+}
+
+export type DriveInput = {
+  /** Lateral input, -1 for left. Turns the robot and nothing else. */
+  moveX: number
+  /** Forward input, -1 for forward. Screen convention, as the input layer emits it. */
+  moveY: number
+  /** The robot's current heading. */
+  facing: number
+  dt: number
+}
+
+export type DriveResult = {
+  /** The new heading after this step's rotation. */
+  facing: number
+  /**
+   * How hard to drive along that heading, from -1 to 1.
+   *
+   * Kept separate from the heading so the caller can scale it by top speed and
+   * hand it to the same acceleration curve everything else uses. Turning does
+   * not contribute to it at all, which is the whole rule: left and right rotate
+   * and never translate.
+   */
+  throttle: number
+}
+
+/**
+ * Tank controls: turn in place, drive along your own facing.
+ *
+ * Left and right rotate the robot and move it nowhere. Forward and back drive
+ * it along wherever it is currently pointing. Held together they produce an arc
+ * without either being a special case, which is the reason for doing it this
+ * way rather than adding a curve to camera-relative movement.
+ *
+ * Facing is now authoritative state rather than something derived from
+ * velocity. That is the substantive change: a heading read back from velocity
+ * can only ever describe where the character has already been, so it cannot be
+ * turned on the spot, and it is noisy at low speed.
+ *
+ * It also removes the problem the previous two rounds were spent on. Direction
+ * of travel no longer consults the camera, so realigning the camera cannot
+ * change where the player is going, and the feedback loop that made
+ * auto-alignment chase its own tail has nowhere to form.
+ */
+export function stepDrive({ moveX, moveY, facing, dt }: DriveInput): DriveResult {
+  /*
+    Left is negative moveX and has to increase facing. Forward is
+    (sin f, 0, cos f), so its derivative with respect to f is (cos f, 0, -sin f),
+    which points to the left of forward. A rising facing therefore swings the
+    robot left.
+  */
+  const next = facing - moveX * MOVEMENT.turnRate * dt
+
+  // The input layer uses screen convention, where forward is negative.
+  return { facing: wrapAngle(next), throttle: -moveY }
+}
+
+/** The unit heading vector for a facing angle, on the ground plane. */
+export function headingVector(facing: number): { x: number; z: number } {
+  return { x: Math.sin(facing), z: Math.cos(facing) }
 }

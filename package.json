@@ -1,5 +1,5 @@
 {
-  "name": "ai-education-game",
+  "name": "agent-atlas",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -10,7 +10,10 @@
     "lint": "eslint .",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "bake:lightmap": "node tools/bake/lightmap.mjs",
+    "critique:sink": "node tools/critique/shotsink.mjs",
+    "critique:frame": "node tools/critique/frame.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.8",

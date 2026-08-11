@@ -2,6 +2,7 @@ import { useGameStore, useProgress } from '@/state/gameStore'
 import { LESSONS, ZONES } from '@/state/lessons'
 import { zoneProgress } from '@/state/progression'
 import { getScene } from '@/game/scenes/registry'
+import { QualitySelector } from './QualitySelector'
 
 /**
  * DOM overlay rather than in-canvas UI.
@@ -22,7 +23,7 @@ export function HUD() {
   const alreadyDone = activeLesson ? progress.completedLessons.includes(activeLesson.id) : false
 
   return (
-    <div style={styles.root}>
+    <div style={styles.root} data-hud="">
       <div style={styles.topLeft}>
         <div style={styles.sceneTitle}>{scene.title}</div>
         {stats && (
@@ -33,9 +34,17 @@ export function HUD() {
       </div>
 
       <div style={styles.topRight}>
-        <Key label="WASD / Arrows" action="Move" />
+        <Key label="W / S" action="Drive" />
+        <Key label="A / D" action="Turn" />
         <Key label="Space" action="Jump" />
-        <Key label="Drag" action="Look" />
+        {/*
+          Both gestures, because they are genuinely different affordances rather
+          than aliases: a drag is bounded by the size of the trackpad, so scroll
+          is the one that can turn the camera all the way round to the front of
+          the character in a single motion.
+        */}
+        <Key label="Drag / Scroll" action="Look" />
+        <QualitySelector />
       </div>
 
       {/*

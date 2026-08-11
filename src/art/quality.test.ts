@@ -1,0 +1,405 @@
+import { describe, it, expect } from 'vitest'
+import { DECAL_KINDS } from './decalTextures'
+import { QUALITY, selectTier, isQualityTier, type DeviceProfile } from './quality'
+
+const profile = (over: Partial<DeviceProfile> = {}): DeviceProfile => ({
+  renderer: 'NVIDIA GeForce RTX 3070',
+  cores: 16,
+  memoryGb: 8,
+  ...over,
+})
+
+describe('tier selection', () => {
+  it('gives a discrete GPU the top tier', () => {
+    expect(selectTier(profile())).toBe('high')
+  })
+
+  it('never gives a software rasteriser anything but the lowest', () => {
+    // No GPU behind the context, so nothing else about the machine matters.
+    expect(selectTier(profile({ renderer: 'llvmpipe (LLVM 15.0.7)', cores: 32 }))).toBe('low')
+    expect(selectTier(profile({ renderer: 'Google SwiftShader', cores: 32 }))).toBe('low')
+  })
+
+  it('treats Apple Silicon as fast despite being integrated', () => {
+    // The case a plain integrated-substring check gets wrong, and the reason
+    // that check is not the first thing the function does.
+    expect(selectTier(profile({ renderer: 'Apple M2 Pro', cores: 10 }))).toBe('high')
+  })
+
+  it('caps Intel integrated graphics below the top tier', () => {
+    expect(selectTier(profile({ renderer: 'Intel(R) UHD Graphics 620', cores: 8 }))).toBe(
+      'medium',
+    )
+    expect(selectTier(profile({ renderer: 'Intel(R) HD Graphics 4000', cores: 2 }))).toBe('low')
+  })
+
+  it('caps mobile GPUs the same way', () => {
+    expect(selectTier(profile({ renderer: 'Mali-G78', cores: 8 }))).toBe('medium')
+    expect(selectTier(profile({ renderer: 'Adreno (TM) 640', cores: 4 }))).toBe('low')
+  })
+
+  it('guesses from core count when the renderer is masked', () => {
+    // A privacy-masked desktop browser is more likely than a machine too old to
+    // name itself, so this must not fall through to the worst case.
+    expect(selectTier(profile({ renderer: '', cores: 12 }))).toBe('medium')
+    expect(selectTier(profile({ renderer: 'unknown', cores: 2 }))).toBe('low')
+  })
+
+  it('steps a named but weak discrete card down one', () => {
+    expect(selectTier(profile({ renderer: 'AMD Radeon HD 7000', memoryGb: 4 }))).toBe('medium')
+    expect(selectTier(profile({ renderer: 'NVIDIA GeForce GT 710', cores: 4 }))).toBe('medium')
+  })
+
+  it('is case insensitive about the renderer string', () => {
+    expect(selectTier(profile({ renderer: 'INTEL(R) IRIS(TM) PLUS', cores: 8 }))).toBe('medium')
+  })
+})
+
+describe('tier settings', () => {
+  it('orders every cost monotonically across the tiers', () => {
+    // The property that makes the tiers meaningful: "higher" must never be
+    // cheaper on any axis, or a player lowering their settings could get a
+    // worse frame rate.
+    const { low, medium, high } = QUALITY
+    expect(low.grassBlades).toBeLessThan(medium.grassBlades)
+    expect(medium.grassBlades).toBeLessThan(high.grassBlades)
+    expect(low.flowers).toBeLessThan(medium.flowers)
+    expect(medium.flowers).toBeLessThan(high.flowers)
+    expect(low.shadowMapSize).toBeLessThan(medium.shadowMapSize)
+    expect(medium.shadowMapSize).toBeLessThan(high.shadowMapSize)
+    expect(low.propDensity).toBeLessThan(medium.propDensity)
+    expect(medium.propDensity).toBeLessThan(high.propDensity)
+    expect(low.maxDpr).toBeLessThanOrEqual(medium.maxDpr)
+    expect(medium.maxDpr).toBeLessThanOrEqual(high.maxDpr)
+  })
+
+  it('never casts grass into the shadow map, at any tier', () => {
+    /*
+      This was the one setting reserved for the top tier, on the grounds that it
+      is the most expensive thing in the game. It is off everywhere now, and the
+      reason is image quality rather than cost.
+
+      Two hundred thousand blades stippling a shadow map do not resolve into
+      shade; they resolve into blade-shaped noise, and the map is sampled by
+      every surface in the scene, so the noise lands on stone decks and on the
+      character's white shell metres from any grass. Measured as RMS deviation
+      from a 5x5 local mean, on a plain stone deck in `hub-totem`: 0.11 at low,
+      0.34 at medium, and 1.29 at high, against 0.17 in the pre-round baseline.
+      The tier that is supposed to look best looked worn and dirty, and it was
+      the only tier that did.
+
+      Asserted across all three tiers rather than deleted, because "turn grass
+      shadow casting back on at high" is exactly the change a future performance
+      or fidelity pass would reach for, and the cost of finding this out again
+      is a full critique round.
+    */
+    expect(QUALITY.low.grassCastShadow).toBe(false)
+    expect(QUALITY.medium.grassCastShadow).toBe(false)
+    expect(QUALITY.high.grassCastShadow).toBe(false)
+  })
+
+  it('never runs ambient occlusion, at any tier', () => {
+    /*
+      Decided in `docs/design/97-decision-shadow-end.md` item 9, and asserted
+      across all three tiers rather than only at `low`, for the same reason
+      `grassCastShadow` is: "turn AO back on at high" is precisely the change a
+      future fidelity pass reaches for, and the cost of rediscovering why not is
+      a full critique round.
+
+      Three reasons, in the order they were established.
+
+      Cost: about half the frame rate at high. Three alternating runs each at
+      1660x934 on `hub-establishing` after the grass-shadow fix gave 35.9 / 21.0
+      / 31.3 mean fps with the pass on against 74.2 / 61.7 / 59.9 with it off,
+      p95 11.5 / 9.5 / 10.0 against 21.9 / 22.4 / 15.6. No overlap in either
+      column. Only the alternated ratio is evidence - absolute fps from that
+      machine moved 65.5 to 21-36 across two sessions with nothing changed.
+
+      Reach: it cannot be the frame's shadow end even in principle. n8ao
+      composites `mix(scene, color * scene, 1 - pow(visibility, intensity))`, so
+      with `color = #8fa4cc` a FULLY occluded pixel floors at 37% of its own
+      value. On a lawn at 0.50 display luma that is 0.35 at absolute best. The
+      band this round is about starts at 0.06 and the pass has no arithmetic
+      route to it.
+
+      Parity: false / true / true is the ladder changing the ART rather than the
+      fidelity, which section 7 of the art bible and round 1's F5 both forbid. An
+      occlusion pass moves the value of the largest surface in the frame; it is
+      not a resolution setting.
+
+      `?gfx=ao` turns it back on at all three tiers without a rebuild, which is
+      what keeps the measurement above repeatable. See `fx.ts`.
+    */
+    expect(QUALITY.low.ambientOcclusion).toBe(false)
+    expect(QUALITY.medium.ambientOcclusion).toBe(false)
+    expect(QUALITY.high.ambientOcclusion).toBe(false)
+
+    // The tuned settings survive the removal, deliberately: they are
+    // measurements, and `?gfx=ao` has to reach a pass configured the way the
+    // one that was measured was configured, or the A/B compares two unknowns.
+    expect(QUALITY.low.aoSamples).toBe(16)
+    expect(QUALITY.low.aoDenoiseSamples).toBe(4)
+    expect(QUALITY.high.aoHalfRes).toBe(true)
+  })
+
+  it('denoises ambient occlusion enough to hide its own jitter where it is visible', () => {
+    /*
+      Only reachable through `?gfx=ao` now that the pass is off at every tier,
+      and kept for exactly that reason: the diagnostic has to see the
+      configuration that was measured, not the wrapper's defaults.
+
+      n8ao leaves `accumulate` off, so its sampling jitter is a fixed pattern
+      rather than something that averages away over frames, and the denoise
+      count is the only thing between that pattern and the screen. The wrapper's
+      default of 4 put a visible crackle on the character's shell as soon as
+      anything on him started occluding.
+
+      Asserted rather than commented because the setting that used to control
+      this was a preset string the wrapper never read, so it looked configured
+      for as long as anyone cared to look.
+
+      Note what is deliberately NOT asserted: that `high` takes more ambient
+      samples than `medium`. Doubling 16 to 32 was tried against the actual
+      defect and moved it by 0.03 of a standard deviation, because the pattern
+      is the sampling kernel rather than noise in it. Raising a number that does
+      not help, and then pinning it with a test, is how a codebase acquires
+      settings nobody dares touch.
+    */
+    expect(QUALITY.medium.aoDenoiseSamples).toBeGreaterThanOrEqual(8)
+    expect(QUALITY.high.aoDenoiseSamples).toBeGreaterThanOrEqual(8)
+  })
+
+  it('defines every setting on every tier', () => {
+    /*
+      The classic failure this catches is a field added to `high` and `medium`
+      and forgotten at `low`, which then reads as `undefined` and behaves like
+      whichever falsy or NaN value the consumer happens to produce. TypeScript
+      catches a missing key at build time, but only while every tier is written
+      out by hand in one file, and this table is exactly the kind of thing that
+      later grows a spread or a generated default.
+
+      Asserting key-set equality rather than a hard-coded list means the test
+      keeps working as fields are added, and still fails the moment three tiers
+      stop agreeing on what a tier is.
+    */
+    const low = Object.keys(QUALITY.low).sort()
+    const medium = Object.keys(QUALITY.medium).sort()
+    const high = Object.keys(QUALITY.high).sort()
+
+    expect(medium).toEqual(low)
+    expect(high).toEqual(low)
+
+    for (const tier of ['low', 'medium', 'high'] as const) {
+      for (const [key, value] of Object.entries(QUALITY[tier])) {
+        expect(value, `${tier}.${key}`).not.toBeUndefined()
+        if (typeof value === 'number') expect(Number.isFinite(value), `${tier}.${key}`).toBe(true)
+      }
+    }
+  })
+
+  it('carries every field the art overhaul specs gate against', () => {
+    /*
+      Named explicitly, and not derived from the type, because the point of the
+      assertion is that this shape is the frozen interface several streams build
+      against. Deleting or renaming one of these is a cross-stream break and
+      should fail here rather than in someone else's half-finished feature.
+    */
+    const required = [
+      'rimLight',
+      'bounceFill',
+      'contactShadow',
+      'shadowRadius',
+      'shadowBlurSamples',
+      'hemisphereIntensity',
+      'envResolution',
+      'depthOfField',
+      'chromaticAberration',
+      'colourGrade',
+      'bloomLevels',
+      'aoSamples',
+      'aoDenoiseSamples',
+      'aoHalfRes',
+      'surfaceMapSize',
+      'sheenHero',
+      'sheenWorld',
+      'anisotropy',
+      'transmission',
+      'bevelSmoothness',
+      'crystalGroves',
+      'traceSegments',
+      'nodeShells',
+      'pylonCount',
+      'pylonDetail',
+      'visorDetail',
+      'decals',
+      'wrapDiffuse',
+      'footIk',
+      'particleBudget',
+      'vfxDetail',
+      'faceAnimation',
+    ]
+
+    for (const tier of ['low', 'medium', 'high'] as const) {
+      for (const key of required) {
+        expect(QUALITY[tier], `${tier}.${key}`).toHaveProperty(key)
+      }
+    }
+  })
+
+  it('applies the surface-map ladder, and generates a real map at each step', () => {
+    /*
+      The ladder, asserted against the generator rather than against a promise.
+
+      This exists because the previous gate was "zero everywhere until
+      `surfaceTexture.ts` exists", a condition phrased as a filename that was then
+      satisfied by a module called `decalTextures.ts`. Nothing failed; the ladder
+      simply stayed flat for two rounds while every walkable surface in the game
+      rendered with three null map slots and looked like blank plastic.
+
+      So this asserts on the thing that has to be true: each non-zero tier value
+      is a size the generator will actually accept. `createDecalMaps` is typed
+      `512 | 1024` and returns null without a DOM, so it cannot be called here -
+      but the type is the contract, and `DECAL_KINDS` proves the kinds the
+      batches ask for exist.
+    */
+    expect(QUALITY.low.surfaceMapSize).toBe(0)
+    expect(QUALITY.medium.surfaceMapSize).toBe(512)
+    expect(QUALITY.high.surfaceMapSize).toBe(1024)
+
+    // The two kinds the hub's batches request. A rename here would otherwise
+    // surface as an untextured deck rather than as an error.
+    expect(DECAL_KINDS).toHaveProperty('deck')
+    expect(DECAL_KINDS).toHaveProperty('trim')
+
+    // Low stays genuinely zero-cost: no canvas work, no uploads, no extra
+    // shader variants, which is the whole reason the bottom of the ladder is 0
+    // rather than 256.
+    expect(QUALITY.low.surfaceMapSize).toBe(0)
+  })
+
+  it('leaves every unbuilt system inert at every tier', () => {
+    /*
+      These fields were added before the systems they configure. Until each
+      system lands with its own acceptance evidence, none of them may be on at
+      any tier, because a gate that defaults on turns "build the rim light" into
+      "build the rim light and change the image at three tiers" in one commit,
+      which is the one thing the rollout discipline forbids.
+
+      A stream flipping one of these is expected to change this test in the same
+      commit. That is the point: the change becomes deliberate and reviewable
+      rather than a value nobody noticed.
+
+      `rimLight`, `bounceFill` and `contactShadow` have left this list because
+      the light rig and the blob now exist and landed with their acceptance
+      shots, and `colourGrade` because the LUT does - it is on at every tier
+      including `low`, where it replaces two grading effects with one texture
+      fetch and is therefore cheaper than what it removes. `footIk` has left it
+      too: the springs and the ground sample it drives are built, so leaving the
+      flag false meant shipping code that never ran.
+
+      **And `surfaceMapSize` has left it, which is the case this test was written
+      to prevent and did not.** The rule above says a gate for a system that does
+      not exist is zero at every tier, with the spec's ladder in its comment. The
+      comment said "zero everywhere until `surfaceTexture.ts` exists" - and the
+      module shipped as `decalTextures.ts` instead, so the named condition was
+      satisfied by a file with a different name and nothing noticed. This test
+      went on passing, correctly, for two rounds while the largest surface in the
+      game rendered with three null map slots.
+
+      The lesson is in the assertion below rather than in this comment: a gate
+      whose condition is "until some file exists" should assert on the thing, not
+      on the intention. `decalTextures.ts` is now imported here, so the ladder and
+      the generator cannot drift apart again.
+    */
+    for (const tier of ['low', 'medium', 'high'] as const) {
+      const q = QUALITY[tier]
+      expect(q.depthOfField, tier).toBe(false)
+      expect(q.chromaticAberration, tier).toBe(false)
+      expect(q.decals, tier).toBe(false)
+      expect(q.wrapDiffuse, tier).toBe(false)
+      expect(q.particleBudget, tier).toBe(0)
+      expect(q.vfxDetail, tier).toBe('off')
+      expect(q.faceAnimation, tier).toBe(false)
+    }
+  })
+
+  it('keeps the bottom tier genuinely zero-cost on every new axis', () => {
+    /*
+      "Genuinely zero-cost" is stronger than "cheap": at `low`, nothing here may
+      allocate a canvas, upload a texture, compile a shader variant, or add a
+      draw call. Every one of these assertions is a thing that would do one of
+      those.
+    */
+    const low = QUALITY.low
+    expect(low.surfaceMapSize).toBe(0)
+    expect(low.sheenHero).toBe(false)
+    expect(low.sheenWorld).toBe(false)
+    expect(low.anisotropy).toBe(false)
+    expect(low.wrapDiffuse).toBe(false)
+    expect(low.decals).toBe(false)
+    expect(low.particleBudget).toBe(0)
+    expect(low.depthOfField).toBe(false)
+    expect(low.chromaticAberration).toBe(false)
+    expect(low.ambientOcclusion).toBe(false)
+    // Never above the tier above it, on any axis that costs frame time.
+    expect(low.shadowRadius).toBeLessThanOrEqual(QUALITY.medium.shadowRadius)
+    expect(low.shadowBlurSamples).toBeLessThanOrEqual(QUALITY.medium.shadowBlurSamples)
+    expect(low.envResolution).toBeLessThanOrEqual(QUALITY.medium.envResolution)
+    expect(low.bloomLevels).toBeLessThanOrEqual(QUALITY.medium.bloomLevels)
+    expect(low.bevelSmoothness).toBeLessThanOrEqual(QUALITY.medium.bevelSmoothness)
+  })
+
+  it('gives every tier the two elements that most help a weak image', () => {
+    /*
+      The rim and the contact blob are on everywhere, including `low`, and that
+      is a deliberate exception to "the bottom tier gets less of everything".
+      `low` already gives up ambient occlusion, soft shadows and clouds; taking
+      the rim as well would leave it looking like a different game rather than a
+      cheaper one, and a 1024 shadow map cannot glue the robot to the floor on
+      its own, which is exactly what the blob is for.
+
+      The bounce fill is the one light `low` does not get, which keeps it at
+      three directionals - the same count it had before the rig - and the
+      hemisphere rises to absorb it.
+    */
+    for (const tier of ['low', 'medium', 'high'] as const) {
+      expect(QUALITY[tier].rimLight, tier).toBe(true)
+      expect(QUALITY[tier].contactShadow, tier).toBe(true)
+    }
+    expect(QUALITY.low.bounceFill).toBe(false)
+    expect(QUALITY.medium.bounceFill).toBe(true)
+    expect(QUALITY.high.bounceFill).toBe(true)
+    expect(QUALITY.low.hemisphereIntensity).toBeGreaterThan(QUALITY.medium.hemisphereIntensity)
+  })
+
+  it('orders the new numeric dials monotonically as well', () => {
+    const { low, medium, high } = QUALITY
+    expect(medium.shadowRadius).toBeLessThanOrEqual(high.shadowRadius)
+    expect(medium.shadowBlurSamples).toBeLessThanOrEqual(high.shadowBlurSamples)
+    expect(medium.envResolution).toBeLessThanOrEqual(high.envResolution)
+    expect(medium.bloomLevels).toBeLessThanOrEqual(high.bloomLevels)
+    expect(medium.bevelSmoothness).toBeLessThanOrEqual(high.bevelSmoothness)
+    expect(medium.particleBudget).toBeLessThanOrEqual(high.particleBudget)
+    expect(medium.surfaceMapSize).toBeLessThanOrEqual(high.surfaceMapSize)
+    expect(low.crystalGroves).toBeLessThanOrEqual(medium.crystalGroves)
+    expect(medium.crystalGroves).toBeLessThanOrEqual(high.crystalGroves)
+    expect(low.traceSegments).toBeLessThanOrEqual(medium.traceSegments)
+    expect(medium.traceSegments).toBeLessThanOrEqual(high.traceSegments)
+    expect(low.pylonCount).toBeLessThanOrEqual(medium.pylonCount)
+    expect(medium.pylonCount).toBeLessThanOrEqual(high.pylonCount)
+    // The hemisphere runs the other way: it is raised at `low` to absorb the
+    // bounce fill that tier does not get, so the only invariant is the cap.
+    expect(low.hemisphereIntensity).toBeLessThanOrEqual(0.6)
+    expect(medium.hemisphereIntensity).toBeLessThanOrEqual(0.6)
+    expect(high.hemisphereIntensity).toBeLessThanOrEqual(0.6)
+  })
+})
+
+describe('isQualityTier', () => {
+  it('accepts only the three tiers', () => {
+    expect(isQualityTier('high')).toBe(true)
+    expect(isQualityTier('ultra')).toBe(false)
+    expect(isQualityTier(null)).toBe(false)
+    expect(isQualityTier(undefined)).toBe(false)
+  })
+})

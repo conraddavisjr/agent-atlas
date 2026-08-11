@@ -1,10 +1,13 @@
-import { useRef, useState } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { useMemo, useRef, useState } from 'react'
 import { RigidBody, CuboidCollider } from '@react-three/rapier'
-import { RoundedBox, Text } from '@react-three/drei'
-import type { Group, Mesh, MeshPhysicalMaterial } from 'three'
+import { Billboard, RoundedBox, Text } from '@react-three/drei'
+import type { Group } from 'three'
 import { palette } from '@/art/palette'
-import { emissive, mattePlastic, plastic } from '@/art/materials'
+import { GLOW, emissive, mattePlastic, metal, plastic, rubber, stone } from '@/art/materials'
+import { useMouldedStone } from '@/art/textures'
+import { createDecalMaps, ventGrille, DECAL_KINDS } from '@/art/decalTextures'
+import { useQuality } from '@/art/useQuality'
+import { PortalShimmer } from '@/art/PortalShimmer'
 import { useProximity } from '../interaction/useProximity'
 
 /**
@@ -16,6 +19,35 @@ import { useProximity } from '../interaction/useProximity'
  * AND missing their glow, so the read holds even for a colourblind player who
  * cannot rely on the desaturation alone.
  */
+/**
+ * The two jambs' footprint, in the portal's own local space.
+ *
+ * Exported because the jamb-on-T3 junction is one of the three flat-on-flat
+ * corners the ambient occlusion pass was genuinely earning its cost at, and with
+ * that pass gone the hub's contact-decal batch has to put the band there
+ * instead. The batch is built in `HubIsland.tsx` so that every contact in the
+ * scene stays one draw call, which means the numbers have to leave this file.
+ *
+ * They are read by the meshes below as well as exported, so the decal and the
+ * geometry cannot drift apart - which is the whole reason this is a constant
+ * rather than three literals repeated in two files.
+ *
+ * An all-caps constant export, which is what keeps fast refresh working for this
+ * file: the lint rule permits a constant beside a component and only objects to a
+ * shared function. `LessonTotem.tsx` exports `TOTEM` on the same basis, for the
+ * same reason - an object's dimensions belong with the object.
+ */
+export const PORTAL_JAMB = {
+  /** Half-extent across the opening. */
+  halfX: 0.25,
+  /** Half-extent through the wall. Deeper than it is wide, so contact is elliptical. */
+  halfZ: 0.35,
+  /** Height, and therefore also the height of the lintel's underside. */
+  height: 3.4,
+  /** Distance from the portal's centreline to each jamb's centre. */
+  spacing: 1.5,
+} as const
+
 export function Portal({
   position,
   rotation = 0,
@@ -32,9 +64,52 @@ export function Portal({
   onEnter: () => void
 }) {
   const anchor = useRef<Group>(null)
-  const fill = useRef<Mesh>(null)
   const [near, setNear] = useState(false)
   const triggered = useRef(false)
+
+  /*
+    Moulded stone, not a photograph of granite.
+
+    This was the project's last call site for the ambientCG rock, and it was the
+    one place it did the most damage. The arch is the only object in the hub
+    with any legible surface at all: every deck, puck, kerb, pylon and totem
+    beside it is flat-shaded plastic with no texture whatsoever, so a
+    high-frequency photographic normal map with visible tiling met untextured
+    plastic across a two-pixel edge. Two art styles touching, and the eye goes
+    to the one object that is wrong because it is the only one carrying detail.
+
+    `useMouldedStone` is generated in `groundTexture.ts` and has the identical
+    shape, so this is a one-import change. The tiling stays at the same density:
+    the arch pieces are under a metre across, and a low repeat stretches one
+    stone over a whole leg.
+  */
+  const archStone = useMouldedStone([1.4, 3])
+
+  /*
+    Panel lines and a vent group on the sealed slab.
+
+    The vent is one of only three placements the fiction earns anywhere in this
+    world - the robot's back, the totem plinth's collar, and this arch, because
+    the arch is the machine that does the travelling. It is drawn INTO the
+    slab's height mask rather than placed as a decal mesh, which costs nothing
+    extra: the mask is being rasterised anyway and the vent is simply another
+    set of marks on it.
+
+    Null at every tier today, because `surfaceMapSize` is 0 everywhere until the
+    stream that owns the tier table turns it on. A caller that gets null spreads
+    no maps, so the material compiles exactly the program it would have compiled
+    anyway, which is what "low must be genuinely zero cost" means.
+  */
+  const quality = useQuality()
+  const slabMaps = useMemo(() => {
+    if (!quality.surfaceMapSize) return null
+    const metresPerTile = DECAL_KINDS.hull.metresPerTile
+    return createDecalMaps(
+      'hull',
+      quality.surfaceMapSize,
+      ventGrille({ x: 0.5, y: 0.28, slots: 7, slotLength: 0.09, metresPerTile }),
+    )
+  }, [quality.surfaceMapSize])
 
   useProximity(
     anchor,
@@ -54,15 +129,6 @@ export function Portal({
     },
   )
 
-  useFrame((state) => {
-    if (!fill.current || locked) return
-    // A slow pulse on the fill so an open portal reads as active from across the
-    // island, which is what draws the player toward it without a waypoint marker.
-    const t = state.clock.elapsedTime
-    const mat = fill.current.material as MeshPhysicalMaterial
-    mat.emissiveIntensity = 1.6 + Math.sin(t * 2) * 0.4
-  })
-
   const frameColor = locked ? palette.locked : palette.accent
   /*
     The locked arch uses the mid grey, not the deep one. When frame and door were
@@ -81,18 +147,18 @@ export function Portal({
         {[-1, 1].map((side) => (
           <RoundedBox
             key={side}
-            args={[0.5, 3.4, 0.7]}
+            args={[PORTAL_JAMB.halfX * 2, PORTAL_JAMB.height, PORTAL_JAMB.halfZ * 2]}
             radius={0.12}
             smoothness={3}
-            position={[side * 1.5, 1.7, 0]}
+            position={[side * PORTAL_JAMB.spacing, PORTAL_JAMB.height / 2, 0]}
             castShadow
             receiveShadow
           >
-            <meshPhysicalMaterial {...mattePlastic(stoneColor)} />
+            <meshPhysicalMaterial {...stone(stoneColor, archStone)} />
           </RoundedBox>
         ))}
         <RoundedBox args={[3.5, 0.5, 0.7]} radius={0.12} smoothness={3} position={[0, 3.55, 0]} castShadow>
-          <meshPhysicalMaterial {...mattePlastic(stoneColor)} />
+          <meshPhysicalMaterial {...stone(stoneColor, archStone)} />
         </RoundedBox>
 
         <CuboidCollider args={[0.25, 1.7, 0.35]} position={[-1.5, 1.7, 0]} />
@@ -106,15 +172,27 @@ export function Portal({
 
       {/* Trim, which carries the accent colour when open. */}
       <RoundedBox args={[3.1, 0.16, 0.16]} radius={0.05} smoothness={3} position={[0, 3.3, 0.35]}>
-        <meshPhysicalMaterial {...(locked ? mattePlastic(frameColor) : emissive(frameColor, 1.6))} />
+        <meshPhysicalMaterial {...(locked ? mattePlastic(frameColor) : emissive(frameColor, GLOW.bloom))} />
       </RoundedBox>
 
       {/* The opening itself. */}
       {locked ? (
         <>
-          {/* Sealed slab */}
+          {/* Sealed slab. Kept flat-shaded rather than stone: the arch around it
+              is the masonry, and texturing the door too collapses the contrast
+              that makes the sealed panel read as a separate thing filling a gap. */}
           <RoundedBox args={[2.6, 3.4, 0.24]} radius={0.08} smoothness={3} position={[0, 1.7, 0]} castShadow>
-            <meshPhysicalMaterial {...mattePlastic(palette.lockedDeep)} />
+            <meshPhysicalMaterial
+              {...mattePlastic(palette.lockedDeep)}
+              {...(slabMaps
+                ? {
+                    normalMap: slabMaps.normalMap,
+                    roughnessMap: slabMaps.roughnessMap,
+                    aoMap: slabMaps.aoMap,
+                    roughness: slabMaps.roughness,
+                  }
+                : {})}
+            />
           </RoundedBox>
 
           {/* Horizontal banding. Breaks up the flat slab so it reads as a
@@ -128,7 +206,10 @@ export function Portal({
               smoothness={3}
               position={[0, y, 0]}
             >
-              <meshPhysicalMaterial {...mattePlastic(palette.locked)} />
+              {/* Glossy where the slab behind it is chalky, so the band steps up
+                  in material as well as in value and reads as a separate part
+                  rather than as a lighter stripe painted on one. */}
+              <meshPhysicalMaterial {...plastic(palette.locked)} />
             </RoundedBox>
           ))}
 
@@ -137,30 +218,25 @@ export function Portal({
           <LockPlate position={[0, 1.75, 0.2]} />
         </>
       ) : (
-        <mesh ref={fill} position={[0, 1.7, 0]}>
-          <planeGeometry args={[2.6, 3.3]} />
-          <meshPhysicalMaterial
-            {...emissive(palette.visor, 1.8)}
-            transparent
-            opacity={0.55}
-            side={2}
-          />
-        </mesh>
+        <PortalShimmer width={2.6} height={3.3} position={[0, 1.7, 0]} />
       )}
 
-      {/* Label appears on approach rather than always, so the world stays uncluttered. */}
+      {/* Label appears on approach rather than always, so the world stays
+          uncluttered. Billboarded so it stays readable while the player circles
+          the portal or swings the camera around it. */}
       {near && (
-        <Text
-          position={[0, 4.2, 0]}
-          fontSize={0.34}
-          color={locked ? '#c3c9d4' : '#ffffff'}
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.02}
-          outlineColor="#0b1020"
-        >
-          {locked ? `${label} - Locked` : label}
-        </Text>
+        <Billboard position={[0, 4.2, 0]}>
+          <Text
+            fontSize={0.34}
+            color={locked ? '#c3c9d4' : '#ffffff'}
+            anchorX="center"
+            anchorY="middle"
+            outlineWidth={0.02}
+            outlineColor="#0b1020"
+          >
+            {locked ? `${label} - Locked` : label}
+          </Text>
+        </Billboard>
       )}
     </group>
   )
@@ -177,20 +253,28 @@ function LockPlate({ position }: { position: [number, number, number] }) {
       {/* Shackle */}
       <mesh position={[0, 0.46, 0]} rotation={[Math.PI / 2, 0, 0]}>
         <torusGeometry args={[0.26, 0.07, 10, 24, Math.PI]} />
-        <meshPhysicalMaterial {...plastic('#aab3c2')} />
+        <meshPhysicalMaterial {...metal('#aab3c2')} />
       </mesh>
       {/* Body */}
       <RoundedBox args={[0.78, 0.64, 0.22]} radius={0.09} smoothness={4} castShadow>
         <meshPhysicalMaterial {...plastic('#c3cad6')} />
       </RoundedBox>
-      {/* Keyhole */}
+      {/*
+        Keyhole. Lit, not basic.
+
+        These two were the only unlit surfaces on an otherwise lit object, which
+        means they did not darken in shadow and read as holes cut through to a
+        flat colour rather than as recesses in a plate. `rubber()` gives the same
+        near-black at a fraction of the environment response, so the shape stays
+        attached to the lighting it sits in.
+      */}
       <mesh position={[0, 0.04, 0.12]}>
         <circleGeometry args={[0.11, 16]} />
-        <meshBasicMaterial color={palette.lockedDeep} />
+        <meshPhysicalMaterial {...rubber(palette.lockedDeep)} />
       </mesh>
       <mesh position={[0, -0.12, 0.12]}>
         <boxGeometry args={[0.09, 0.18, 0.01]} />
-        <meshBasicMaterial color={palette.lockedDeep} />
+        <meshPhysicalMaterial {...rubber(palette.lockedDeep)} />
       </mesh>
     </group>
   )

@@ -27,8 +27,19 @@ export const MOVEMENT = {
    * where players feel in control without the jump losing its commitment.
    */
   airControl: 0.35,
-  /** How fast the robot rotates to face travel direction. */
-  turnSpeed: 14,
+  /**
+   * How fast left and right rotate the robot, in radians per second.
+   *
+   * Roughly 170 degrees a second, so a full about-turn takes a little under
+   * two. This is the main dial for how the game feels to drive: lower is
+   * ponderous and hard to line a jump up with, higher starts to spin the camera
+   * fast enough to be disorienting, because the camera follows the turn.
+   *
+   * Replaced turnSpeed, which was how quickly the robot rotated to face the
+   * direction it was already travelling. Under tank controls facing is not
+   * chasing anything, it is the input.
+   */
+  turnRate: 3.0,
 } as const
 
 export const JUMP = {
@@ -93,6 +104,34 @@ export const SQUASH = {
   minLandSpeed: 4,
 } as const
 
+export const REVIVAL = {
+  /**
+   * How far above the spawn point the robot materialises before dropping in.
+   *
+   * The brief asked for "about 50 pixels". At the current framing - fov 40,
+   * slant range hypot(10.7, 4.3) = 11.53, a 1080-tall viewport - one screen
+   * pixel is `2 * 11.53 * tan(20 deg) / 1080` = 0.0078 world units at the
+   * player, so 50px works out to 0.39. That reads as a stumble rather than as
+   * coming back to life, so the default here is the height that actually sells
+   * the beat. Set it to 0.39 for the literal reading.
+   *
+   * The value itself was chosen on feel and is unaffected by the field of view
+   * change; only the arithmetic above moved, and it is corrected rather than
+   * left to mislead the next person who reads it.
+   */
+  dropHeight: 1.6,
+
+  /**
+   * Landing squash on revival, deeper than an ordinary landing.
+   *
+   * There is no separate bounce animation. The critically damped spring in
+   * PlayerController's frame loop already overshoots slightly on its way back to
+   * neutral, so squashing harder than SQUASH.landSquash is the whole effect: a
+   * deeper compression produces a correspondingly bigger rebound for free.
+   */
+  landSquash: 0.55,
+} as const
+
 export const WADDLE = {
   /**
    * Team ASOBI describe Astro as waddling "like a toddler". With procedural
@@ -108,9 +147,37 @@ export const WADDLE = {
 } as const
 
 export const CAMERA = {
-  /** Resting offset behind and above the player, before orbit is applied. */
-  distance: 7.5,
-  height: 3.0,
+  /**
+   * Resting offset behind and above the player, before orbit is applied.
+   *
+   * These two are not taste values and must not be tuned independently. They
+   * are derived from the field of view, which `03-environment.md` section 6
+   * takes from 55 to 40 to buy the diorama read, and they exist to hold the
+   * character the same size in frame while it changes.
+   *
+   * The apparent height of an object at slant range D is
+   * `H / (2 D tan(fov / 2))`, so holding it constant means holding
+   * `D tan(fov / 2)` constant. At rest `D = hypot(distance, height)`:
+   *
+   *   old   hypot(7.5, 3.0)   = 8.0777,  tan(27.5 deg) = 0.520567
+   *         product                                      4.2045   <- invariant
+   *   new   4.2045 / tan(20 deg) = 11.5518,  so scale k = 1.43004
+   *         distance  7.5 * k = 10.725  ->  10.7
+   *         height    3.0 * k =  4.290  ->   4.3
+   *   check hypot(10.7, 4.3) * tan(20 deg) = 4.1970 vs 4.2045, 0.2% out
+   *
+   * Both components scale by the same k so the rest pitch is preserved:
+   * `atan(4.3 / 10.7)` is 21.90 degrees against the old 21.80. How far down
+   * the camera looks is a separate art decision from the focal length, and
+   * this change is not making it.
+   *
+   * What actually changes is compression behind the character. An object 20 m
+   * behind it renders at 11.5313 / 31.5313 = 0.366 of its size at the
+   * character's depth, against 0.288 before, so the background comes in 27
+   * per cent larger relative to the subject. That is the whole point.
+   */
+  distance: 10.7,
+  height: 4.3,
   /** Look target sits above the feet so the robot is not centred in frame. */
   lookHeight: 1.0,
   /**
@@ -119,11 +186,50 @@ export const CAMERA = {
    */
   positionDamping: 6,
   targetDamping: 10,
-  /** Orbit sensitivity for mouse drag and gamepad right stick. */
-  mouseSensitivity: 0.0032,
+  /**
+   * Orbit sensitivity, in radians per pixel of drag.
+   *
+   * Was 0.0032, which needed **982 px of drag for a half turn** and 1963 for a
+   * full one. On any laptop trackpad that is more than one gesture, so the camera
+   * could not be brought round to the front of the character in a single motion
+   * however long you were willing to keep dragging. At 0.009 a half turn is
+   * 349 px, which fits comfortably inside one sweep.
+   */
+  mouseSensitivity: 0.009,
   stickSensitivity: 2.6,
-  /** Pitch clamp, so you can never flip under the world or stare at the sky. */
-  minPitch: -0.5,
+  /**
+   * How long realignment stays suppressed after the player last moved the camera
+   * by hand, in seconds.
+   *
+   * The suppression used to be frame-instantaneous, tested on whether a look
+   * delta arrived this exact frame. Against a realign spring with a 126 ms
+   * half-life that meant any pause mid-drag, and any frame that happened to
+   * deliver no `mousemove`, immediately started pulling the camera back behind the
+   * character. A camera angle the player chose is not un-chosen the moment their
+   * hand stops.
+   *
+   * Long enough to look at something and think about it; short enough that the
+   * camera still tidies up after you rather than needing to be put back.
+   */
+  manualHold: 2.5,
+  /**
+   * Pitch clamp, so you can never flip under the world or stare at the sky.
+   *
+   * **`minPitch` is derived, not chosen.** The rest offset adds `height`
+   * unconditionally on top of `sin(pitch) * distance`, so the camera drops below
+   * its own look target once `sin(pitch) < -height / distance`, which is
+   * `-4.3 / 10.7 = -0.402`, i.e. pitch below -0.4135 rad. Past that the collision
+   * ray is aimed downward from the target and hits the ground, the pull-in
+   * collapses distance to `minDistance` 1.6, and recovery takes about two seconds
+   * at `pullOutSpeed`. The symptom was that trying to look at the character's face
+   * snapped the camera into it at 1.6 m through a 40 degree lens and then crawled
+   * back out.
+   *
+   * -0.35 keeps the camera 0.56 m above the look target at the limit, so the ray
+   * always points up and outward and can never find the floor, while still giving
+   * a nearly level view of the face. The old -0.5 put it 0.83 m BELOW the target.
+   */
+  minPitch: -0.35,
   maxPitch: 1.1,
   /**
    * Collision pull-in. The camera raycasts toward the player and sits in front of
@@ -131,8 +237,41 @@ export const CAMERA = {
    */
   collisionPadding: 0.4,
   minDistance: 1.6,
-  /** Pull in instantly to avoid clipping, but ease back out so it is not jarring. */
-  pullOutSpeed: 4,
+  /**
+   * Pull in instantly to avoid clipping, but ease back out so it is not jarring.
+   *
+   * Raised from 4 with the field of view. The recovery now has 11.5 m of slant
+   * range to travel rather than 8.1, and at the old rate covering half again
+   * the distance at the same speed reads as the camera being slow to forgive.
+   */
+  pullOutSpeed: 5,
+
+  /**
+   * How hard the camera pulls back behind the player, as an exponential
+   * damping rate rather than a fixed angular speed.
+   *
+   * Higher arrives sooner. Because the step is proportional to how far off the
+   * camera is, one number covers both ends: turning to walk toward the camera
+   * brings it round in well under a second, while the constant small
+   * corrections of ordinary walking stay imperceptible.
+   *
+   * This replaced a fixed radians-per-second, which could not do both. It also
+   * no longer has to be kept low to tame a feedback loop: under tank controls
+   * the direction of travel never consults the camera, so realigning the camera
+   * cannot change where the player is going.
+   */
+  realignDamping: 5.5,
+
+
+  /**
+   * Angular slack, in radians, before realignment engages at all.
+   *
+   * Roughly 2 degrees. Exponential damping already tapers to nothing as it
+   * converges, so this does not have to hide the tail of the correction; it
+   * only stops the camera reacting to the last fraction of a degree once the
+   * player has stopped turning.
+   */
+  realignDeadzone: 0.035,
 } as const
 
 export const INTERACTION = {
@@ -149,6 +288,19 @@ export const TRANSITION = {
    * reads as a bug. The wipe is a feel element, not a loading indicator.
    */
   minDurationMs: 650,
-  fadeOutMs: 320,
-  fadeInMs: 380,
+
+  /** The iris collapsing onto the character. */
+  irisCloseMs: 340,
+
+  /**
+   * The iris opening back out from the character.
+   *
+   * Budgeted against the fall, not chosen for its own sake. From
+   * REVIVAL.dropHeight of 1.6 at JUMP.gravity scaled by fallGravityMultiplier,
+   * the robot is in the air for sqrt(2 * 1.6 / 36) which is about 300ms. Opening
+   * over slightly longer than that means the landing bounce happens while the
+   * reveal is still finishing, so the two read as one motion rather than as a
+   * reveal followed by a separate animation.
+   */
+  irisOpenMs: 420,
 } as const
