@@ -1,5 +1,5 @@
 {
-  "hash": "3f2d36cd",
+  "hash": "5504dd4d",
   "size": 2048,
   "texelsPerMetre": 44,
   "gutter": 2,
@@ -8,8 +8,8 @@
   "coverage": 0.4958,
   "rays": 128,
   "maxDistance": 8,
-  "surfaceAreaSquareMetres": 1071.41,
-  "triangles": 24204,
-  "seconds": 478,
-  "generated": "2026-08-11T00:19:44.410Z"
+  "surfaceAreaSquareMetres": 1071.5,
+  "triangles": 24652,
+  "seconds": 517.1,
+  "generated": "2026-08-11T04:13:28.250Z"
 }

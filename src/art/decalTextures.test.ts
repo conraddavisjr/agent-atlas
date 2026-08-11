@@ -1200,3 +1200,158 @@ describe('the printed deck as a DISTRIBUTION, which is what the band rule asks f
     expect(seamShare).toBeLessThan(0.25)
   })
 })
+
+/*
+  The `strut` kind, whose every number is set by the screen rather than the tile.
+
+  The measurements these assert against were taken with `tools/critique/frame.mjs`
+  on `.critique/astro/maps-on--hub-establishing.png`, whose own camera json gives
+  fov 38 over a 934 px buffer and therefore a focal length of 1356.3 px. The boxes
+  and commands are quoted so each one can be repeated.
+*/
+describe('DECAL_KINDS.strut, sized against the pixel', () => {
+  /** Millimetres of surface per screen pixel, at the near Core strut's depth. */
+  const MM_PER_PIXEL = 21.6
+  const pixels = (metres: number) => (metres * 1000) / MM_PER_PIXEL
+
+  it('sizes its groove to something the display can resolve, where trim cannot', () => {
+    /*
+      VERIFIED against the frame rather than predicted:
+
+        node tools/critique/frame.mjs row \
+          .critique/astro/maps-on--hub-establishing.png 515 805 850
+
+      puts the near strut's edges at x 815 and x 834. Twenty pixels for a 0.44 m
+      capsule at 29.32 m, against the 20.4 px the projection predicts.
+
+      So the members are wide enough to carry a mark - the worry that a strut might
+      be 6 px across is not the case - and every mark `trim` gives them is under
+      one pixel.
+    */
+    expect(pixels(0.44)).toBeCloseTo(20.4, 1)
+
+    // What trim hands them: the spec's 2.5 mm groove, and a 6 mm-radius fastener.
+    expect(pixels(DECAL_KINDS.trim.panelWidth ?? 0.0025)).toBeLessThan(0.2)
+    expect(pixels(0.012)).toBeLessThan(0.6)
+
+    // What this kind hands them. Three pixels of core with a pixel of lip either
+    // side, so the whole mark is five - a seam rather than a hairline.
+    const spec = DECAL_KINDS.strut
+    expect(pixels(spec.panelWidth as number)).toBeCloseTo(3.24, 2)
+    expect(pixels(spec.panelWidth as number)).toBeGreaterThan(2)
+    expect(pixels((spec.panelWidth as number) + 2 * (spec.panelLip as number))).toBeCloseTo(5.09, 2)
+  })
+
+  it('leaves the tile at trim\'s 1.6 m, because resolution was never the constraint', () => {
+    /*
+      The lever is the groove width, not the tile size, and raising the tile would be
+      the third repetition of the same mistake. At 1.6 m over 1024 texels a texel is
+      1.56 mm, which is 0.07 of a screen pixel: the texture is already fourteen times
+      finer than the display.
+
+      Matching trim exactly has a second payoff - geometry box-projected at
+      DECAL_KINDS.trim.metresPerTile can take these maps with its UVs untouched, so
+      this kind costs no repack and no geometry change.
+    */
+    expect(DECAL_KINDS.strut.metresPerTile).toBe(DECAL_KINDS.trim.metresPerTile)
+    expect(pixels(DECAL_KINDS.strut.metresPerTile / 1024)).toBeLessThan(0.1)
+  })
+
+  it('drops fasteners rather than shrinking them, and explains plate too', () => {
+    // A 6 mm head is 12 mm across, or 0.56 px: half a pixel of unstructured noise.
+    // plate's 12 heads per square metre are the same mark on a tile three times
+    // smaller, which is why nothing in this assembly can use plate either.
+    expect(DECAL_KINDS.strut.screwDensity).toBe(0)
+    expect(decalMarks('strut').some((m) => m.kind === 'screw')).toBe(false)
+    expect(decalMarks('strut').some((m) => m.kind === 'panel')).toBe(true)
+    expect(pixels(0.012)).toBeLessThan(1)
+  })
+
+  it('carries the groove width and lip through into the marks it generates', () => {
+    // The spec fields are optional, so a kind that sets them and a paint path that
+    // ignores them would look identical from the outside. Assert the plumbing.
+    const spec = DECAL_KINDS.strut
+    const panels = decalMarks('strut').filter((m) => m.kind === 'panel')
+    expect(panels.length).toBeGreaterThan(0)
+    for (const mark of panels) {
+      if (mark.kind !== 'panel') continue
+      expect(mark.width).toBeCloseTo((spec.panelWidth as number) / spec.metresPerTile, 12)
+      expect(mark.lip).toBeCloseTo((spec.panelLip as number) / spec.metresPerTile, 12)
+    }
+  })
+
+  it('holds the swing under the byte ceiling that roughnessByte clips at', () => {
+    /*
+      The tightest constraint on the entry, and it clips SILENTLY. roughnessByte
+      writes `value * 0.8 / target`, which reaches 255 once `value` passes
+      `target / 0.8`, and the roughest texel is `roughness + swing`. Past that the
+      dust-trap end of the ladder flattens against the ceiling with no error - the
+      map still looks plausible and half its range is gone.
+    */
+    const spec = DECAL_KINDS.strut
+    expect(spec.roughness + spec.swing).toBeLessThan(spec.roughness / ROUGHNESS_MID)
+    const smoothest = roughnessByte(spec.roughness - spec.swing, spec.roughness)
+    const roughest = roughnessByte(spec.roughness + spec.swing, spec.roughness)
+    expect(smoothest).toBe(156)
+    expect(roughest).toBe(252)
+    expect(roughest).toBeLessThan(255)
+    expect(smoothest).toBeGreaterThan(0)
+    // And the ORM agrees, at both ends of the height mask.
+    const deepest = ormFromHeight(new Float32Array(1).fill(0), 1, spec)
+    const proudest = ormFromHeight(new Float32Array(1).fill(1), 1, spec)
+    expect(deepest[1]).toBe(roughest)
+    expect(proudest[1]).toBe(smoothest)
+  })
+
+  it('matches anodised()\'s roughness, because that is the preset these members want', () => {
+    /*
+      A metal has no diffuse term, so its entire appearance is the lobe this
+      channel modulates - which is the one condition under which the roughness
+      ladder has ever had anything to break. Lobe width goes as roughness squared,
+      so 0.30 +/- 0.07 spans alpha 0.053 to 0.137, a factor of 2.6 in lobe area.
+
+      See materials.ts: cylinderFresnelRatio for why a metal cylinder is the only
+      material that fits band 2 here, and lobeRatioUnderRoughnessMap for why these
+      maps have to be bound at clearcoatRoughnessMap as well as roughnessMap.
+    */
+    expect(DECAL_KINDS.strut.roughness).toBe(0.3)
+    expect(roughnessBias(DECAL_KINDS.strut.roughness)).toBeCloseTo(0.375, 6)
+    const alpha = (r: number) => r * r
+    const ratio =
+      alpha(DECAL_KINDS.strut.roughness + DECAL_KINDS.strut.swing) /
+      alpha(DECAL_KINDS.strut.roughness - DECAL_KINDS.strut.swing)
+    // 2.59 on the authored ends, 2.61 once the bytes have quantised them.
+    expect(ratio).toBeCloseTo(2.59, 2)
+  })
+
+  it('keeps the relief strength where trim has it, because the wall is sub-pixel anyway', () => {
+    /*
+      A canvas stroke's edge is one to two texels whatever the stroke's width, so
+      the groove WALL - the only part of a relief mark with a gradient, and the only
+      part a normal map can express - is 1.6 to 3.1 mm, or 0.07 to 0.14 px. Raising
+      the strength cannot put it on screen. What survives is the groove FLOOR, 3.24
+      px of it, carried by the occlusion channel, which is a function of depth
+      rather than of gradient.
+    */
+    expect(DECAL_KINDS.strut.normalStrength).toBe(DECAL_KINDS.trim.normalStrength)
+    expect(pixels((2 * DECAL_KINDS.strut.metresPerTile) / 1024)).toBeLessThan(0.2)
+    // Strength 2 on a one-pixel step of the default 0.16 depth tilts the normal by
+    // atan(0.16 * 2). Worth pinning on a metal, where a steep normal reads as a
+    // Fresnel spike rather than as shading.
+    expect((Math.atan(0.16 * DECAL_KINDS.strut.normalStrength) * 180) / Math.PI).toBeCloseTo(17.7, 1)
+  })
+
+  it('leaves trim untouched, so the one surface where relief was measured to read is unmoved', () => {
+    // The kerb faces are the only place the ladder ever moved a metric - 16.78 to
+    // 17.75 of high-frequency detail - and they are in the trim batch. Splitting a
+    // new kind rather than retuning trim is what protects that.
+    expect(DECAL_KINDS.trim).toEqual({
+      metresPerTile: 1.6,
+      roughness: 0.72,
+      swing: 0.1,
+      panelPitch: 0.4,
+      screwDensity: 1.5,
+      normalStrength: 2,
+    })
+  })
+})

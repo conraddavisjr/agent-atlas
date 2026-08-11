@@ -8,7 +8,12 @@ import {
   waterVertexShader,
 } from './waterMaterial'
 import { BLOOM_THRESHOLD, linearLuma, luma709 } from './materials'
-import { TRACE } from '@/game/world/hubLayout'
+import {
+  TRACE,
+  WATER_SECTION,
+  WATER_SHORE_ATTRIBUTE,
+  waterSection,
+} from '@/game/world/hubLayout'
 
 const SOURCE = `${waterVertexShader}\n${waterFragmentShader}`
 
@@ -108,7 +113,7 @@ describe('the water bloom budget', () => {
     const peak = waterPeakLuminance()
     expect(peak).toBeLessThan(BLOOM_THRESHOLD)
     // Recorded so a later retune that eats the margin shows up as a diff.
-    expect(peak).toBeCloseTo(1.112, 2)
+    expect(peak).toBeCloseTo(1.158, 2)
     expect(BLOOM_THRESHOLD / peak).toBeGreaterThan(1.25)
   })
 
@@ -161,34 +166,104 @@ describe('the water bloom budget', () => {
 
 describe('the water shoreline', () => {
   /*
-    Tied to `TRACE` rather than written as literals, so a change to `standoff` or
-    to either radius cannot silently move the deck surface out from under the
-    alpha ramp and leave a hard silhouette line where the tube meets the board -
-    which is the defect the ramp exists to remove.
+    Tied to `waterSection` rather than written as literals, so a re-authored
+    cross-section cannot silently move the geometry out from under the alpha ramp
+    and leave a hard silhouette line where the water meets the board - which is
+    the defect the ramp exists to remove.
+
+    The pairing has moved. Version two tied these numbers to `-standoff / radius`,
+    the angle at which a half-buried TUBE was cut by the deck; there is no tube
+    now, and the quantity that replaces it is the section's own resolved normals.
+    `hubLayout.test.ts` asserts the same relationship from the geometry's side, so
+    the two files pin each other rather than both pinning a literal.
   */
-  it('finishes its fade at or before the trunk enters the deck', () => {
-    const trunkWaterline = -TRACE.standoff / TRACE.trunkRadius
-    expect(trunkWaterline).toBeCloseTo(-0.5333, 4)
-    expect(WATER.shoreBottom).toBeLessThanOrEqual(trunkWaterline)
-    expect(WATER.shoreTop).toBeGreaterThan(trunkWaterline)
+  const section = waterSection()
+  const visible = section.filter((p) => p.up >= 0)
+  const tuck = section[section.length - 1]
+
+  it('leaves the whole visible surface opaque, at every relief the taper produces', () => {
+    /*
+      The taper flattens each channel's relief toward its mouths, so the section is
+      swept at a continuum of reliefs rather than at one. All of them have to stay
+      inside the window or a channel would go translucent as it approached a pool.
+    */
+    for (const relief of [1, 0.5, TRACE.endRelief]) {
+      for (const p of waterSection(false, relief).filter((q) => q.up >= 0)) {
+        expect(p.normalUp, `relief ${relief} at across ${p.across}`).toBeGreaterThan(
+          WATER.shoreTop,
+        )
+      }
+    }
+    expect(visible.length).toBeGreaterThan(4)
+  })
+
+  it('completes its fade on the buried tuck, so no water shows inside the deck', () => {
+    expect(tuck.up).toBeLessThan(0)
+    expect(tuck.normalUp).toBeLessThan(WATER.shoreBottom)
   })
 
   /*
-    The spur is thinner, so its waterline sits further round the tube and the
-    single ramp cannot land on both. This asserts the error falls in the safe
-    direction: the fade completes ABOVE a spur's true waterline, so the water
-    stops a centimetre short of its shore and shows deck, rather than running on
-    and showing water inside the board.
-  */
-  it('errs toward stopping short on the thinner spur, never toward overrunning', () => {
-    const spurWaterline = -TRACE.standoff / TRACE.spurRadius
-    expect(spurWaterline).toBeCloseTo(-0.8, 4)
-    expect(WATER.shoreBottom).toBeGreaterThan(spurWaterline)
-  })
+    `shoreTop` staying NEGATIVE is the load-bearing part, and it is the one edit here
+    that would look like a tidy-up.
 
-  it('ramps upward, so the crown is water and the underside is not', () => {
+    The twelve riser climbs stand the section on its edge and draw a sheet of water
+    down a step face, and on those the section's up points horizontally away from the
+    face - so the whole sheet sits near normal Y 0. At a `shoreTop` of 0.0 the ramp
+    would read every waterfall in the level as half shore and render it at 50% alpha.
+  */
+  it('keeps the ramp below zero, so a vertical sheet of water stays opaque', () => {
     expect(WATER.shoreBottom).toBeLessThan(WATER.shoreTop)
     expect(WATER.shoreTop).toBeLessThan(0)
+  })
+
+  /*
+    And the meniscus is no longer a function of the normal at all. On a tube the
+    normal stood in for how far across the surface a fragment was; on a flat pool two
+    square metres of water share one normal, so there is no pair of numbers that puts
+    a band at the rim. It rides on the geometry's own distance-to-bank instead.
+  */
+  it('drives the meniscus off the shore attribute rather than off the normal', () => {
+    expect(waterFragmentShader).toContain('smoothstep(uFoamShore, 1.0, vShore)')
+    expect(waterVertexShader).toContain(`attribute float ${WATER_SHORE_ATTRIBUTE}`)
+    expect(waterVertexShader).toContain(`vShore = ${WATER_SHORE_ATTRIBUTE}`)
+  })
+
+  it('opens the meniscus on water that is above the bank, not under it', () => {
+    const dome = WATER_SECTION[1]
+    const shoulder = WATER_SECTION[2]
+    expect(WATER.foamShore).toBeGreaterThan(dome.shore)
+    expect(WATER.foamShore).toBeLessThanOrEqual(shoulder.shore)
+  })
+})
+
+describe('the ripple term', () => {
+  /*
+    It exists because a flat water surface at this camera has NO specular response,
+    which is not obvious and is the reason the pool would otherwise be a dead disc.
+    The glint is a Blinn lobe at exponent 220 against a key 42.7 degrees up, so the
+    half-vector sits near 45 degrees of elevation and a flat normal misses it by that
+    much: `pow(cos(45), 220)` underflows to zero in any float. The channels keep
+    their glint from the section's quarter turn of normals; the two discs have none.
+  */
+  it('is the only cue a flat surface has, so a flat surface must have it', () => {
+    const missedByAFlatNormal = Math.cos(Math.PI / 4) ** WATER.gloss
+    expect(missedByAFlatNormal).toBeLessThan(1e-30)
+    expect(WATER.ripple).toBeGreaterThan(0)
+  })
+
+  it('is applied centred, so it moves the body without brightening it', () => {
+    expect(waterFragmentShader).toContain('(waves - 0.5) * uRipple')
+  })
+
+  /*
+    Clamped at BOTH ends, and the lower clamp is the one that matters: a centred term
+    can drive the mix factor negative, and `mix` with a negative t EXTRAPOLATES past
+    `uDeepColor` toward the negative of the sky. That is a pixel darker than anything
+    in the palette and, in a wave trough under the arch, plausibly a negative one.
+  */
+  it('clamps the summed mix factor rather than trusting the terms', () => {
+    expect(waterFragmentShader).toMatch(/float skyMix = clamp\(/)
+    expect(waterFragmentShader).toContain('0.0,\n      1.0\n    );')
   })
 })
 

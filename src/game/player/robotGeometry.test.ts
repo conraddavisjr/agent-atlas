@@ -8,15 +8,21 @@ import {
   CAPE_PANEL,
   CAPE_RIBBON,
   createCapeRibbon,
+  coneFillet,
   DIAPER,
   EAR_POD_SHAPE,
   FACE_PLATE,
   FINGER,
   fingerCentreY,
   FOOT,
+  footBottomRadius,
+  footSoleFlat,
+  footMaxHalfWidth,
+  footTopFlat,
   HAND,
   HEAD_CAP,
   HEAD_SHELL,
+  roundedConeProfile,
   roundedDiscProfile,
   skinCapeRibbon,
   SOLE_LIGHT,
@@ -140,6 +146,127 @@ describe('roundedDiscProfile', () => {
   it('refuses a fillet that would fold the profile through itself', () => {
     expect(() => roundedDiscProfile(0.105, 0.04, 0.05, 4)).toThrow(/fold/)
     expect(() => roundedDiscProfile(0.105, 0.04, 0.2, 4)).toThrow(/fold/)
+  })
+})
+
+describe('roundedConeProfile', () => {
+  const rb = footBottomRadius()
+  const rt = FOOT.topRadius
+  const hh = FOOT.height / 2
+  const { fillet, filletSteps } = FOOT
+  const pts = () => roundedConeProfile(rb, rt, hh, fillet, filletSteps)
+
+  it('starts and ends on the axis so the lathe closes', () => {
+    const p = pts()
+    expect(p[0].x).toBe(0)
+    expect(p[p.length - 1].x).toBe(0)
+    expect(p[0].y).toBeCloseTo(-hh, 12)
+    expect(p[p.length - 1].y).toBeCloseTo(hh, 12)
+  })
+
+  /*
+    ASCENDING, strictly, at every step.
+
+    This is the assertion that would have caught the ear pods three rounds earlier.
+    `LatheGeometry` takes winding and normals from the direction of travel, so a profile
+    that ever steps downward ships a solid with inward normals, which the default
+    `FrontSide` then culls entirely. A bounding box cannot see it and neither can a vertex
+    count. `roundedDiscProfile` was symmetric in y, so its inversion was invisible; this
+    profile is not symmetric, which makes the property checkable directly.
+  */
+  it('ascends strictly, which is what makes the lathe wind outward', () => {
+    const p = pts()
+    for (let i = 1; i < p.length; i++) {
+      expect(p[i].y).toBeGreaterThan(p[i - 1].y - 1e-15)
+    }
+    expect(p.some((q, i) => i > 0 && q.y > p[i - 1].y)).toBe(true)
+  })
+
+  it('never goes negative in radius, which latheProfile rejects', () => {
+    for (const q of pts()) expect(q.x).toBeGreaterThanOrEqual(0)
+  })
+
+  /*
+    THE PROPERTY THE CONSTRUCTION EXISTS FOR, rather than a restatement of it.
+
+    Each fillet must be tangent to its flat face AND to the slant. Tangency to the flat
+    face is trivial - the centre sits one fillet radius in from it - but tangency to the
+    SLANT is where a slanted-rim fillet differs from a vertical-rim one, and it is what a
+    naive `fillet` tangent length gets wrong. So: measure the perpendicular distance from
+    each fillet's centre to the slant line and require it to equal `fillet`.
+
+    If this fails, the arcs meet the slant at a kink and the boot has a visible crease
+    running round it at each rim - which is exactly the artefact the fillets are there to
+    prevent, arrived at by trying to prevent it.
+  */
+  it('puts both fillet centres exactly one fillet radius off the slant', () => {
+    const alpha = Math.atan2(rt - rb, 2 * hh)
+    // The slant line: through the unfilleted bottom corner, in the slant's direction.
+    const cx = rb
+    const cy = -hh
+    const dx = Math.sin(alpha)
+    const dy = Math.cos(alpha)
+    const distance = (px: number, py: number) => Math.abs(dx * (py - cy) - dy * (px - cx))
+
+    expect(distance(footSoleFlat().x, -hh + fillet)).toBeCloseTo(fillet, 12)
+    expect(distance(footTopFlat().x, hh - fillet)).toBeCloseTo(fillet, 12)
+  })
+
+  /*
+    And the consequence of that tangency which is easy to get wrong by hand: the two
+    fillets eat DIFFERENT amounts off their faces, because the bottom corner turns
+    through 90 - alpha and the top through 90 + alpha. A generator using one tangent
+    length for both would put both flats in the wrong place, and the two flats are the
+    load-bearing surfaces on this part - one carries the sole light, the other is what
+    the shin emerges through.
+  */
+  it('takes more off the blunt top corner than the sharp bottom one', () => {
+    const { tBot, tTop } = coneFillet(rb, rt, 2 * hh, fillet)
+    expect(tTop).toBeGreaterThan(tBot)
+    expect(rb - tBot).toBeCloseTo(footSoleFlat().x, 12)
+    expect(rt - tTop).toBeCloseTo(footTopFlat().x, 12)
+    // Both are away from the naive `fillet`, in opposite directions.
+    expect(tBot).toBeLessThan(fillet)
+    expect(tTop).toBeGreaterThan(fillet)
+  })
+
+  /*
+    The maximum radius of the SOLID is short of the authored `topRadius`, because the
+    fillet cuts the corner off. Pinned because it is the trap that made every dimension
+    in this pass's first draft of `FOOT`'s docstring wrong by 3.6 mm, and it is the same
+    trap `TORSO` carries for the taper: the authored parameter is not the built extent.
+  */
+  it('never reaches the authored top radius, which the corner would have', () => {
+    const maxX = Math.max(...pts().map((q) => q.x))
+    expect(maxX).toBeLessThan(rt)
+    expect(rt - maxX).toBeGreaterThan(0.003)
+  })
+
+  /*
+    `footMaxHalfWidth()` is the CONTINUOUS silhouette maximum, and the built mesh samples
+    the arc, so the built value must be at or inside it - never beyond. That direction
+    matters: `robotPose.test.ts` measures the gap between the two boots against this
+    number, and a helper that understated the boot would understate the gap in the unsafe
+    direction. Pinned here so the docstring's claim is a test rather than a note.
+  */
+  it('bounds the built silhouette from outside, which is what makes it safe to clear against', () => {
+    const builtMax = bootBounds().width / 2
+    expect(builtMax).toBeLessThanOrEqual(footMaxHalfWidth().x + 1e-9)
+    // And it is not loose: the sampling costs a fifth of a millimetre, not millimetres.
+    expect(footMaxHalfWidth().x - builtMax).toBeLessThan(0.0005)
+    expect(footMaxHalfWidth().z / footMaxHalfWidth().x).toBeCloseTo(FOOT.depthScale, 12)
+  })
+
+  it('passes the shared lathe validator', () => {
+    expect(() => latheProfile({ points: pts(), radialSegments: 20 })).not.toThrow()
+  })
+
+  it('refuses a fillet that would leave no flat face or eat the whole slant', () => {
+    // Bigger than the bottom radius, so the sole would invert.
+    expect(() => roundedConeProfile(0.01, 0.09, 0.065, 0.03, 4)).toThrow(/no flat face/)
+    // Tall enough fillet on a short cone that the two rims would cross.
+    expect(() => roundedConeProfile(0.2, 0.21, 0.01, 0.05, 4)).toThrow(/slant/)
+    expect(() => roundedConeProfile(0.06, 0.09, 0.065, 0, 4)).toThrow(/positive/)
   })
 })
 
@@ -483,6 +610,63 @@ function radialNormalSense(g: BufferGeometry): { out: number; in: number } {
     else if (d < -0.2) inward++
   }
   return { out: outward, in: inward }
+}
+
+/**
+ * The boot, built exactly as `robotParts.tsx` builds it: lathe the cone profile, then
+ * scale Z. Rebuilt here rather than imported because that module is JSX, and there is
+ * no duplicated arithmetic in doing so - both go through `roundedConeProfile` and
+ * `FOOT`, so the only thing repeated is the call.
+ */
+const bootGeometry = () => {
+  const g = latheProfile({
+    points: roundedConeProfile(
+      footBottomRadius(),
+      FOOT.topRadius,
+      FOOT.height / 2,
+      FOOT.fillet,
+      FOOT.filletSteps,
+    ),
+    radialSegments: FOOT.radialSegments,
+  })
+  g.scale(1, 1, FOOT.depthScale)
+  return g
+}
+
+/** The boot's built bounding box, which is the only honest source for its dimensions. */
+function bootBounds() {
+  const pos = bootGeometry().getAttribute('position')
+  let minX = Infinity, maxX = -Infinity
+  let minY = Infinity, maxY = -Infinity
+  let minZ = Infinity, maxZ = -Infinity
+  for (let i = 0; i < pos.count; i++) {
+    minX = Math.min(minX, pos.getX(i)); maxX = Math.max(maxX, pos.getX(i))
+    minY = Math.min(minY, pos.getY(i)); maxY = Math.max(maxY, pos.getY(i))
+    minZ = Math.min(minZ, pos.getZ(i)); maxZ = Math.max(maxZ, pos.getZ(i))
+  }
+  return {
+    width: maxX - minX,
+    height: maxY - minY,
+    depth: maxZ - minZ,
+    minY,
+    centreX: (minX + maxX) / 2,
+    centreZ: (minZ + maxZ) / 2,
+  }
+}
+
+/**
+ * The boot's silhouette as `(y, maxHalfWidthX)` per latitude ring of the built mesh,
+ * sorted upward. This is what says which end of the cone is narrow, and it cannot be
+ * fooled by a cone built upside down the way a ratio of parameters can.
+ */
+function bootSilhouette(): { y: number; x: number }[] {
+  const pos = bootGeometry().getAttribute('position')
+  const byY = new Map<number, number>()
+  for (let i = 0; i < pos.count; i++) {
+    const y = Math.round(pos.getY(i) * 1e7) / 1e7
+    byY.set(y, Math.max(byY.get(y) ?? 0, Math.abs(pos.getX(i))))
+  }
+  return [...byY.entries()].map(([y, x]) => ({ y, x })).sort((a, b) => a.y - b.y)
 }
 
 const earPodGeometry = () => {
@@ -1166,21 +1350,51 @@ describe('the copper cap on the back of the head', () => {
 
 describe('the blue oval under each sole', () => {
   /*
-    The boot is a RoundedBox of `FOOT.width` by `FOOT.height` by `FOOT.depth` at
-    `FOOT.radius`, so its bottom face is flat only over the inner box. A pad wider than
-    that straddles a corner round and leaves a crescent gap between itself and the
-    sole, which is the same artefact both critique reviewers read as "there is a hole
-    in the character`s face" when the ear pods did it.
+    The boot is a filleted truncated cone now, so its bottom face is flat only inside
+    where the sole fillet begins. A pad wider than that straddles the rim round and
+    leaves a crescent gap between itself and the sole, which is the same artefact both
+    critique reviewers read as "there is a hole in the character`s face" when the ear
+    pods did it.
 
-    These two came off `FOOT` and were `0.32 / 2 - 0.065` and `0.44 / 2 - 0.065`
-    written out by hand. That is not a style point. The boot shrank by more than half
-    in this pass, the flat region went from 0.095 to 0.040 of half-width, and the
-    shipped `SOLE_LIGHT.radius` of 0.085 was more than twice what would fit - so a
-    hand-copied constraint would have gone on passing while the pad wrapped over both
-    corner rounds. The whole block is about a light that was invisible once already.
+    These two came off `FOOT` and were `0.32 / 2 - 0.065` and `0.44 / 2 - 0.065` written
+    out by hand once, then `FOOT.width / 2 - FOOT.radius`. Neither expression can be
+    written for a cone at all: the fillet sits on a SLANTED rim, so it eats
+    `fillet * tan(45 - alpha/2)` of radius rather than `fillet`, and the hand-written
+    form would have overstated the flat by 3 mm on a clearance of 15. So the region comes
+    from `footSoleFlat()`, which the shipped geometry goes through too.
+
+    The whole block is about a light that has been invisible once and within 2.3 mm of it
+    twice, so the derivation is checked against the built mesh below rather than trusted.
   */
-  const flatX = FOOT.width / 2 - FOOT.radius
-  const flatZ = FOOT.depth / 2 - FOOT.radius
+  const flatX = footSoleFlat().x
+  const flatZ = footSoleFlat().z
+
+  /*
+    First, that `footSoleFlat()` describes the mesh that actually ships. The helper is
+    trigonometry and the mesh is a lathe of a sampled arc; if the two disagree then every
+    clearance below is measured against a shape nobody built.
+  */
+  it('is measured against the sole the mesh really has', () => {
+    const pos = bootGeometry().getAttribute('position')
+    const bottom = bootBounds().minY
+    let maxX = 0
+    let maxZ = 0
+    for (let i = 0; i < pos.count; i++) {
+      if (Math.abs(pos.getY(i) - bottom) > 1e-9) continue
+      maxX = Math.max(maxX, Math.abs(pos.getX(i)))
+      maxZ = Math.max(maxZ, Math.abs(pos.getZ(i)))
+    }
+    /*
+      To 7 places and not 9, and the reason is the buffer rather than the arithmetic.
+      `Float32BufferAttribute` stores single precision, so a coordinate around 0.05 comes
+      back with about 2e-9 of quantisation. Asserting to 9 places here would be asserting
+      that three.js uses doubles, which it does not, and the failure would look like a
+      geometry bug. 7 places is 5e-8: tight enough that a real 3 mm fillet error cannot
+      hide in it, loose enough to be about the shape rather than the storage.
+    */
+    expect(maxX).toBeCloseTo(flatX, 7)
+    expect(maxZ).toBeCloseTo(flatZ, 7)
+  })
 
   it('lands entirely on the flat part of the sole', () => {
     expect(SOLE_LIGHT.radius).toBeLessThan(flatX)
@@ -1188,6 +1402,26 @@ describe('the blue oval under each sole', () => {
     // With real margin rather than by a thousandth.
     expect(flatX - SOLE_LIGHT.radius).toBeGreaterThan(0.005)
     expect(flatZ - SOLE_LIGHT.radius * SOLE_LIGHT.stretchZ).toBeGreaterThan(0.005)
+  })
+
+  /*
+    THE THING THE CONE NEARLY BROKE, and the reason the boot is wider than it was.
+
+    A cone's sole is smaller than a box's of the same width twice over: the 30% taper,
+    then the slanted-rim fillet. At the box's old 0.140 of width the sole flat comes out
+    at 0.0354 in x, so 0.0505 in z - against a pad needing 0.0528. It misses by 2.3 mm.
+    Asserted rather than described, so that anyone who narrows the boot back toward its
+    previous width gets a failure here instead of a crescent gap in a render.
+  */
+  it('would not have fitted a cone at the width the boot used to be', () => {
+    const oldTop = 0.14 / 2
+    const bottom = oldTop * FOOT.narrow
+    const alpha = Math.atan2(oldTop - bottom, FOOT.height)
+    const flat = bottom - FOOT.fillet * Math.tan(Math.PI / 4 - alpha / 2)
+    const padZ = SOLE_LIGHT.radius * SOLE_LIGHT.stretchZ
+    expect(flat * (0.2 / 0.14)).toBeLessThan(padZ)
+    // And the boot as shipped clears it, on the axis that failed.
+    expect(flatZ).toBeGreaterThan(padZ)
   })
 
   /*
@@ -1227,8 +1461,12 @@ describe('the blue oval under each sole', () => {
     have passed through it.
   */
   it('protrudes through the sole rather than being buried inside the foot', () => {
-    const soleY = -FOOT.height / 2
-    const padBottom = soleY - SOLE_LIGHT.proud
+    // The BUILT boot's lowest surface, not a computed sole plane. The cone is a lathe now
+    // and nothing guarantees its extent equals `-FOOT.height / 2` except measuring it.
+    const soleY = bootBounds().minY
+    // 7 places, because the position buffer is Float32. See the sole-flat test above.
+    expect(soleY).toBeCloseTo(-FOOT.height / 2, 7)
+    const padBottom = -FOOT.height / 2 - SOLE_LIGHT.proud
     const padTop = padBottom + SOLE_LIGHT.thickness
     // Below the foot's own surface, so it can be seen at all.
     expect(padBottom).toBeLessThan(soleY)
@@ -1238,6 +1476,24 @@ describe('the blue oval under each sole', () => {
     expect(padTop - soleY).toBeGreaterThan(0.004)
     // Not so proud that it becomes a stilt the character stands on.
     expect(SOLE_LIGHT.proud).toBeLessThan(0.01)
+  })
+
+  /*
+    And the buried PART of the pad is inside the cone at every height it occupies, which
+    is a new question the taper introduces. The box had vertical walls, so a pad that fit
+    the sole fit everywhere above it; a cone that narrows downward is at its TIGHTEST at
+    the sole, so this direction is safe here - but it is asserted rather than reasoned,
+    because the same argument run on a cone the other way up would be false.
+  */
+  it('stays inside the boot walls over the whole depth it is buried', () => {
+    const prof = bootSilhouette()
+    const padBottom = -FOOT.height / 2 - SOLE_LIGHT.proud
+    const padTop = padBottom + SOLE_LIGHT.thickness
+    for (const p of prof) {
+      if (p.y < padBottom || p.y > padTop) continue
+      expect(p.x).toBeGreaterThan(SOLE_LIGHT.radius)
+      expect(p.x * FOOT.depthScale).toBeGreaterThan(SOLE_LIGHT.radius * SOLE_LIGHT.stretchZ)
+    }
   })
 })
 
@@ -1778,6 +2034,189 @@ describe('the diaper is a cushion and not a pillow', () => {
 })
 
 /*
+  THE BOTTOM OF THE WAIST, TAKEN IN BY ANOTHER 25%, AND THE LEGS THAT MOVED WITH IT.
+
+  "Bottom portion of his waist a bit more, by another 25%, and make sure his legs come in
+  more to his narrowed waist."
+
+  Two halves, and the second is what makes the first possible - which is exactly the trade
+  the previous pass wrote down when it refused a literal 50% and recorded that going
+  further "needs `REST.legL/R.x` to come inboard with it".
+
+  These assertions are measured differently from the block above, and deliberately. The
+  garment's coverage of the leg is not a half-width at one ring: it is the LOWEST height
+  at which the surface still reaches the leg's axis, interpolated along the built mesh's
+  own edges, at the world z the leg actually sits on. The previous defect - the top 6.6 mm
+  of each shin outside the garment - survived because the test on record measured the
+  shin's inner edge instead of its axis. A ring-quantised version of the right measurement
+  is the same mistake one step smaller: the rings near the pole are 5.5 mm apart, which is
+  the same order as the margin being defended.
+*/
+describe('the bottom of the waist, and the legs that came in with it', () => {
+  const HIPS_Y = REST.hips.y
+  const SHIN_RADIUS = 0.085
+  const KNEE_Y = REST.hips.y + REST.legL.y + REST.kneeL.y
+  const SHIN_TOP = KNEE_Y + SHIN_RADIUS + 0.05
+
+  /** Half-width on +x at the world z the leg axis occupies, per built latitude ring. */
+  const profileAtLegZ = (taperBot: number): { y: number; x: number }[] => {
+    const geo = taperedSuperellipsoid({ ...DIAPER, taperBot })
+    const pos = geo.getAttribute('position')
+    const stride = DIAPER.lonSegments + 1
+    // The mesh is mounted at `DIAPER.z`, so world z 0 is mesh-local -DIAPER.z.
+    const localZ = -DIAPER.z
+    const out: { y: number; x: number }[] = []
+    for (let iv = 0; iv <= DIAPER.latSegments; iv++) {
+      let best = -Infinity
+      let y = 0
+      for (let iu = 0; iu < stride - 1; iu++) {
+        const i = iv * stride + iu
+        const z0 = pos.getZ(i)
+        const z1 = pos.getZ(i + 1)
+        y = pos.getY(i)
+        if (z0 === z1) continue
+        const t = (localZ - z0) / (z1 - z0)
+        if (t < 0 || t > 1) continue
+        const x = pos.getX(i) + t * (pos.getX(i + 1) - pos.getX(i))
+        if (x > best) best = x
+      }
+      if (best > -Infinity) out.push({ y: y + HIPS_Y, x: best })
+    }
+    return out.sort((a, b) => a.y - b.y)
+  }
+
+  /** How deep the shin's top is buried in the garment, in metres. Negative means a gap. */
+  const burial = (taperBot: number, legX: number): number => {
+    const prof = profileAtLegZ(taperBot)
+    for (let i = 1; i < prof.length; i++) {
+      if (prof[i].x >= legX && prof[i - 1].x < legX) {
+        const t = (legX - prof[i - 1].x) / (prof[i].x - prof[i - 1].x)
+        return SHIN_TOP - (prof[i - 1].y + t * (prof[i].y - prof[i - 1].y))
+      }
+    }
+    return Number.NaN
+  }
+
+  /*
+    THE POINT OF A SEPARATE DIAL, asserted rather than argued.
+
+    `taperBot` must not move the equator, because two separately won numbers live there:
+    the widest band of the whole silhouette, and the 0.0000 crossover with the torso that
+    stops the waist reading as a detached unit. The alternative available with the
+    existing parameters - `a * 0.75` with `taperTop / 0.75` - reproduces both poles and
+    narrows the equator by 12% on the way through, which would have moved both.
+  */
+  it('narrows the bottom without moving the widest band at all', () => {
+    /** The widest half-width of a build, and the mesh-local height it happens at. */
+    const widest = (opts: Parameters<typeof taperedSuperellipsoid>[0]) => {
+      const pos = taperedSuperellipsoid(opts).getAttribute('position')
+      let x = 0
+      let y = 0
+      for (let i = 0; i < pos.count; i++) {
+        if (Math.abs(pos.getX(i)) > x) {
+          x = Math.abs(pos.getX(i))
+          y = pos.getY(i)
+        }
+      }
+      return { x, y }
+    }
+    /** Half-width at the equator specifically, which is where the torso crossover lives. */
+    const atEquator = (opts: Parameters<typeof taperedSuperellipsoid>[0]) => {
+      const pos = taperedSuperellipsoid(opts).getAttribute('position')
+      let best = Infinity
+      let x = 0
+      for (let i = 0; i < pos.count; i++) {
+        const d = Math.abs(pos.getY(i))
+        if (d < best - 1e-9) { best = d; x = Math.abs(pos.getX(i)) }
+        else if (Math.abs(d - best) < 1e-9) x = Math.max(x, Math.abs(pos.getX(i)))
+      }
+      return x
+    }
+
+    const base = { ...DIAPER, taperBot: 1 }
+    expect(widest(DIAPER).x).toBeCloseTo(widest(base).x, 9)
+    expect(widest(DIAPER).y).toBeCloseTo(widest(base).y, 9)
+    expect(atEquator(DIAPER)).toBeCloseTo(atEquator(base), 9)
+
+    /*
+      And the route available without this dial really would have moved both, so the
+      three assertions above are a property of `taperBot` rather than of the shape being
+      insensitive to anything.
+
+      `a * 0.75` with `taperTop / 0.75` reproduces the two POLES exactly and distorts
+      everything between them: the equator comes in 12.1%, and because the steeper taper
+      partly compensates as the rim falls, the widest band migrates UPWARD and its own
+      value only drops 6.7%. So the profile is reshaped rather than narrowed, which is
+      the opposite of what a note about the bottom of the waist asked for.
+    */
+    const viaA = { ...DIAPER, taperBot: 1, a: DIAPER.a * 0.75, taperTop: DIAPER.taperTop / 0.75 }
+    expect(1 - atEquator(viaA) / atEquator(base)).toBeGreaterThan(0.1)
+    expect(widest(viaA).y).toBeGreaterThan(widest(base).y + 0.005)
+    expect(1 - widest(viaA).x / widest(base).x).toBeLessThan(0.1)
+  })
+
+  it('takes 25% off the bottom pole and nothing off the equator', () => {
+    const base = profileAtLegZ(1)
+    const cut = profileAtLegZ(DIAPER.taperBot)
+    // The pole itself: the full 25%, within the ring sampling.
+    expect(1 - cut[0].x / base[0].x).toBeGreaterThan(0.24)
+    expect(1 - cut[0].x / base[0].x).toBeLessThan(0.26)
+    // The equator, which is where world y equals the hips node: untouched.
+    const eqIndex = base.reduce(
+      (best, p, i) => (Math.abs(p.y - HIPS_Y) < Math.abs(base[best].y - HIPS_Y) ? i : best),
+      0,
+    )
+    expect(cut[eqIndex].x).toBeCloseTo(base[eqIndex].x, 9)
+    // And the narrowing is monotone in between rather than bulging back out.
+    for (let i = 1; i <= eqIndex; i++) {
+      expect(1 - cut[i].x / base[i].x).toBeLessThanOrEqual(1 - cut[i - 1].x / base[i - 1].x + 1e-9)
+    }
+  })
+
+  /*
+    THE ATTACHMENT, at the shipped leg position.
+
+    The standard is the burial the previous pass shipped, 0.0115, and not mere
+    non-negativity. The defect it replaced was -0.0066 and passed its test, so a bound of
+    "greater than zero" here would be a bound that the known defect nearly satisfies.
+  */
+  it('still buries the top of each shin as deeply as the last pass did', () => {
+    const depth = burial(DIAPER.taperBot, Math.abs(REST.legL.x))
+    expect(depth).toBeGreaterThan(0.011)
+    // Not so deep that the legs have been buried instead of narrowed - the garment's
+    // bottom pole must stay above the shin's top or the crotch has swallowed the knee.
+    expect(depth).toBeLessThan(0.03)
+  })
+
+  /*
+    AND THE MEASUREMENT CAN FAIL, which is the part four shipped defects on this
+    character did not have. If the legs had been left where they were, this pass would
+    have reintroduced the exact gap the previous one fixed - slightly worse.
+  */
+  it('would have detached both legs if they had been left at +-0.19', () => {
+    expect(burial(DIAPER.taperBot, 0.19)).toBeLessThan(0)
+    // The previous defect measured -0.0066. This one would have been -0.0076.
+    expect(burial(DIAPER.taperBot, 0.19)).toBeLessThan(-0.007)
+    // A grazing contact is not good enough either, and 0.175 is where that happens.
+    expect(burial(DIAPER.taperBot, 0.175)).toBeLessThan(0.001)
+    // The old garment at the old legs is the baseline this matches.
+    expect(burial(1, 0.19)).toBeCloseTo(0.0115, 3)
+  })
+
+  /*
+    The legs came in, and the two floors that were checked rather than assumed. Neither
+    binds, and saying which ones do not is how the next pass knows where the room is.
+  */
+  it('keeps the two shins clear of each other after coming inboard', () => {
+    expect(Math.abs(REST.legL.x)).toBeLessThan(0.19)
+    expect(Math.abs(REST.legL.x)).toBeGreaterThan(0.12)
+    // Inner faces of the two shin capsules.
+    const innerGap = 2 * (Math.abs(REST.legL.x) - SHIN_RADIUS)
+    expect(innerGap).toBeGreaterThan(0.1)
+  })
+})
+
+/*
   THE TORSO AND THE HIPS AS ONE FLOWING UNIT.
 
   The note is "the waist should look like it's part of the same unit as the chest... one
@@ -2103,10 +2542,16 @@ describe('the mitten hand and its fingers', () => {
 /*
   THE BOOT AND THE LEG IT HANGS FROM.
 
-  The note is "the feet should be far more narrow, reduce the overall size of the feet by
-  80% and ensure it's centered on the legs". A literal 80% on every axis breaks the leg
-  in two measurable ways, and both are asserted here so the decision to shrink by less on
-  the height is auditable rather than remembered.
+  Two notes deep now. The boot was shrunk from 0.32 x 0.17 x 0.44 to a `RoundedBox`
+  0.140 x 0.130 x 0.200 by "reduce the overall size of the feet by 80% and ensure it's
+  centered on the legs", and is now a filleted truncated cone with the narrow end DOWN
+  by "make his feet shaped like a cone... 30% narrower than the top part of that cone".
+
+  Everything below is measured on the BUILT lathe rather than on `FOOT`'s parameters,
+  and that is not a formality on this shape. The authored `topRadius` is the corner of
+  the unfilleted cone, which the fillet cuts off, so the solid never reaches it - the
+  same trap `TORSO` records for the taper. Reading the parameters instead of the mesh
+  overstates the boot's width by 3.6 mm.
 
   The shin is a `capsuleGeometry(0.085, 0.1)` on the knee node, so it spans knee-local
   y +-0.135 and is at full radius between +-0.05. In world terms, with the knee at
@@ -2141,16 +2586,92 @@ describe('the boot and the leg it hangs from', () => {
     expect(literal.width / 2).toBeLessThan(SHIN_RADIUS)
   })
 
-  it('honours the note on overall size even though it could not on linear scale', () => {
-    const oldVolume = 0.32 * 0.17 * 0.44
-    const newVolume = FOOT.width * FOOT.height * FOOT.depth
-    // The bounding volume falls 84.8%, past the 80% the note asked for.
-    expect(1 - newVolume / oldVolume).toBeGreaterThan(0.8)
-    // And the plan footprint, which is what "the feet are too big" is about when you
-    // are looking down at a character, falls 80.1%.
-    expect(1 - (FOOT.width * FOOT.depth) / (0.32 * 0.44)).toBeGreaterThan(0.8)
-    // Narrower is the note's first clause, and the width falls by more than the height.
-    expect(FOOT.width / 0.32).toBeLessThan(FOOT.height / 0.17)
+  /*
+    The 80% note from two passes ago, re-measured after this pass widened the boot.
+
+    IT NO LONGER CLEARS 80% ON BOUNDING VOLUME, and that is recorded rather than
+    smoothed over. The box measured -84.8%; the cone measures **-79.96%**, so widening
+    for the sole light's sake spent about five points of it and landed a hair under the
+    round number the previous pass celebrated. Plan footprint, which is the measure that
+    note was really about - it is what "the feet are too big" means when you are looking
+    down at a character - goes from -80.1% to **-78.9%**.
+
+    Both are asserted at 0.78 rather than 0.80 so the numbers above are what the test
+    actually permits. Anyone widening the boot further should see this fail rather than
+    discover the regression in a screenshot.
+  */
+  it('still honours the old 80% note approximately, and records that it now misses', () => {
+    const b = bootBounds()
+    const newVolume = b.width * b.height * b.depth
+    const volumeCut = 1 - newVolume / (0.32 * 0.17 * 0.44)
+    expect(volumeCut).toBeGreaterThan(0.78)
+    expect(volumeCut).toBeLessThan(0.8)
+
+    // The cone's plan is an ellipse, not a rectangle, so the areas are not comparable
+    // without saying so.
+    const plan = Math.PI * (b.width / 2) * (b.depth / 2)
+    const oldPlan = 0.32 * 0.44 - (4 - Math.PI) * 0.065 ** 2
+    expect(1 - plan / oldPlan).toBeGreaterThan(0.78)
+  })
+
+  /*
+    The widening, which the note offered as licence and `SOLE_LIGHT` turned into a
+    requirement. Asserted as a bound in both directions: it has to grow, and it must not
+    grow back toward the boot the user asked to have shrunk.
+  */
+  it('is wider than the box it replaces, but nowhere near the boot before that', () => {
+    const b = bootBounds()
+    expect(b.width).toBeGreaterThan(0.14)
+    expect(b.width / 0.14 - 1).toBeLessThan(0.3)
+    expect(b.width).toBeLessThan(0.32 * 0.6)
+    // The height is the one axis that must not move at all: `PROPORTIONS.soleY` is 0 and
+    // `totalHeight` is measured from it, so a taller or shorter boot lifts or sinks the
+    // whole character with no other test failing.
+    expect(b.height).toBeCloseTo(FOOT.height, 7)
+  })
+
+  /*
+    THE SHAPE NOTE ITSELF: the narrow end is DOWN.
+
+    Measured as the boot's own silhouette half-width at a ladder of heights, so it
+    catches a cone built upside down - which would satisfy every ratio assertion in this
+    block while putting the wide face on the floor.
+  */
+  it('tapers downward, monotonically, with the narrow end on the ground', () => {
+    const prof = bootSilhouette()
+    // From the sole up to the widest band, the half-width never decreases.
+    const widestAt = prof.reduce((best, p, i) => (p.x > prof[best].x ? i : best), 0)
+    for (let i = 1; i <= widestAt; i++) {
+      expect(prof[i].x).toBeGreaterThanOrEqual(prof[i - 1].x - 1e-9)
+    }
+    // And the widest band is in the boot's TOP half, which is what "pointy side down" is.
+    expect(prof[widestAt].y).toBeGreaterThan(0)
+    // The sole is strictly narrower than the top face.
+    expect(prof[0].x).toBeLessThan(prof[prof.length - 1].x)
+  })
+
+  /*
+    The 30%, on all three readings of it, because a filleted cone has two candidate
+    widths at each end and the fillets at the two ends are different sizes.
+
+    `narrow` is authored at exactly 0.7 and the two FACE readings land at 30.0% and
+    29.1%. The rim-to-rim reading is 23.8%, and it is pinned here rather than left to be
+    discovered by whoever measures the silhouette in a screenshot.
+  */
+  it('is 30% narrower at the bottom on the reading taken, and records the other two', () => {
+    expect(footBottomRadius() / FOOT.topRadius).toBeCloseTo(0.7, 12)
+
+    const faceRatio = footSoleFlat().x / footTopFlat().x
+    expect(faceRatio).toBeGreaterThan(0.7)
+    expect(faceRatio).toBeLessThan(0.72)
+
+    const prof = bootSilhouette()
+    const rimTop = Math.max(...prof.map((p) => p.x))
+    // The lower rim's widest point: the highest sample still below the boot's mid height.
+    const rimBot = Math.max(...prof.filter((p) => p.y < 0).map((p) => p.x))
+    const rimRatio = rimBot / rimTop
+    expect(rimRatio).toBeGreaterThan(0.75)
+    expect(rimRatio).toBeLessThan(0.775)
   })
 
   /*
@@ -2166,25 +2687,74 @@ describe('the boot and the leg it hangs from', () => {
   })
 
   /*
-    And is wider than the leg where the two meet, which the literal value was not. A boot
-    narrower than its own ankle reads as broken rather than as narrow.
+    And is wider than the leg where the two meet - against the boot's FLAT TOP FACE and
+    not against its bounding half-width, which is the correction this pass makes.
+
+    The note this replaces claimed the box's "half-width of 0.070 contains it with 0.0218
+    to spare". A `RoundedBox` is not at full width at its top plane: it is inset by the
+    corner radius, so the flat was 0.040 and the shin's 0.04822 was 0.0082 OUTSIDE it.
+    Harmless in the end, because the shin continues upward and the two solids
+    interpenetrate rather than gapping, but the 0.0218 of margin never existed. Same
+    error class as the test that checked the shin's inner edge instead of its axis: a
+    number read off the shape someone had in mind rather than the one built.
   */
-  it('is wider than the shin at the plane where they meet', () => {
+  it('lets the shin emerge through the FLAT of its top face, which the box did not', () => {
     const bootTop = PROPORTIONS.soleY + FOOT.height
     const shinThere = shinRadiusAt(bootTop)
-    expect(FOOT.width / 2).toBeGreaterThan(shinThere)
-    expect(FOOT.width / 2 - shinThere).toBeGreaterThan(0.015)
+    expect(footTopFlat().x).toBeGreaterThan(shinThere)
+    expect(footTopFlat().x - shinThere).toBeGreaterThan(0.015)
+    expect(footTopFlat().z).toBeGreaterThan(shinThere)
+
+    // The defect this replaces, kept as an executable statement so the claim is checkable.
+    const oldBoxFlatAtTopPlane = 0.14 / 2 - 0.03
+    expect(oldBoxFlatAtTopPlane).toBeLessThan(shinThere)
   })
 
-  it('is still narrower than it is long, so it reads as a boot', () => {
-    expect(FOOT.width).toBeLessThan(FOOT.depth)
+  it('is still narrower than it is long, so it reads as a boot rather than a peg', () => {
+    const b = bootBounds()
+    expect(b.width).toBeLessThan(b.depth)
+    expect(b.depth / b.width).toBeCloseTo(FOOT.depthScale, 6)
   })
 
-  it('keeps its corner radius inside what RoundedBoxGeometry would clamp to', () => {
-    // The clamp is half the smallest dimension. Above it the box silently becomes a
-    // pill, which is the trap `DIAPER` records for the shape it replaced.
-    const clamp = Math.min(FOOT.width, FOOT.height, FOOT.depth) / 2
-    expect(FOOT.radius).toBeLessThan(clamp)
+  /*
+    Centred on its own leg, on both axes, which it was not two passes ago: `REST.footL.z`
+    was 0.06, and `REST_ROTATION.legL.ry` then carried that forward offset into x as
+    well. Measured on the mesh, because a lathe is only centred if nothing translated it.
+  */
+  it('is centred on the leg axis', () => {
+    const b = bootBounds()
+    expect(b.centreX).toBeCloseTo(0, 7)
+    expect(b.centreZ).toBeCloseTo(0, 7)
+    expect(REST.footL.z).toBe(0)
+    expect(REST.footR.z).toBe(0)
+  })
+
+  /*
+    The bevel discipline, which the shape change could have dropped silently. A bare
+    `coneGeometry` has two 90 degree rims and the world rule is that no moulded plastic
+    object has one anywhere. Asserted as the existence of a fillet band on both rims
+    rather than as `FOOT.fillet > 0`, which would only restate the constant.
+  */
+  it('has a filleted rim at both ends rather than a hard corner', () => {
+    const prof = bootSilhouette()
+    // Distinct heights between the sole and the widest band means the rim turns through
+    // intermediate samples rather than in one step.
+    const lower = prof.filter((p) => p.y < 0)
+    expect(lower.length).toBeGreaterThan(FOOT.filletSteps)
+    const upper = prof.filter((p) => p.y > 0)
+    expect(upper.length).toBeGreaterThan(FOOT.filletSteps)
+    // Neither face runs to the widest band, so both rims are rounded off.
+    expect(footSoleFlat().x).toBeLessThan(Math.max(...prof.map((p) => p.x)))
+    expect(footTopFlat().x).toBeLessThan(Math.max(...prof.map((p) => p.x)))
+  })
+
+  it('winds outward, so the boot is drawn at all', () => {
+    // The ear pods and both arm rings shipped inside out for three rounds behind five
+    // passing extent tests. Every new lathe on this character gets this assertion.
+    expect(signedVolume(bootGeometry())).toBeGreaterThan(0)
+    const sense = radialNormalSense(bootGeometry())
+    expect(sense.out).toBeGreaterThan(0)
+    expect(sense.in).toBe(0)
   })
 })
 

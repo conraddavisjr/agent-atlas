@@ -23,10 +23,12 @@ import {
   FINGER,
   fingerCentreY,
   FOOT,
+  footBottomRadius,
   HAND,
   HEAD_CAP,
   HEAD_SHELL,
   SOLE_LIGHT,
+  roundedConeProfile,
   roundedDiscProfile,
   superellipsePoints,
   superellipsoidPatch,
@@ -210,6 +212,35 @@ EAR_POD_GEOMETRY.rotateZ(Math.PI / 2)
   under the non-uniform scale.
 */
 EAR_POD_GEOMETRY.scale(1, 1, EAR_POD_SHAPE.depthScale)
+
+/**
+ * The boot: a filleted truncated cone, narrow end down, then stretched fore and aft.
+ *
+ * `FOOT` carries the sizing, the reading taken on "30% narrower", and the measurement
+ * that says a cone at the box's old width cannot hold the sole light.
+ *
+ * No `rotateZ` here, unlike the ear pods. The lathe revolves about Y and the boot's
+ * axis IS Y, so the profile comes out already standing on the ground. Giving this one
+ * a rotate would lay the cone on its side, pointing at the other foot - which would
+ * render, cast a shadow and report every triangle present, which is the failure mode
+ * this file keeps a running list of.
+ *
+ * The `scale` is on Z only and comes after nothing, so there is no ordering trap of
+ * the kind the pods have. It routes through `applyMatrix4`, so the normals go through
+ * the inverse transpose and are renormalised: a non-uniformly scaled cone is still
+ * exactly an elliptical cone and its shading stays correct.
+ */
+const FOOT_GEOMETRY = latheProfile({
+  points: roundedConeProfile(
+    footBottomRadius(),
+    FOOT.topRadius,
+    FOOT.height / 2,
+    FOOT.fillet,
+    FOOT.filletSteps,
+  ),
+  radialSegments: FOOT.radialSegments,
+})
+FOOT_GEOMETRY.scale(1, 1, FOOT.depthScale)
 
 /** The mitten's oblong body. See `HAND` for why it is a superellipsoid at `taperTop` 1. */
 const HAND_GEOMETRY = taperedSuperellipsoid(HAND)
@@ -697,52 +728,65 @@ export function Shin() {
 /**
  * A boot, at the foot node's origin.
  *
- * 0.14 x 0.13 x 0.20 where it was 0.32 x 0.17 x 0.44. `FOOT` carries the sizing and
- * the two measurements that say a literal 80% linear reduction detaches the boot from
- * the leg; the short version is that the shin's bottom tip is at world y 0.115, so the
- * boot's top has to reach past it, and that is what fixes the height at 0.13.
+ * A truncated cone with the narrow end DOWN, measured on the built mesh: a bounding box
+ * of 0.1685 x 0.1300 x 0.2190, a top face 0.1369 x 0.1779, and a sole 0.0971 x 0.1262.
+ * It was a `RoundedBox` 0.140 x 0.130 x 0.200, and before that 0.320 x 0.170 x 0.440.
+ * `FOOT` carries the sizing, the three different ratios "30% narrower" can mean once
+ * the rims are filleted, and the measurement that says the boot had to get WIDER for
+ * the sole light to survive the taper at all.
  *
- * ## The stance survives the shrink, which is the thing worth protecting
+ * Height is still fixed by the shin rather than by taste - the capsule's bottom tip is
+ * at world 0.115 and the boot's top plane has to reach past it - and the cone is
+ * strictly better at it than the box was. The box's top face was inset by its corner
+ * radius to 0.040 of half-width, so the shin's 0.04822 poked out of it; the cone's top
+ * FLAT is 0.0684, so the leg emerges through the flat face with 0.0202 to spare.
  *
- * "A wide planted stance under a heavy head is what says low centre of gravity,
- * stable, controllable" was written about the 0.70 span of the old pair, and the pair
- * now span 0.52 against a 0.72 head. What carries that read is the leg SEPARATION,
- * `REST.legL/R.x` at +-0.19, and it has not moved. The old feet were so long that they
- * nearly touched - the gap between them was 0.060, exactly at the floor
- * `robotPose.test.ts` asserts - so most of that 0.70 was foot rather than stance. The
- * gap is now 0.240.
+ * ## The stance narrows, and that half of it was asked for
  *
- * The boot is also CENTRED on the leg now. `REST.footL.z` was 0.06, which put the box
- * 0.06 forward of the shin's axis, and because `REST_ROTATION.legL.ry` splays the leg
- * by -0.1 rad that forward offset also threw the boot 0.0060 sideways off the axis.
- * Both go with the z.
+ * "A wide planted stance under a heavy head is what says low centre of gravity" was
+ * written about the 0.70 span the boots had two passes ago. `REST.legL/R.x` has now
+ * come inboard from +-0.19 to +-0.145, which is the second half of the waist note, and
+ * the two changes pull opposite ways: legs in 23.7%, boots wider 20.3%. Net silhouette
+ * span 0.520 to 0.458, down 11.8%, against a head of 0.72.
+ *
+ * What narrows more than the silhouette does is the GROUND CONTACT, because only the
+ * sole's flat touches the floor: support half-width 0.230 to 0.194, down 15.9%. The
+ * gap between the two boots at their widest goes 0.240 to 0.1215. Both are on the
+ * record in `FOOT` because a cone standing on its narrow end under a heavy head is the
+ * one place this shape note works against the design's own stability read.
+ *
+ * The boot is CENTRED on the leg, which it was not two passes ago. `REST.footL.z` was
+ * 0.06, and because `REST_ROTATION.legL.ry` splays the leg by -0.1 rad that forward
+ * offset also threw the boot 0.0060 sideways off its own axis.
  */
 export function Foot() {
   return (
     <>
-      <RoundedBox
-        args={[FOOT.width, FOOT.height, FOOT.depth]}
-        radius={FOOT.radius}
-        smoothness={3}
-        castShadow
-        receiveShadow
-      >
+      <mesh geometry={FOOT_GEOMETRY} castShadow receiveShadow>
         <meshPhysicalMaterial {...rubber(palette.lockedDeep)} />
-      </RoundedBox>
+      </mesh>
       {/*
         The blue oval on the sole.
 
         It PROTRUDES below the sole plane rather than sitting flush with it or
-        recessed above it, and that is not a preference. The foot is a solid
-        `RoundedBox` spanning y -FOOT.height/2 to +FOOT.height/2, so the first version
-        of this pad - placed a millimetre "above the sole plane" to avoid z-fighting
-        with the ground - sat entirely inside opaque rubber and could not be seen at
-        any time from any angle. See `SOLE_LIGHT`.
+        recessed above it, and that is not a preference. The boot is a SOLID spanning
+        y -FOOT.height/2 to +FOOT.height/2 - a cone now, a `RoundedBox` when this
+        happened - so the first version of this pad, placed a millimetre "above the
+        sole plane" to avoid z-fighting with the ground, sat entirely inside opaque
+        rubber and could not be seen at any time from any angle. See `SOLE_LIGHT`.
 
         The y below is derived from `FOOT.height` and not the literal -0.085 it was.
         That literal was half the old height, so shrinking the boot without touching
         this line would have left the pad floating 0.020 under the sole: the same
         defect as the original, arrived at from the opposite direction.
+
+        What the cone changed is the sideways fit rather than this y. A cone's sole is
+        narrower than a box's twice over - the 30% taper, then a fillet on a slanted
+        rim - so the region this pad must stay inside is `footSoleFlat()` rather than
+        any dimension of `FOOT` directly. Nothing here recomputes it: the geometry
+        above and the test both go through that one function, which is what stops the
+        two drifting apart. This pad has shipped fully buried once and come within
+        2.3 mm of overhanging the rim twice.
 
         GLOW.source and not GLOW.bloom, and this is the one place on the character
         where the choice is genuinely arguable. The reference's sole lights do

@@ -511,13 +511,24 @@ export function chipTracePaths({
 }
 
 /**
- * The four surface kinds, matching the material presets that carry them.
+ * The five surface kinds, matching the material presets that carry them.
  *
  * `deck` is the walkable band-1 stone of the Core and the portal stack, `trim`
- * the band-2 kerbs and struts, `hull` the moulded plastic of the toy blocks and
- * the portal door, and `plate` the small hero props read at arm's length.
+ * the band-2 kerbs, `hull` the moulded plastic of the toy blocks and the portal
+ * door, `plate` the small hero props read at arm's length, and `strut` the
+ * cylindrical frame members - the Core's four struts and collar, the pylon masts
+ * and the overhead arcs.
+ *
+ * `strut` splits off `trim` rather than retuning it. The dress batch and the kerbs
+ * shared one kind, and they are not one surface: a kerb is a 0.6 m flat face read
+ * at deck level, a strut is a 0.44 m capsule read at 21.6 mm per screen pixel, and
+ * the marks that suit one are below the pixel on the other. Retuning `trim` in
+ * place would also move the kerb faces, which are the one surface in the game
+ * where the relief ladder was measured to read at all - 16.78 to 17.75 of
+ * high-frequency detail - and that is not a measurement to spend on a mark nobody
+ * asked to change.
  */
-export type DecalKind = 'deck' | 'trim' | 'hull' | 'plate'
+export type DecalKind = 'deck' | 'trim' | 'hull' | 'plate' | 'strut'
 
 export type KindSpec = {
   /** Physical size of one tile, which is the authoring target from section 4.6. */
@@ -640,6 +651,121 @@ export const DECAL_KINDS: Record<DecalKind, KindSpec> = {
     panelPitch: 0.12,
     screwDensity: 12,
     normalStrength: 1.2,
+  },
+  /**
+   * The cylindrical frame members, and the kind whose every number is set by the
+   * PIXEL rather than by the tile.
+   *
+   * ## The screen arithmetic first, because it decides all of it
+   *
+   * Computed from the establishing frame's own camera - `fov` 38 over a 934 px
+   * buffer, so `f = (934/2) / tan(19deg) = 1356.3 px` - and then checked against
+   * the frame:
+   *
+   *   member                        depth     px/m    mm/px   width on screen
+   *   Core strut, near, 0.44 m dia  29.32 m   46.3    21.6    20.4 px
+   *   Core strut, far               32.27 m   42.0    23.8    18.5 px
+   *   pylon mast, 0.68 m dia        30-32 m   30-52   19-33   21 to 46 px
+   *   completion-ring tube, 0.28 m  29.94 m   45.3    22.1    12.7 px
+   *   Core collar, 2.6 m dia        30.37 m   44.7    22.4    116 px, 13 px rim
+   *
+   * VERIFIED, not predicted: `frame.mjs row .../maps-on--hub-establishing.png 515
+   * 805 850` puts the near strut's edges at x 815 and x 834. Twenty pixels, against
+   * 20.4 predicted.
+   *
+   * So the brief's worry that a strut might be 6 px wide and unable to carry a mark
+   * at all is not the case - but 21.6 mm per pixel is WORSE than the deck's 26 mm
+   * only in the sense that it is the same order, and every mark `trim` hands these
+   * members is below it:
+   *
+   *   mark                            size     screen
+   *   trim panel groove, spec 2.5 mm  2.5 mm   0.12 px
+   *   trim screw head, 6 mm radius    12 mm    0.56 px
+   *   deck's corrected groove         20 mm    0.93 px
+   *   this kind's groove              70 mm    3.24 px
+   *   this kind's groove plus lips     110 mm  5.09 px
+   *
+   * MEASURED, and this is the proof rather than the inference: four cross-sections
+   * of the same strut 40 px apart - `frame.mjs row` at y 460, 500, 540 and 578 -
+   * are the same curve to within 0.01 of luma end to end. A 3.5 m member, 161 px
+   * long, with the full `trim` ladder bound to it, and not one mark resolves. The
+   * dress batch was not untextured. It was textured below the pixel, which section
+   * 7.7 of the materials spec now says in as many words is "not restraint, it is
+   * absence".
+   *
+   * ## What is NOT changed, and why the tile stays at 1.6 m
+   *
+   * The tile size is not the lever and raising it would be the third repetition of
+   * the same mistake. At 1.6 m over 1024 texels a texel is 1.56 mm, which is 0.072
+   * of a screen pixel - the texture is fourteen times finer than the display
+   * already, so resolution was never the constraint and buying more of it buys
+   * nothing. The groove WIDTH is the whole fix, exactly as it was for `deck`.
+   *
+   * Keeping 1.6 m has a second, larger payoff: it is `trim`'s value, so geometry
+   * already box-projected at `DECAL_KINDS.trim.metresPerTile` can take these maps
+   * with its UVs untouched. This kind costs no repack and no geometry change.
+   *
+   * ## Roughness, which is the channel that actually reads here
+   *
+   * 0.30 to match `anodised()`, because that is the preset these members want -
+   * see `cylinderFresnelRatio` in `materials.ts` for why a metal cylinder is the
+   * only thing that fits band 2, and `materials.ts`'s amendment to `anodised()` for
+   * the whole argument.
+   *
+   * **On a metal the roughness map finally has a lobe to break.** The standing
+   * explanation for the deck's null result is that its ORM was "breaking up a
+   * near-Lambertian lobe with no specular shape to break" - `mattePlastic` is
+   * roughness 0.75, and a swing on a diffuse surface under a soft key is
+   * arithmetically almost nothing. A metal has no diffuse term at all: its entire
+   * appearance is the lobe this channel modulates. Lobe width goes as roughness
+   * squared, so a swing of 0.07 about 0.30 spans alpha 0.053 to 0.137, a factor of
+   * 2.6 in lobe area, and that is a visible satin variation rather than a
+   * measurement-only one.
+   *
+   * 0.07 is a CEILING rather than a taste choice, and it is the tightest constraint
+   * on this entry. `roughnessByte` writes `value * 0.8 / target`, which clips at
+   * 255 once `value` passes `target / 0.8 = 0.375`, and the roughest texel is
+   * `roughness + swing`. So swing must stay under 0.075 or the dust-trap end of the
+   * ladder silently flattens against the byte ceiling. At 0.07 the green channel
+   * runs 156 to 252 and the effective roughness 0.229 to 0.371.
+   *
+   * **And that range makes `clearcoatRoughnessMap` mandatory rather than optional.**
+   * At green 156 the base lobe reaches 0.229 while an unmapped coat stays at 0.10,
+   * a lobe ratio of 5.26 where 8 is required - the two-lobe rule broken by the
+   * texture, on the smooth half of every member. Binding the same green byte to the
+   * coat pins the ratio at 14.06 everywhere. `createDecalMaps` has returned that
+   * image since it was written; see `lobeRatioUnderRoughnessMap` in `materials.ts`,
+   * which records that `deck` and `trim` are breaking the same rule today at 4.96
+   * and 5.71.
+   *
+   * ## Screws, dropped with the number written down
+   *
+   * `screwDensity: 0`. A 6 mm head is 12 mm across, which is 0.56 px. Not reduced,
+   * not resized - a fastener on a member seen at this distance is half a pixel of
+   * unstructured noise, and `plate`'s 12 heads per square metre are the same mark
+   * three times smaller. That is the honest reason `plate` finds no call site on
+   * this assembly either: it is specced for props read at arm's length and nothing
+   * here is read at arm's length.
+   *
+   * `normalStrength` stays at `trim`'s 2. Raising it cannot help. A canvas stroke's
+   * edge is one to two texels whatever the stroke's width, so the groove WALL - the
+   * only part of a relief mark with a gradient - is 1.6 to 3.1 mm, or 0.07 to 0.14
+   * px, and mip-averages away at any strength. What survives on screen is the
+   * groove FLOOR, 3.24 px of it, carried by the occlusion channel, which is a
+   * function of depth rather than of gradient. Strength 2 gives a maximum normal
+   * tilt of atan(0.16 x 2) = 17.7 degrees; that is worth knowing on a metal, where
+   * a steep normal reads as a Fresnel spike rather than as shading, and it is
+   * confined to that sub-pixel wall.
+   */
+  strut: {
+    metresPerTile: 1.6,
+    roughness: 0.3,
+    swing: 0.07,
+    panelPitch: 0.4,
+    panelWidth: 0.07,
+    panelLip: 0.02,
+    screwDensity: 0,
+    normalStrength: 2,
   },
 }
 

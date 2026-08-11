@@ -45,18 +45,41 @@ import { BLOOM_THRESHOLD, emissiveIntensityFor, linearLuma } from './materials'
  * turns out to read, the fix is a real one - patch `MeshPhysicalMaterial` under
  * the bible's four rules - and not a tweak to this file.
  *
- * ## What is deliberately NOT here
+ * ## The splash is now built, and it is NOT the pooled system
  *
- * The splash. The user asked for the trace to splash when the player runs
- * through it, and that needs the pooled particle system specified in
- * `05-character-vfx.md` sections 9 to 11, which was designed and never built.
- * `quality.particleBudget` is 0 at all three tiers and `vfxDetail` is `'off'` at
- * all three, so there is no emitter to hang a splash on and no budget to run one
- * in. Building a one-off emitter here would be the third particle system in a
- * codebase that has none, so the decision on record is shimmer now, splash
- * later, and **the trace crossing is the first real use case that system has**.
- * It is the right one to design against: a shallow, wide, low-velocity burst
- * from a known surface height, triggered by a capsule crossing a known path.
+ * The note that used to sit here said "shimmer now, splash later" and named the
+ * pooled particle system in `05-character-vfx.md` sections 9 to 11 as the thing
+ * that had to exist first. The splash exists now and that system still does not.
+ * See `src/art/splash.ts` for the argument; the short form is that
+ * `quality.particleBudget` is 0 and `vfxDetail` is `'off'` at all three tiers, so
+ * the general system needs tier numbers invented for it in a file this pass does
+ * not own, and **sections 9 to 11 are deliberately left unclaimed** rather than
+ * half-built against a budget of zero.
+ *
+ * ## What this material is drawn on, which changed under it
+ *
+ * Version two swept a CIRCLE. This one sweeps `WATER_SECTION`, a flat-topped
+ * section with its widest point at the deck plane, and two things in here had to
+ * move with it.
+ *
+ * The meniscus is no longer a function of the world normal. On a tube, normal Y is
+ * a fair proxy for how far round the surface a fragment is, so
+ * `1 - smoothstep(shoreTop, ...)` over it landed a band near the waterline. On a
+ * flat POOL every fragment has normal Y 1.0, so that expression is constant across
+ * two square metres of water and there is no pair of numbers that puts a band at
+ * the rim. Distance-to-bank arrives as a vertex attribute instead - see
+ * `WATER_SHORE_ATTRIBUTE` - which is exact, free, and the same quantity on a
+ * ribbon, a lathe and a disc.
+ *
+ * The wave field now moves the BODY as well as the glint, and that is not a
+ * flourish. `WATER_SECTION`'s own note works through why a flat water surface at
+ * this camera has no specular response at all: the half-vector sits 45 degrees off
+ * a flat normal and `pow(0.7, 220)` is `e^-78`. The channels keep their glint
+ * because the section retains a quarter turn of normals, but the pool and the
+ * threshold pad are genuinely flat and would have rendered as static dark discs -
+ * a dead pool at centre frame under the Core. `uRipple` is what gives them
+ * movement, and it is a value modulation because value is the only channel a flat
+ * unlit surface has.
  */
 
 /**
@@ -243,6 +266,51 @@ export const WATER = {
   /** Weight of the meniscus line. See `WATER_FOAM`. */
   foam: 0.22,
   /**
+   * Where the meniscus band starts, on the geometry's own distance-to-bank
+   * coordinate.
+   *
+   * The band is `smoothstep(foamShore, 1.0, aShore)`, and `WATER_SECTION` carries
+   * `shore` values of 0 at the crown, 0.35 at the dome and 1.0 from the shoulder
+   * outward. 0.55 therefore opens the band at `across` 0.533 and runs it to the
+   * rim: 0.467 half widths, which is 5.1 cm on the trunk, 3.5 cm on a spur and
+   * 5.1 cm on the pool's rim.
+   *
+   * **It has to open INBOARD of the shoulder rather than at the rim**, because the
+   * rim is the part of the section that dips below the surface it is held in and
+   * gets buried by it. `hubLayout.ts`'s note on `WATER_SECTION`'s shore values
+   * works the pool case through: anchored at the rim instead, the water's visible
+   * edge sits at `shore` 0.75 and the band renders at 43% weight with its bright
+   * half under the bank. `hubLayout.test.ts` asserts this value falls between the
+   * section's dome and shoulder.
+   */
+  foamShore: 0.55,
+  /**
+   * How far the wave field swings the body's sky mix, peak to peak.
+   *
+   * **This is the only cue a flat water surface has left**, which is why it exists
+   * at all. The glint is a Blinn lobe at exponent 220 and the sky reflection is a
+   * fourth-power Fresnel; both need the surface to present a range of normals, and
+   * the pool and the threshold pad are discs. On those two pieces `pow(waves, 6)`
+   * multiplies a streak that is already zero, so without this term they are static
+   * dark circles.
+   *
+   * Applied centred - `(waves - 0.5) * uRipple` - so the mean body value is exactly
+   * what it was and only the variation is new. 0.16 swings the sky mix by plus or
+   * minus 0.08, which moves the pool either side of its display 0.212 by a visible
+   * amount without leaving the midground floor. `waves` is already pulled to 0.5 by
+   * `resolved` wherever the pattern is finer than the pixels drawing it, so the
+   * ripple self-cancels at distance with no second guard.
+   *
+   * **What sets the ceiling is the bloom margin, not the look.** This term enters
+   * `waterPeakLuminance` at half its swing, and the previous pass recorded an
+   * acceptance that the threshold stay at least 1.25x the unreachable worst case.
+   * 0.20 was written first and lands that ratio at 1.243 - inside a tripwire that
+   * was left there on purpose - where 0.16 lands it at 1.256. The visual difference
+   * between the two is nothing and the difference in what the suite guarantees is
+   * real, so the number came down rather than the assertion.
+   */
+  ripple: 0.16,
+  /**
    * Peak glint brightness, as a multiple of `BLOOM_THRESHOLD`.
    *
    * Under 1.0, and that is mandatory rather than chosen. The art bible's section
@@ -268,27 +336,45 @@ export const WATER = {
   /** Body opacity, away from the shoreline. */
   opacity: 0.95,
   /**
-   * The shoreline, expressed as world normal Y rather than as a height.
+   * The alpha ramp, expressed as world normal Y rather than as a height.
    *
    * A height cannot work here. The batch is merged and the trunk climbs four
-   * risers from y 1.24 to 2.84 while the spurs sit at 0.44 to 1.24, so there is
+   * risers from y 1.20 to 2.80 while the spurs sit at 0.40 to 1.20, so there is
    * no single waterline altitude in the geometry. The normal is the coordinate
-   * that is the same everywhere: on a half-buried tube the crown points up, the
-   * flanks point sideways, and the deck surface cuts the tube exactly where
-   * `sin(theta) = -standoff / radius`.
+   * that is the same everywhere.
    *
-   * For the trunk that is `-0.04 / 0.075 = -0.533`, and `shoreBottom` at -0.55
-   * sits just past it so the fade is complete before the geometry enters the
-   * deck. For a spur it is `-0.04 / 0.05 = -0.800`, well past -0.55, so on a
-   * spur the water stops about a centimetre short of its own shore. That
-   * asymmetry errs in the safe direction on purpose: stopping short shows deck,
-   * where overrunning would show water inside the board. `hubLayout.test.ts`
-   * ties both numbers to `TRACE` so a change to `standoff` or either radius
-   * cannot silently un-hide the seam.
+   * **Both numbers are unchanged from the version that was tuned against a tube,
+   * and that is a result rather than an oversight.** They were the two things most
+   * likely to need retuning under a new cross-section, so they were checked first,
+   * and `WATER_SECTION`'s resolved normals happen to land inside them with room to
+   * spare:
    *
-   * The vertical runs that climb the risers have normals near y 0, so they are
-   * fully water. That is not a special case handled by accident - it is what
-   * makes each riser read as a small fall between two levels.
+   * ```
+   *   where on the section     normal Y    smoothstep(-0.55, -0.15, Y)
+   *   crown                      1.000     1.00   opaque
+   *   shoulder                   0.879     1.00   opaque
+   *   rim, at the deck plane     0.092     1.00   opaque
+   *   tuck, buried               -0.744    0.00   gone
+   * ```
+   *
+   * So the entire visible surface is fully opaque and the ramp acts only on the
+   * tuck, which is inside the deck's own solid volume and hidden by the depth test
+   * anyway. That makes the ramp pure insurance, and what it insures against is
+   * specific: the twelve riser lips and every 0.10 m fillet the water crosses,
+   * where the deck falls away from underneath and the tuck is briefly exposed.
+   * There it fades instead of ending on a hard silhouette line.
+   *
+   * `shoreTop` staying NEGATIVE is the load-bearing part. The twelve vertical
+   * sheets that fall down the risers present normals near Y 0 - `up` on a vertical
+   * run points away from the riser face, not at the sky - so a `shoreTop` of 0.0
+   * would read them as half shore and render every waterfall in the level at 50%
+   * alpha. It is the one edit here that looks tidier and breaks the most.
+   *
+   * The self-similar section also retires an asymmetry version two documented and
+   * accepted: its ramp met the trunk's waterline at -0.533 and a spur's at -0.800,
+   * so "on a spur the water stops about a centimetre short of its own shore". The
+   * section presents the same normals at every size, so one ramp is now exactly
+   * right on all four pieces.
    */
   shoreTop: -0.15,
   shoreBottom: -0.55,
@@ -313,7 +399,13 @@ export const WATER = {
 export function waterPeakLuminance(): number {
   const deep = linearLuma(WATER_DEEP)
   const sky = linearLuma(WATER_SKY)
-  const body = deep + (sky - deep) * (WATER.fresnel + WATER.progressLift)
+  /*
+    The ripple enters at HALF its peak-to-peak swing, because it is applied centred
+    as `(waves - 0.5) * uRipple` and `waves` is clamped to 0 to 1. The shader
+    clamps the summed mix factor to 1 as well, so this is a bound on a bound.
+  */
+  const mix = Math.min(1, WATER.fresnel + WATER.progressLift + WATER.ripple * 0.5)
+  const body = deep + (sky - deep) * mix
   const foam = linearLuma(WATER_FOAM) * WATER.foam
   // The glint colour is premultiplied to exactly this luminance. See uGlintColor.
   const glint = WATER.glint * BLOOM_THRESHOLD
@@ -321,12 +413,28 @@ export function waterPeakLuminance(): number {
 }
 
 export const waterVertexShader = /* glsl */ `
+  /*
+    Distance to the nearest bank: 0 in open water, 1 at the edge. Written by
+    sweepChannel and waterDisc from WATER_SECTION's own shore values, under
+    the name WATER_SHORE_ATTRIBUTE so the two sides cannot disagree about the
+    spelling.
+
+    A ShaderMaterial gets NO attributes for free beyond position, normal and uv,
+    which is the trap this declaration exists to avoid falling into quietly: three
+    binds nothing for a name the geometry does not carry, GLSL initialises it to
+    zero, and a missing meniscus is a frame that renders perfectly and is simply
+    less good. waterMaterial.test.ts asserts this name against the constant.
+  */
+  attribute float aShore;
+
   varying vec2 vUv;
   varying vec3 vWorldNormal;
   varying vec3 vWorldPosition;
+  varying float vShore;
 
   void main() {
     vUv = uv;
+    vShore = aShore;
 
     vec4 world = modelMatrix * vec4(position, 1.0);
     vWorldPosition = world.xyz;
@@ -366,6 +474,8 @@ export const waterFragmentShader = /* glsl */ `
   uniform float uFresnel;
   uniform float uProgressLift;
   uniform float uFoam;
+  uniform float uFoamShore;
+  uniform float uRipple;
   uniform float uGloss;
   uniform float uOpacity;
   uniform float uShoreTop;
@@ -374,6 +484,7 @@ export const waterFragmentShader = /* glsl */ `
   varying vec2 vUv;
   varying vec3 vWorldNormal;
   varying vec3 vWorldPosition;
+  varying float vShore;
 
   const float TAU = 6.283185307179586;
 
@@ -425,17 +536,19 @@ export const waterFragmentShader = /* glsl */ `
       Fade the pattern out wherever it is finer than the pixels drawing it.
 
       This is not polish, it is the difference between water and a crawling
-      artefact, and it earns its keep in one place in particular. The pads are in
-      the same merged batch, and on a pad uv.x runs AROUND the disc, so 40 crests
-      converge on the centre: at radius 0.05 m the crest spacing is 0.008 m,
-      which at this camera is about 1.4 px. Without this the junction pad - dead
-      centre of frame, directly beneath the Core node - would carry a shimmering
-      starburst that reads as a bug rather than as water. With it, the pad centre
-      resolves to still water and the ripples appear as the radius opens out,
-      which is what a basin looks like.
+      artefact, and it now earns its keep on the ordinary case rather than on a
+      pathological one: a distant run of trunk, where 40 crests over 13.8 m alias
+      into a crawl along the channel.
 
-      It also handles the ordinary case of a distant run of trunk, where the same
-      aliasing appears as a crawl along the tube.
+      **The pathological case it was written for is gone, and the note is worth
+      keeping because the fix was geometric rather than shader-side.** The pads used
+      to be pad() discs whose uv.x ran AROUND the circumference, so 40 crests
+      converged on the centre and the spacing fell to 0.008 m - about 1.4 px - dead
+      centre of frame beneath the Core node. waterDisc runs uv.x RADIALLY
+      instead, so the crest spacing on the pool is uniform at 0.15 m from the middle
+      to the rim and there is no convergence anywhere for this guard to rescue.
+      Concentric rings travelling outward is also the correct read for a basin,
+      which the old starburst never was even when it was resolved.
 
       fwidth is safe to use unguarded here. three's own lights_physical_fragment
       calls dFdx with no extension directive and every clearcoat surface in this
@@ -464,7 +577,27 @@ export const waterFragmentShader = /* glsl */ `
       value lever - see WATER.fresnel for what each cap renders at.
     */
     float fresnel = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 4.0);
-    vec3 body = mix(uDeepColor, uSkyColor, fresnel * uFresnel + uProgress * uProgressLift);
+
+    /*
+      The body, and the third term is what keeps a flat pool alive.
+
+      (waves - 0.5) is CENTRED, so the mean body value is exactly what it was
+      before this term existed and only the variation is new - which is the property
+      that lets waterPeakLuminance bound the sum by adding half the swing rather
+      than all of it.
+
+      Clamped, and the lower clamp is the one that matters. A centred term can drive
+      the mix factor negative, and mix with a negative t EXTRAPOLATES: it would
+      take the body below uDeepColor toward the negative of the sky, which on the
+      anti-key flank of a wave trough is a pixel darker than anything the palette
+      contains and, once the channel is under the arch, plausibly a negative one.
+    */
+    float skyMix = clamp(
+      fresnel * uFresnel + uProgress * uProgressLift + (waves - 0.5) * uRipple,
+      0.0,
+      1.0
+    );
+    vec3 body = mix(uDeepColor, uSkyColor, skyMix);
 
     /*
       The specular streak, which HubIsland.tsx once removed on purpose. See the
@@ -483,16 +616,23 @@ export const waterFragmentShader = /* glsl */ `
     float glint = streak * pow(waves, 6.0) * resolved;
 
     /*
-      The shoreline. Alpha ramps to zero as the surface turns under toward the
-      deck, so the tube does not end on the hard silhouette line it ends on
-      today, and a narrow band just inside that ramp carries the meniscus.
+      The shoreline, as two independent things that used to be one.
 
-      Half-buried geometry is what makes this cheap: the underside is inside an
-      opaque deck and fails the depth test, so there is no gap to light through
-      and nothing to hide. The ramp is only softening the last centimetre.
+      ALPHA still keys off the normal: it ramps to zero as the surface turns under
+      into the bed, so the water's edge does not end on a hard silhouette line
+      wherever the bed falls away from underneath it. On WATER_SECTION the whole
+      visible surface sits at normal Y 0.09 or above and is therefore fully opaque,
+      so this only ever acts on the buried tuck - at the twelve riser lips and on
+      every 0.10 m fillet the water crosses. See WATER.shoreTop.
+
+      THE MENISCUS keys off the geometry's own distance-to-bank instead, which is
+      the correction. Over a tube the normal stood in for that well enough; over a
+      flat pool it cannot stand in for anything, because two square metres of still
+      water share one normal. Multiplied by shore so a bank that has faded out
+      cannot leave its bright line hanging in the air behind it.
     */
     float shore = smoothstep(uShoreBottom, uShoreTop, N.y);
-    float meniscus = shore * (1.0 - smoothstep(uShoreTop, uShoreTop + 0.25, N.y));
+    float meniscus = shore * smoothstep(uFoamShore, 1.0, vShore);
 
     vec3 col = body
       + uFoamColor * meniscus * uFoam * (0.7 + 0.3 * uProgress)
@@ -541,6 +681,8 @@ export function waterUniforms(keyDirection: [number, number, number] = KEY_DIREC
     uFresnel: { value: WATER.fresnel },
     uProgressLift: { value: WATER.progressLift },
     uFoam: { value: WATER.foam },
+    uFoamShore: { value: WATER.foamShore },
+    uRipple: { value: WATER.ripple },
     uGloss: { value: WATER.gloss },
     uOpacity: { value: WATER.opacity },
     uShoreTop: { value: WATER.shoreTop },

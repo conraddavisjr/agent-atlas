@@ -134,9 +134,35 @@ export const REST = {
   shoulderR: { x: 0.31, y: 0.13, z: 0 },
   handSocketL: { x: 0, y: -0.34, z: 0 },
   handSocketR: { x: 0, y: -0.34, z: 0 },
-  /** Local to hips, so world 0.380, which is the top of the leg band. */
-  legL: { x: -0.19, y: -0.14, z: 0 },
-  legR: { x: 0.19, y: -0.14, z: 0 },
+  /**
+   * Local to hips, so world 0.380, which is the top of the leg band.
+   *
+   * ## x came in from +-0.19 to +-0.145, and it is half of a waist note
+   *
+   * "Make sure his legs come in more to his narrowed waist." It is not a separate
+   * stance decision: `DIAPER.taperBot` takes 25% off the bottom of the garment, and
+   * the garment IS the pelvis - there is no thigh mesh, so it is the only thing
+   * covering the top of the leg. At 0.19 against the narrowed bottom the top 7.6 mm of
+   * each shin sits OUTSIDE the garment, which is the exact defect, to within a
+   * millimetre, that the previous pass found and fixed. `DIAPER` carries the measured
+   * table; 0.145 is the value that restores the burial the last pass shipped, 0.0115,
+   * to four places.
+   *
+   * The knock-on the note did not ask about is the stance, so it is stated rather than
+   * absorbed. The boots got 20.3% wider in the same pass, so the silhouette span only
+   * falls 0.520 to 0.458, down 11.8% - but ground contact is the sole's flat alone, and
+   * that support half-width falls 0.230 to 0.194, down 15.9%. `Foot`'s comment carries
+   * both, because the "wide planted stance under a heavy head" read is a stated design
+   * goal and this is the pass that spent some of it.
+   *
+   * Two floors are NOT binding and were checked rather than assumed. The shins are
+   * 0.085 in radius, so at 0.145 their inner faces are 0.120 apart and cannot touch.
+   * And `REST_ROTATION.legL.ry` is a rotation about the leg node's own Y, which leaves
+   * the foot's centre on this x and only swings its extents, so the toe-out costs the
+   * gap between the boots 0.0006 rather than anything structural.
+   */
+  legL: { x: -0.145, y: -0.14, z: 0 },
+  legR: { x: 0.145, y: -0.14, z: 0 },
   kneeL: { x: 0, y: -0.13, z: 0 },
   kneeR: { x: 0, y: -0.13, z: 0 },
   /**
@@ -875,9 +901,17 @@ export function stepAnim(
   */
   const stride = Math.max(speedNorm, Math.abs(t) * TURN_ANIM.stepScale)
 
-  // The walk cycle advances with actual speed, so the waddle stays in step with
-  // movement instead of drifting out of sync at different speeds.
-  rt.phase += step * WADDLE.bobFrequency * stride
+  /*
+    The walk cycle advances with actual speed, so the waddle stays in step with
+    movement instead of drifting out of sync at different speeds.
+
+    `GAIT.cadenceScale` is the "20% faster" note, and it is applied HERE - to the one
+    phase - rather than separately to the legs and the arms below. Both read `swing`,
+    which reads `p`, so one multiplier moves the feet and the arms together and keeps
+    them in the opposition that makes it a walk. That block carries the arithmetic,
+    including the frequency at which the waddle would stop reading.
+  */
+  rt.phase += step * WADDLE.bobFrequency * GAIT.cadenceScale * stride
 
   const walking = grounded ? stride : 0
   const p = rt.phase

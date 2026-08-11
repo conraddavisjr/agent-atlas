@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { BufferAttribute, BufferGeometry } from 'three'
 import {
   PLATEAU_RADIUS,
+  POOL,
   TRACE,
+  WATER_SECTION,
+  WATER_SHORE_ATTRIBUTE,
   arcsWithBothEnds,
   assertDrawable,
   chamferCorners,
@@ -14,16 +17,46 @@ import {
   orthoTrace,
   pathLength,
   pathVerticalRuns,
+  poolFloorRadius,
+  poolRingColliders,
   spurTraceCorners,
+  sweepChannel,
   traceSegments,
   trunkTraceCorners,
+  waterDisc,
+  waterSection,
+  basinLathe,
+  STEP,
+  CORE_PUCKS,
   type Point3,
 } from './hubLayout'
 import { mulberry32 } from '@/art/placement'
 import { displayLuma, palette } from '@/art/palette'
-import { trace } from '@/art/geometry'
+import { mergeProp, puck } from '@/art/geometry'
+import { WATER } from '@/art/waterMaterial'
+import { BODY } from '@/game/player/tuning'
+import type { BufferAttribute as Attribute, InterleavedBufferAttribute } from 'three'
 
 const AXIS_TOLERANCE = 1e-9
+
+/** Area of a triangle from an indexed position attribute, for degeneracy checks. */
+function triangleArea(
+  position: Attribute | InterleavedBufferAttribute,
+  a: number,
+  b: number,
+  c: number,
+): number {
+  const ux = position.getX(b) - position.getX(a)
+  const uy = position.getY(b) - position.getY(a)
+  const uz = position.getZ(b) - position.getZ(a)
+  const vx = position.getX(c) - position.getX(a)
+  const vy = position.getY(c) - position.getY(a)
+  const vz = position.getZ(c) - position.getZ(a)
+  return (
+    0.5 *
+    Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
+  )
+}
 
 describe('chamferCorners', () => {
   it('replaces a right angle with two points and no corner', () => {
@@ -127,10 +160,19 @@ describe('the trace routes', () => {
     /*
       The absolute rule from the environment spec: a trace segment is at or
       below 0.12 m above the surface beneath it, or at or above 3.00 m. The
-      horizontal runs are the ones this applies to, and the crown of the tube -
-      standoff plus radius - is what has to clear it.
+      horizontal runs are the ones this applies to, and the CROWN of the swept
+      section is what has to clear it.
+
+      The crown is now the section's apex rather than "standoff plus radius",
+      which is the arithmetic that changed with the cross-section: 0.345 half
+      widths above the bed, so 0.038 m on the trunk against version two's 0.115.
+      The rule is met with three times the margin, and the assertion is written
+      against the section rather than against a literal so a re-authored section
+      cannot quietly breach it.
     */
-    const crown = TRACE.standoff + TRACE.trunkRadius
+    const apex = Math.max(...WATER_SECTION.map((p) => p.up))
+    const crown = TRACE.standoff + apex * TRACE.trunkHalfWidth
+    expect(crown).toBeCloseTo(0.038, 3)
     expect(crown).toBeLessThanOrEqual(0.12)
 
     const heights = [1.2, 1.6, 2, 2.4, 2.8].map((deck) => deck + TRACE.standoff)
@@ -146,7 +188,7 @@ describe('the trace routes', () => {
     // The outer end sits inside the totem plinth: radius 0.70 centred at 7.071.
     expect(Math.abs(radiusOf(corners[0]) - 7.071)).toBeLessThan(0.7)
     // The inner end sits inside the junction pad.
-    expect(radiusOf(corners[corners.length - 1])).toBeLessThan(TRACE.junctionRadius)
+    expect(radiusOf(corners[corners.length - 1])).toBeLessThan(POOL.radius)
   })
 
   it('produces a dense, finite polyline with the mitres intact', () => {
@@ -237,7 +279,7 @@ describe('the swept trace geometry', () => {
     flickers on and off as the camera moves, and which no assertion about the
     polyline would catch.
   */
-  const trunk = trace(orthoTrace(trunkTraceCorners()), TRACE.trunkRadius, 280)
+  const trunk = sweepChannel(orthoTrace(trunkTraceCorners()), TRACE.trunkHalfWidth, 280)
 
   it('sweeps a finite tube', () => {
     const position = trunk.getAttribute('position')
@@ -267,7 +309,7 @@ describe('the swept trace geometry', () => {
     expect(box.max.y).toBeLessThan(3.1)
     // It never leaves the centreline by more than its own radius.
     expect(Math.max(Math.abs(box.min.x), Math.abs(box.max.x))).toBeLessThanOrEqual(
-      TRACE.trunkRadius + 1e-6,
+      TRACE.trunkHalfWidth + 1e-6,
     )
   })
 
@@ -276,6 +318,570 @@ describe('the swept trace geometry', () => {
     const box = trunk.boundingBox!
     expect(box.max.z).toBeGreaterThan(-1.1)
     expect(box.min.z).toBeLessThan(-13.6)
+  })
+})
+
+describe('waterSection', () => {
+  const full = waterSection()
+  const rim = full[full.length - 2]
+  const tuck = full[full.length - 1]
+
+  it('mirrors symmetrically and keeps the crown dead vertical', () => {
+    /*
+      The crown's normal is the one point that goes wrong if the section is halved
+      before its normals are derived rather than after: with one neighbour instead of
+      two it comes out tilted 5.7 degrees outward. That tilt would then be the normal
+      of a POOL's entire flat interior, because `waterDisc` takes the half form -
+      two square metres of still water at centre frame lit as a shallow cone.
+    */
+    const crown = full[(full.length - 1) / 2]
+    expect(crown.across).toBe(0)
+    expect(crown.normalAcross).toBeCloseTo(0, 12)
+    expect(crown.normalUp).toBeCloseTo(1, 12)
+
+    // And the halved form has to agree with the full one point for point.
+    const half = waterSection(true)
+    expect(half).toEqual(full.slice((full.length - 1) / 2))
+  })
+
+  it('hands back unit normals at every point, at every relief', () => {
+    for (const relief of [1, TRACE.endRelief, POOL.rimDrop]) {
+      for (const p of waterSection(false, relief)) {
+        expect(Math.hypot(p.normalAcross, p.normalUp), `relief ${relief}`).toBeCloseTo(1, 12)
+      }
+    }
+  })
+
+  /*
+    THIS is the assertion that ties the geometry to the shader. Both files were
+    written against the same four numbers and neither imports them from the other, so
+    without this they can drift by one edit: a re-authored section whose rim normal
+    climbed to 0.3 would put the alpha ramp in the wrong place and leave the water
+    ending on the hard silhouette line the ramp exists to remove, in a frame that
+    still renders water.
+  */
+  it('lands every visible point inside the shader alpha window and the tuck outside it', () => {
+    const visible = full.filter((p) => p.up >= 0)
+    for (const p of visible) {
+      expect(p.normalUp, `visible point at across ${p.across}`).toBeGreaterThan(WATER.shoreTop)
+    }
+    // The rim sits at the bed plane and must still be fully opaque.
+    expect(rim.up).toBe(0)
+    expect(rim.normalUp).toBeGreaterThan(WATER.shoreTop)
+    // The buried tuck must fade to nothing, or the water shows inside the deck.
+    expect(tuck.normalUp).toBeLessThan(WATER.shoreBottom)
+  })
+
+  it('keeps the rim near grazing, which is where the sky reflection comes from', () => {
+    /*
+      A fourth-power Fresnel needs `dot(N, V)` small, so the bank has to present a
+      near-horizontal normal or the channel reflects nothing anywhere. This is also
+      the property that survives the discs' flattening - see `POOL.rimDrop` - so it is
+      asserted at both reliefs rather than only at the channel's.
+    */
+    expect(rim.normalUp).toBeLessThan(0.15)
+    const flattened = waterSection(true, POOL.rimDrop)
+    expect(flattened[flattened.length - 2].normalUp).toBeLessThan(0.15)
+  })
+
+  it('opens the meniscus inboard of the shoulder, not at the rim', () => {
+    /*
+      The rim is the part of the section that dips under the surface it is held in, so
+      a band anchored there is a band mostly buried. `WATER.foamShore` has to fall
+      between the dome's shore value and the shoulder's for the band to sit on
+      visible water. See `WATER_SECTION`'s note for the pool arithmetic.
+    */
+    const dome = WATER_SECTION[1]
+    const shoulder = WATER_SECTION[2]
+    expect(WATER.foamShore).toBeGreaterThan(dome.shore)
+    expect(WATER.foamShore).toBeLessThanOrEqual(shoulder.shore)
+    // Open water carries none of it and the bank carries all of it.
+    expect(WATER_SECTION[0].shore).toBe(0)
+    expect(WATER_SECTION[WATER_SECTION.length - 1].shore).toBe(1)
+  })
+
+  it('is self-similar, so one shoreline is right on all four pieces', () => {
+    /*
+      Version two's ramp was tuned against the trunk's waterline at -0.533 and met a
+      spur's at -0.800, and `waterMaterial.ts` recorded the consequence: "on a spur
+      the water stops about a centimetre short of its own shore". The section is
+      normalised in BOTH axes, so scale cannot change a normal - which is what
+      retires that asymmetry, and it is worth pinning because expressing the crown in
+      metres would silently bring it back.
+      */
+    const trunk = full.map((p) => p.normalUp)
+    const spur = waterSection().map((p) => p.normalUp)
+    expect(trunk).toEqual(spur)
+    expect(TRACE.spurHalfWidth).toBeLessThan(TRACE.trunkHalfWidth)
+  })
+})
+
+describe('sweepChannel', () => {
+  const trunkPath = orthoTrace(trunkTraceCorners())
+  const trunk = sweepChannel(trunkPath, TRACE.trunkHalfWidth, 280)
+
+  it('carries the shore attribute every part of the batch needs', () => {
+    /*
+      `mergeProp` reduces to the attributes every part HAS, so a single part built
+      without this one silently strips the meniscus from the entire water batch rather
+      than from itself. Checked on both builders for that reason.
+    */
+    const shore = trunk.getAttribute(WATER_SHORE_ATTRIBUTE)
+    expect(shore).toBeTruthy()
+    expect(shore.count).toBe(trunk.getAttribute('position').count)
+    for (let i = 0; i < shore.count; i++) {
+      expect(shore.getX(i)).toBeGreaterThanOrEqual(0)
+      expect(shore.getX(i)).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('sweeps a finite ribbon of the exact authored width', () => {
+    const position = trunk.getAttribute('position')
+    const normal = trunk.getAttribute('normal')
+    expect(position.count).toBeGreaterThan(1000)
+    for (let i = 0; i < position.count; i++) {
+      expect(Number.isFinite(position.getX(i))).toBe(true)
+      expect(Number.isFinite(position.getY(i))).toBe(true)
+      expect(Number.isFinite(position.getZ(i))).toBe(true)
+      // A zero-length normal renders as an unshaded band and reports nothing.
+      const length = Math.hypot(normal.getX(i), normal.getY(i), normal.getZ(i))
+      expect(length).toBeCloseTo(1, 4)
+    }
+    trunk.computeBoundingBox()
+    // The trunk runs down x = 0, so its half width is its whole x extent.
+    expect(trunk.boundingBox!.max.x).toBeCloseTo(TRACE.trunkHalfWidth, 5)
+    expect(trunk.boundingBox!.min.x).toBeCloseTo(-TRACE.trunkHalfWidth, 5)
+  })
+
+  /*
+    The frame is built from the world rather than transported, and this is what that
+    buys. Three's `computeFrenetFrames` picks an initial normal off the smallest
+    tangent component and carries it, which is invisible on a rotationally symmetric
+    tube and would tilt a flat channel's top differently on each of the trunk's five
+    levels.
+  */
+  /*
+    Taken over the CROWN vertices - the ones on the ribbon's centreline - because the
+    crown's normal is the frame's own up direction and therefore reports exactly what
+    the frame is doing along the whole run. Three properties are asserted together
+    because they are three consequences of one decision:
+
+      - on a horizontal run the crown points at the sky, so the channel's flat top is
+        parallel to the deck rather than tilted across it. That is what a world-built
+        frame buys over three's `computeFrenetFrames`, which picks an initial normal off
+        the smallest tangent component and transports it - invisible on a rotationally
+        symmetric tube, and a differently tilted channel on each of the trunk's five
+        levels.
+      - somewhere on the run the crown is HORIZONTAL, which is the frame rotating to
+        stand the section on its edge down a riser. That is the twelve waterfalls.
+      - and no crown anywhere on the run falls to or below `WATER.shoreTop`, which is
+        the property that keeps those waterfalls opaque.
+
+    The mitres are why this is written as a distribution rather than as two filtered
+    loops: a 45-degree mitre legitimately puts the crown at 45 degrees, so any filter
+    that splits "horizontal run" from "vertical run" by a normal threshold catches
+    mitre rings in whichever bucket it was not expecting.
+  */
+  it('holds the section upright on the flat, on edge down a riser, and opaque throughout', () => {
+    const position = trunk.getAttribute('position')
+    const normal = trunk.getAttribute('normal')
+    const crowns: number[] = []
+    for (let i = 0; i < position.count; i++) {
+      if (Math.abs(position.getX(i)) > 1e-4) continue
+      crowns.push(normal.getY(i))
+    }
+    expect(crowns.length).toBeGreaterThan(200)
+
+    // Flat runs: the top faces the sky. 0.99 is 8 degrees, where a rolled frame is tens.
+    expect(crowns.filter((y) => y > 0.99).length).toBeGreaterThan(100)
+    // Riser climbs: the top faces away from the face instead.
+    expect(Math.min(...crowns)).toBeLessThan(0.1)
+    // And nothing on the whole run is read as shore, which is what keeps it opaque.
+    expect(Math.min(...crowns)).toBeGreaterThan(WATER.shoreTop)
+  })
+
+  it('tapers its relief to nothing at both mouths, so a run can meet standing water', () => {
+    /*
+      A channel domes and a pool is flat, so at equal bed heights a channel's crown
+      stands 0.038 m above the water it runs into - wrong at five of the level's six
+      junctions, because water would have to climb it. See `TRACE.mouthTaper`.
+    */
+    const position = trunk.getAttribute('position')
+    const across = WATER_SECTION.length * 2 - 1
+    const rings = position.count / across
+    const crownIndex = (across - 1) / 2
+    const reliefAt = (ring: number) => {
+      const i = ring * across + crownIndex
+      const rim = ring * across
+      return position.getY(i) - position.getY(rim)
+    }
+    const middle = reliefAt(Math.floor(rings / 2))
+    expect(middle).toBeGreaterThan(0.03)
+    // Both ends flatten, and neither collapses to a degenerate zero-relief ring.
+    for (const end of [0, rings - 1]) {
+      expect(reliefAt(end)).toBeLessThan(middle * 0.35)
+      expect(reliefAt(end)).toBeGreaterThan(0)
+    }
+  })
+
+  it('refuses an entirely vertical route rather than sweeping a degenerate ribbon', () => {
+    expect(() =>
+      sweepChannel(
+        [
+          [0, 0, 0],
+          [0, 1, 0],
+        ],
+        0.1,
+        8,
+      ),
+    ).toThrow(/entirely vertical/)
+  })
+})
+
+describe('waterDisc', () => {
+  const disc = waterDisc(POOL.radius, POOL.rimWidth, POOL.ringFraction)
+
+  it('lies flat at the bed plane with its rim exactly on the authored radius', () => {
+    const position = disc.getAttribute('position')
+    disc.computeBoundingBox()
+    // The interior IS the surface plane; everything else is below it and buried.
+    expect(disc.boundingBox!.max.y).toBeCloseTo(0, 9)
+    expect(Math.hypot(disc.boundingBox!.max.x, 0)).toBeCloseTo(POOL.radius, 4)
+
+    let interior = 0
+    const normal = disc.getAttribute('normal')
+    for (let i = 0; i < position.count; i++) {
+      const radius = Math.hypot(position.getX(i), position.getZ(i))
+      if (radius > POOL.radius - POOL.rimWidth - 1e-6) continue
+      expect(position.getY(i)).toBeCloseTo(0, 9)
+      expect(normal.getY(i)).toBeCloseTo(1, 9)
+      interior++
+    }
+    expect(interior).toBeGreaterThan(0)
+  })
+
+  /*
+    The seam column, duplicated rather than shared. `sin(vUv.y * TAU)` is periodic, but
+    that only removes the seam if uv.y is CONTINUOUS across the closing quad - and with
+    a shared vertex it interpolates 0.97 back down to 0, sweeping the cross-flow term
+    backwards down one radial spoke of the pool. Asserted by counting columns, since
+    the symptom is a single wrong spoke on the piece at the centre of frame.
+  */
+  it('duplicates the seam column so the wrap carries no uv discontinuity', () => {
+    const uv = disc.getAttribute('uv')
+    const seam: number[] = []
+    for (let i = 0; i < uv.count; i++) if (uv.getY(i) >= 1 - 1e-9) seam.push(i)
+    // One per radial ring, plus the centre fan's own column.
+    expect(seam.length).toBeGreaterThan(1)
+    for (const i of seam) expect(uv.getY(i)).toBeCloseTo(1, 9)
+  })
+
+  it('runs uv.x radially and DECREASING outward, so rings travel out to the rim', () => {
+    /*
+      The shader advects crests toward decreasing `uv.x`. On a channel that makes them
+      run downhill; on the pool it has to make them run from the middle outward, which
+      is what a basin fed from above looks like - and the Core node hangs 4.8 m
+      directly over this one. Flip this and the pool sucks inward like a drain.
+    */
+    const position = disc.getAttribute('position')
+    const uv = disc.getAttribute('uv')
+    let checked = 0
+    for (let i = 0; i < position.count; i++) {
+      const radius = Math.hypot(position.getX(i), position.getZ(i))
+      expect(uv.getX(i)).toBeCloseTo(POOL.ringFraction * (1 - radius / POOL.radius), 5)
+      // And uv.y is the azimuth, which the shader takes through sin(TAU * uv.y).
+      // Inclusive of 1: the seam column is duplicated there. See the test above.
+      expect(uv.getY(i)).toBeGreaterThanOrEqual(0)
+      expect(uv.getY(i)).toBeLessThanOrEqual(1)
+      checked++
+    }
+    expect(checked).toBeGreaterThan(100)
+  })
+
+  it('carries the shore attribute, with the meniscus above the waterline', () => {
+    const shore = disc.getAttribute(WATER_SHORE_ATTRIBUTE)
+    expect(shore).toBeTruthy()
+    expect(shore.count).toBe(disc.getAttribute('position').count)
+
+    /*
+      The pool's water edge is where its rim - rolling DOWN - crosses the recess bank
+      - rising INWARD - and the meniscus has to have reached full strength before that
+      point or its bright half is under the bank. This is the assertion `POOL.rimDrop`
+      exists to satisfy; at full relief the crossing lands at shore 0.75 instead.
+    */
+    const position = disc.getAttribute('position')
+    const bankY = (radius: number) => {
+      const s = (POOL.radius - radius) / POOL.bank
+      if (s <= 0) return 0
+      if (s >= 1) return -POOL.depth
+      return -POOL.depth * (0.5 - 0.5 * Math.cos(Math.PI * s))
+    }
+    let visibleEdgeShore = 0
+    for (let i = 0; i < position.count; i++) {
+      const radius = Math.hypot(position.getX(i), position.getZ(i))
+      // Above the bank means visible; take the outermost such sample.
+      if (position.getY(i) <= bankY(radius) + 1e-9) continue
+      if (radius > visibleEdgeShore) visibleEdgeShore = radius
+    }
+    expect(visibleEdgeShore).toBeGreaterThan(POOL.radius - POOL.rimWidth)
+    expect(visibleEdgeShore).toBeLessThan(POOL.radius)
+  })
+
+  it('emits no degenerate triangle, including at the centre fan', () => {
+    const position = disc.getAttribute('position')
+    const index = disc.getIndex()!
+    for (let t = 0; t < index.count; t += 3) {
+      const [a, b, c] = [index.getX(t), index.getX(t + 1), index.getX(t + 2)]
+      expect(new Set([a, b, c]).size, `triangle ${t / 3}`).toBe(3)
+      const area = triangleArea(position, a, b, c)
+      expect(area, `triangle ${t / 3}`).toBeGreaterThan(1e-12)
+    }
+  })
+})
+
+describe('the merged water batch', () => {
+  /*
+    **`mergeProp` reduces to the attributes every part HAS**, and says so in its own
+    comment: "a single geometry carrying a tangent or a colour that its neighbours lack
+    is enough to make the merge return null, and dropping the odd one out is always
+    what the caller wanted". That is the right behaviour and it is also a trap for this
+    batch specifically, because the meniscus rides on a custom attribute and the batch
+    is built from two different generators. One part built without `aShore` does not
+    lose its own meniscus - it deletes the attribute from the whole batch, so every
+    channel and both pools lose their bank line at once and the frame renders fine.
+
+    This mirrors the part list `HubIsland.tsx` assembles rather than importing it,
+    because that file cannot be imported from Node: it reaches `useQuality`, which
+    reads `location.search` at module scope.
+  */
+  const batch = mergeProp([
+    ...[0, 1, 2, 3].map((i) => ({
+      geometry: sweepChannel(orthoTrace(spurTraceCorners()), TRACE.spurHalfWidth, 60),
+      rotation: [0, (Math.PI / 2) * i, 0] as Point3,
+    })),
+    {
+      geometry: waterDisc(POOL.radius, POOL.rimWidth, POOL.ringFraction),
+      position: [0, 3 * STEP, 0] as Point3,
+    },
+    { geometry: sweepChannel(orthoTrace(trunkTraceCorners()), TRACE.trunkHalfWidth, 120) },
+    { geometry: waterDisc(0.9, POOL.rimWidth, POOL.ringFraction), position: [0, 7 * STEP, -14.1] as Point3 },
+  ])
+
+  it('survives the merge with its shore attribute intact', () => {
+    const shore = batch.getAttribute(WATER_SHORE_ATTRIBUTE)
+    expect(shore).toBeTruthy()
+    expect(shore.count).toBe(batch.getAttribute('position').count)
+
+    // Both ends of the range have to be present, or the band has nothing to ramp over.
+    let open = 0
+    let bank = 0
+    for (let i = 0; i < shore.count; i++) {
+      if (shore.getX(i) < 0.01) open++
+      if (shore.getX(i) > WATER.foamShore) bank++
+    }
+    expect(open).toBeGreaterThan(0)
+    expect(bank).toBeGreaterThan(0)
+  })
+
+  it('keeps every uv and normal finite through the merge', () => {
+    for (const name of ['position', 'normal', 'uv']) {
+      const attribute = batch.getAttribute(name)
+      for (let i = 0; i < attribute.count; i++) {
+        for (let c = 0; c < attribute.itemSize; c++) {
+          expect(Number.isFinite(attribute.getComponent(i, c)), `${name}[${i}][${c}]`).toBe(true)
+        }
+      }
+    }
+  })
+})
+
+describe('basinLathe', () => {
+  const basin = basinLathe()
+  const reference = puck(CORE_PUCKS[2].radius, STEP)
+
+  /*
+    The outer shell is `puck(2.2, STEP)` reproduced by hand, because
+    `roundedCylinder` builds its profile internally and offers no hook to interrupt
+    it. Duplicating a generator is a real cost, and this is what makes it safe: one
+    assertion pins the two fillet radii, both fillet segment counts, the radial
+    segment count and the 3-degree draft at once. Any transcription slip in the
+    reproduction fails here rather than showing up as a deck whose silhouette moved.
+  */
+  it('reproduces the puck it replaces exactly, everywhere outside the pool', () => {
+    const outside = (geometry: typeof basin) => {
+      const position = geometry.getAttribute('position')
+      const out: string[] = []
+      for (let i = 0; i < position.count; i++) {
+        const radius = Math.hypot(position.getX(i), position.getZ(i))
+        if (radius < POOL.radius + 0.15) continue
+        out.push(
+          `${position.getX(i).toFixed(6)},${position.getY(i).toFixed(6)},${position.getZ(i).toFixed(6)}`,
+        )
+      }
+      return new Set(out)
+    }
+    const mine = outside(basin)
+    const theirs = outside(reference)
+    expect(mine.size).toBeGreaterThan(200)
+    expect([...theirs].filter((v) => !mine.has(v))).toEqual([])
+    expect([...mine].filter((v) => !theirs.has(v))).toEqual([])
+  })
+
+  /*
+    THE ATLAS ASSERTION, and it is the reason the pool has a sloped bank rather than
+    a wall. `packLightmapAtlas` files a triangle under whichever of six axes its
+    normal is nearest and parameterises a +X chart by (z, y). A vertical pool wall is
+    radial-facing, so it would land in the same four side charts as Puck C's outer
+    wall and overlap it there - two surfaces claiming the same texels, which bakes as
+    a band of the recess's occlusion painted around the outside of the rim. Under 45
+    degrees everywhere, the whole recess files under +Y instead, where the ring, the
+    bank and the floor are radially disjoint.
+  */
+  it('keeps every face of the recess +Y dominant, so its charts cannot overlap the wall', () => {
+    const position = basin.getAttribute('position')
+    const normal = basin.getAttribute('normal')
+    let recess = 0
+    for (let i = 0; i < position.count; i++) {
+      const radius = Math.hypot(position.getX(i), position.getZ(i))
+      if (radius > POOL.radius - 1e-6) continue
+      const lateral = Math.max(Math.abs(normal.getX(i)), Math.abs(normal.getZ(i)))
+      expect(Math.abs(normal.getY(i)), `recess vertex at radius ${radius.toFixed(3)}`)
+        .toBeGreaterThan(lateral)
+      recess++
+    }
+    expect(recess).toBeGreaterThan(100)
+  })
+
+  it('never cuts the bank steeper than 45 degrees, which is what that depends on', () => {
+    // The cosine ease peaks at depth * PI / (2 * bank); anything at or over 1.0 is 45.
+    expect((POOL.depth * Math.PI) / (2 * POOL.bank)).toBeLessThan(1)
+    expect(POOL.bank).toBeGreaterThan((POOL.depth * Math.PI) / 2)
+  })
+
+  it('floors the pool at the depth the collider is built against', () => {
+    basin.computeBoundingBox()
+    const box = basin.boundingBox!
+    expect(box.max.y).toBeCloseTo(STEP, 6)
+    /*
+      The floor is the HIGHEST surface at small radius, not the lowest: a lathe profile
+      runs from the underside up, so the lowest vertex on the axis is the puck's bottom
+      face at y = 0. The first version of this test took the minimum and measured the
+      underside of the deck.
+    */
+    const position = basin.getAttribute('position')
+    let floor = Number.NEGATIVE_INFINITY
+    for (let i = 0; i < position.count; i++) {
+      const radius = Math.hypot(position.getX(i), position.getZ(i))
+      if (radius > POOL.radius - POOL.bank - 1e-6) continue
+      floor = Math.max(floor, position.getY(i))
+    }
+    expect(floor).toBeCloseTo(STEP - POOL.depth, 6)
+    // And it really is a recess: the deck around it is a full POOL.depth higher.
+    expect(STEP - floor).toBeCloseTo(POOL.depth, 6)
+  })
+
+  it('lathes with outward normals rather than an invisible backfacing shell', () => {
+    const position = basin.getAttribute('position')
+    const normal = basin.getAttribute('normal')
+    let checked = 0
+    for (let i = 0; i < position.count; i++) {
+      const radius = Math.hypot(position.getX(i), position.getZ(i))
+      // Only the outer wall, where there is an unambiguous outward direction.
+      if (radius < POOL.radius + 0.5) continue
+      if (Math.abs(normal.getY(i)) > 0.5) continue
+      const outward = (position.getX(i) * normal.getX(i) + position.getZ(i) * normal.getZ(i)) / radius
+      expect(outward, `vertex ${i} at radius ${radius.toFixed(2)}`).toBeGreaterThan(0)
+      checked++
+    }
+    expect(checked).toBeGreaterThan(50)
+  })
+})
+
+describe('poolRingColliders', () => {
+  const boxes = poolRingColliders()
+  const deckTop = CORE_PUCKS[2].base + STEP
+
+  /** Is a world point inside one of the ring boxes? */
+  const covered = (x: number, y: number, z: number) =>
+    boxes.some((box) => {
+      const yaw = box.rotation[1]
+      const dx = x - box.position[0]
+      const dz = z - box.position[2]
+      const localX = dx * Math.cos(yaw) - dz * Math.sin(yaw)
+      const localZ = dx * Math.sin(yaw) + dz * Math.cos(yaw)
+      return (
+        Math.abs(localX) <= box.halfExtents[0] &&
+        Math.abs(y - box.position[1]) <= box.halfExtents[1] &&
+        Math.abs(localZ) <= box.halfExtents[2]
+      )
+    })
+
+  /*
+    **THE assertion in this file.** The boxes are authored with their length along
+    local X and their radial depth along local Z, and a rotation about Y sends local
+    +Z to (sin, 0, cos) - so the yaw that puts the depth axis outward is PI/2 - yaw
+    and not -yaw. This was written as -yaw first. That transposition still tiles a
+    closed ring with no holes, so nothing falls through and nothing errors; it simply
+    turns every box 90 degrees and leaves the recess filled in. The symptom is "the
+    step down does not work" with nothing in the frame to point at.
+  */
+  it('leaves the pool open and the deck around it solid', () => {
+    const justUnderTheDeck = deckTop - 0.01
+    for (let i = 0; i < 72; i++) {
+      const azimuth = (i / 72) * Math.PI * 2
+      const at = (radius: number) => [
+        Math.cos(azimuth) * radius,
+        justUnderTheDeck,
+        Math.sin(azimuth) * radius,
+      ] as const
+
+      // Open, all the way out to the polygon's own boundary.
+      expect(covered(...at(0)), `pool centre`).toBe(false)
+      expect(covered(...at(POOL.radius - POOL.bank / 2 - 0.02)), `azimuth ${i}`).toBe(false)
+
+      // Solid, from just outside the polygon's circumradius to the collider rim.
+      for (const radius of [poolFloorRadius() + 0.02, 1.4, 1.8, 2.05]) {
+        expect(covered(...at(radius)), `azimuth ${i} at radius ${radius}`).toBe(true)
+      }
+    }
+  })
+
+  it('puts the whole polygon inside the visual bank, so the step cannot be seen to miss', () => {
+    /*
+      The hole is a 12-gon: inradius `radius - bank / 2`, circumradius that over
+      cos(15 deg). Both have to land between the bank's foot and its lip, or there is
+      a vantage from which the character steps down onto flat deck - or stands on the
+      slope without having stepped.
+    */
+    const inradius = POOL.radius - POOL.bank / 2
+    const circumradius = poolFloorRadius()
+    expect(circumradius).toBeCloseTo(inradius / Math.cos(Math.PI / POOL.colliderSides), 9)
+    expect(inradius).toBeGreaterThan(POOL.radius - POOL.bank)
+    expect(circumradius).toBeLessThan(POOL.radius)
+  })
+
+  it('stays inside the puck it is standing in, corners included', () => {
+    for (const box of boxes) {
+      const centre = Math.hypot(box.position[0], box.position[2])
+      const corner = Math.hypot(centre + box.halfExtents[2], box.halfExtents[0])
+      expect(corner).toBeLessThan(CORE_PUCKS[2].radius)
+      // Full deck thickness, so the ring cannot be walked under.
+      expect(box.position[1] + box.halfExtents[1]).toBeCloseTo(deckTop, 9)
+      expect(box.position[1] - box.halfExtents[1]).toBeCloseTo(CORE_PUCKS[2].base, 9)
+    }
+  })
+
+  it('is a step the character controller can cross in both directions', () => {
+    /*
+      Neither of these swallows the step - they are what makes it graceful. Autostep
+      carries the capsule OUT without a hitch and snap-to-ground carries it IN without
+      an airborne frame. If the pool were ever deepened past either, the step would
+      stop being a dip and become a stumble on the main route to the portal.
+    */
+    expect(POOL.depth).toBeLessThan(BODY.autostepHeight)
+    expect(POOL.depth).toBeLessThan(BODY.snapToGroundDistance)
+    // And the ring is far wider than autostep's landing requirement.
+    expect(CORE_PUCKS[2].radius - 0.1 - POOL.radius).toBeGreaterThan(BODY.autostepMinWidth)
   })
 })
 

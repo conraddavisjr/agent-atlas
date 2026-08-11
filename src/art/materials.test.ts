@@ -4,16 +4,21 @@ import {
   BLOOM_INTENSITY,
   BLOOM_RADIUS,
   BLOOM_THRESHOLD,
+  DIFFUSE_CYLINDER_LINEAR_RATIO,
+  FACING_RATIO,
   GLOW,
   LOW_LUMA_FLOOR,
   MAX_CLEARCOAT,
   TWO_LOBE_MIN_RATIO,
   anodised,
   bloomFarFieldWeight,
+  bandLinearRatio,
   bloomMipWeights,
   chrome,
   coatLobeRatioUnderMap,
   crystal,
+  cylinderFresnelRatio,
+  displayWidthForLinearRatio,
   emissive,
   emissiveIntensityFor,
   emissiveRaw,
@@ -24,11 +29,16 @@ import {
   linearToSrgb,
   linearise,
   lobeRatio,
+  lobeRatioUnderRoughnessMap,
   luma709,
+  metalF0,
+  metalF0ForCylinderRatio,
   mattePlastic,
   metal,
   plastic,
+  renderedLuma,
   rubber,
+  schlickF,
   shell,
   srgbToLinear,
   stone,
@@ -36,7 +46,7 @@ import {
   visorPlate,
 } from './materials'
 import { DECAL_KINDS, ROUGHNESS_MID_BYTE, roughnessByte } from './decalTextures'
-import { palette } from './palette'
+import { VALUE_BANDS, palette } from './palette'
 
 /*
   The arithmetic behind every emissive in the game.
@@ -570,5 +580,274 @@ describe('the coat roughness map, and why the deck ladder read as nothing', () =
     // section 8.4 floor exists to prevent. Infinity is not a pass.
     expect(coatLobeRatioUnderMap(0.75, 0.26, 0)).toBe(Infinity)
     expect(coatLobeRatioUnderMap(0.75, 0.26, 255)).toBeCloseTo(lobeRatio(0.75, 0.26), 6)
+  })
+})
+
+/*
+  Band arithmetic for curved surfaces.
+
+  These are the tests behind the one claim in this pass that changes what the
+  world is made of, so every number in them was measured on
+  `.critique/astro/maps-on--hub-establishing.png` with `tools/critique/frame.mjs`
+  before it was written down, and the boxes are quoted so the measurement can be
+  repeated rather than trusted.
+*/
+describe('the facing-ratio model, promoted from a comment to code', () => {
+  it('reproduces every rendered value the project has recorded', () => {
+    /*
+      HubIsland.tsx records three of these as predictions made from the measured
+      ratios, and DECK_LIT_LUMA is a direct measurement of a fourth surface. If
+      this function is the arithmetic those predictions were made with, it has to
+      land on all four - which is the only available check that the model is a
+      model and not four coincidences.
+    */
+    expect(renderedLuma('#3c465a', FACING_RATIO.up)).toBeCloseTo(0.246, 3)
+    expect(renderedLuma('#6e7e9e', FACING_RATIO.litVertical)).toBeCloseTo(0.368, 3)
+    expect(renderedLuma('#6e7e9e', FACING_RATIO.shadedVertical)).toBeCloseTo(0.163, 3)
+    // The loosest of the four, at 0.019 under the measured 0.687, and loose in the
+    // safe direction: the model under-predicts brightness on band 1.
+    expect(renderedLuma(palette.bandDeckTop, FACING_RATIO.up)).toBeCloseTo(0.668, 3)
+  })
+
+  it('clamps rather than returning a luma above 1', () => {
+    // A facing ratio times a near-white albedo can exceed 1, and linearToSrgb of
+    // an out-of-range argument returns a number a band assertion would accept.
+    // Closeness rather than equality, because linearToSrgb(1) is 1.055 - 0.055 and
+    // lands a float ulp under 1. The clamp is what is being tested, not the curve.
+    expect(renderedLuma('#ffffff', 2)).toBeCloseTo(1, 12)
+    expect(renderedLuma('#ffffff', 2)).toBeLessThanOrEqual(1)
+  })
+
+  it('puts a CYLINDER brighter at its brightest than any flat face, which is the defect', () => {
+    /*
+      The whole finding in one assertion. `paintByFacing` assigns an albedo from a
+      face normal, and its brightest case is a horizontal deck at 0.81. A cylinder
+      contains the normal pointing straight at the key, so N.L reaches 1 somewhere
+      on every cylinder whatever its orientation, and it measures 0.915 - above the
+      ceiling the paint scheme believes exists. No albedo chosen by facing can
+      correct a surface that is brighter than the scheme's brightest case.
+    */
+    expect(FACING_RATIO.cylinderPeak).toBeGreaterThan(FACING_RATIO.up)
+    expect(FACING_RATIO.cylinderPeak).toBeGreaterThan(FACING_RATIO.litVertical)
+    // And it is the measured strut, not an estimate: display 0.4724 decoded and
+    // divided by frameSide's own albedo luminance.
+    expect(srgbToLinear(0.4724) / linearLuma('#6e7e9e')).toBeCloseTo(FACING_RATIO.cylinderPeak, 2)
+    expect(srgbToLinear(0.19) / linearLuma('#6e7e9e')).toBeCloseTo(FACING_RATIO.cylinderShade, 2)
+  })
+})
+
+describe('why no albedo can put a diffuse cylinder in band 2', () => {
+  const [lo, hi] = VALUE_BANDS.midground
+
+  it('states the band as the linear ratio the renderer actually multiplies by', () => {
+    // 0.20 to 0.38 sounds like a lot of room and is not: the transfer curve is
+    // steep down there, so the band is a factor of 3.6, where the gameplay band's
+    // wider-looking 0.56-0.74 is only a factor of 1.85.
+    expect(bandLinearRatio(lo, hi)).toBeCloseTo(3.603, 3)
+    expect(bandLinearRatio(...VALUE_BANDS.gameplay)).toBeCloseTo(1.852, 3)
+    expect(bandLinearRatio(...VALUE_BANDS.background)).toBeCloseTo(1.32, 2)
+  })
+
+  it('derives the measured ratio from the frame, and shows the albedo cancels', () => {
+    /*
+      frame.mjs spread .critique/astro/maps-on--hub-establishing.png 817 505 16 20
+      -> mean 0.3825, p5 0.190, p95 0.4724, width 0.2824, inOneBand: false
+
+      The ratio is p95 over p5 in LINEAR light, and both ends are the same albedo
+      times a different facing ratio - so the albedo divides out and what is left
+      is a property of the lighting and the shape alone. That is what makes the
+      next assertion a proof rather than a remark about one hex.
+    */
+    expect(srgbToLinear(0.4724) / srgbToLinear(0.19)).toBeCloseTo(DIFFUSE_CYLINDER_LINEAR_RATIO, 2)
+    expect(FACING_RATIO.cylinderPeak / FACING_RATIO.cylinderShade).toBeCloseTo(
+      DIFFUSE_CYLINDER_LINEAR_RATIO,
+      1,
+    )
+    for (const hex of ['#6e7e9e', '#3c465a', '#ffffff', '#202020']) {
+      const peak = linearLuma(hex) * FACING_RATIO.cylinderPeak
+      const shade = linearLuma(hex) * FACING_RATIO.cylinderShade
+      expect(peak / shade, `${hex} cancels`).toBeCloseTo(DIFFUSE_CYLINDER_LINEAR_RATIO, 1)
+    }
+  })
+
+  it('does not fit, at any albedo', () => {
+    expect(DIFFUSE_CYLINDER_LINEAR_RATIO).toBeGreaterThan(bandLinearRatio(lo, hi))
+  })
+
+  it('reproduces the measured width, and shows the p5 a fit would demand', () => {
+    // At the measured p5 the width comes out at the measured 0.282.
+    expect(displayWidthForLinearRatio(0.19, DIFFUSE_CYLINDER_LINEAR_RATIO)).toBeCloseTo(0.282, 3)
+    // Squeezing it to 0.18 needs a p5 of 0.100 - half the midground floor, and
+    // inside the anchor band, which is reserved for the frame's darkest darks.
+    expect(displayWidthForLinearRatio(0.1, DIFFUSE_CYLINDER_LINEAR_RATIO)).toBeLessThanOrEqual(0.18)
+    expect(displayWidthForLinearRatio(lo, DIFFUSE_CYLINDER_LINEAR_RATIO)).toBeGreaterThan(hi - lo)
+    expect(0.1).toBeLessThan(VALUE_BANDS.anchor[1])
+  })
+})
+
+describe('Schlick on a cylinder, and anodised()\'s first legitimate call site', () => {
+  const [lo, hi] = VALUE_BANDS.midground
+  const FRAME_SIDE = '#6e7e9e'
+  const f0 = metalF0(FRAME_SIDE, anodised(FRAME_SIDE).metalness as number)
+
+  it('pins Schlick at both ends and shows how late it does anything', () => {
+    expect(schlickF(0.2, 1)).toBeCloseTo(0.2, 12)
+    expect(schlickF(0.2, 0)).toBeCloseTo(1, 12)
+    // The fifth power is the whole argument. At 30 degrees off the normal it has
+    // contributed 43 millionths, and it has not reached a tenth by 66 degrees.
+    expect(schlickF(0.2, Math.cos(Math.PI / 6)) - 0.2).toBeLessThan(1e-4)
+    expect(Math.pow(1 - Math.cos((66 * Math.PI) / 180), 5)).toBeLessThan(0.1)
+  })
+
+  it('matches three\'s F0 rule, including the 5% that stays dielectric', () => {
+    expect(metalF0('#ffffff', 0)).toBeCloseTo(0.04, 12)
+    expect(metalF0('#ffffff', 1)).toBeCloseTo(linearLuma('#ffffff'), 12)
+    expect(f0).toBeCloseTo(0.1987, 4)
+  })
+
+  it('crushes the Fresnel rise into the outer tenth of the width', () => {
+    /*
+      Screen-x across a cylinder is R sin(phi), so a pixel column is uniform in
+      sin(phi) rather than in phi. Half the width sits inside 30 degrees of the
+      normal, where Schlick is still flat, and the whole rise happens past q=0.9.
+      This is the mechanism, and it is what the flat-face finding could not see.
+    */
+    const at = (q: number) => cylinderFresnelRatio(f0, 0.05, q)
+    expect(at(0.5)).toBeCloseTo(1.0, 3)
+    expect(at(0.75)).toBeCloseTo(1.018, 3)
+    expect(at(0.95)).toBeCloseTo(1.621, 3)
+    expect(at(0.99)).toBeCloseTo(2.885, 3)
+    expect(at(1)).toBeCloseTo(5.033, 3)
+  })
+
+  it('fits band 2 where the diffuse cylinder cannot, with the environment budget left over', () => {
+    const fresnel = cylinderFresnelRatio(f0)
+    expect(fresnel).toBeCloseTo(1.621, 3)
+    expect(fresnel).toBeLessThan(bandLinearRatio(lo, hi))
+    // Going metal is a 3.9x improvement on a measured failure, not a risk taken
+    // for looks.
+    expect(DIFFUSE_CYLINDER_LINEAR_RATIO / fresnel).toBeGreaterThan(3.8)
+    // What is left is the allowance for the variation in what the member actually
+    // reflects across its width, which Schlick does not model and this stream
+    // cannot measure. 2.22x is the number to check a frame against.
+    expect(bandLinearRatio(lo, hi) / fresnel).toBeCloseTo(2.223, 3)
+    // In display terms, at the band floor, a metal strut spans 0.057 against the
+    // 0.282 measured today.
+    expect(displayWidthForLinearRatio(lo, fresnel)).toBeCloseTo(0.057, 3)
+  })
+
+  it('needs a LIGHT albedo to hold a DARK band, which rules out the batch\'s crowns', () => {
+    /*
+      For a metal the albedo is f0, and f0 is the FLOOR of the value while the
+      environment sets the scale - so darkening the colour widens the spread
+      instead of lowering it. The dress batch's paint pass points the wrong way:
+      its light flanks value clears the bar and its dark crowns value does not.
+    */
+    const metalness = anodised('#fff').metalness as number
+    const ratioOf = (hex: string) => cylinderFresnelRatio(metalF0(hex, metalness))
+    expect(ratioOf('#202020')).toBeCloseTo(10.63, 1)
+    expect(ratioOf('#3c465a')).toBeCloseTo(3.42, 1)
+    expect(ratioOf('#6e7e9e')).toBeCloseTo(1.62, 1)
+    expect(ratioOf('#ffffff')).toBeCloseTo(1.01, 1)
+    // frameTop spends 3.42 of the 3.603 available and leaves 1.05x, which is not a
+    // budget. frameSide leaves 2.22x.
+    expect(ratioOf('#3c465a')).toBeLessThan(bandLinearRatio(lo, hi))
+    expect(bandLinearRatio(lo, hi) / ratioOf('#3c465a')).toBeLessThan(1.1)
+    // Monotone in the albedo, so "lighter is safer" is a rule rather than a
+    // coincidence of these four swatches.
+    for (const [a, b] of [['#202020', '#3c465a'], ['#3c465a', '#6e7e9e'], ['#6e7e9e', '#ffffff']]) {
+      expect(ratioOf(a), `${a} spreads wider than ${b}`).toBeGreaterThan(ratioOf(b))
+    }
+  })
+
+  it('inverts, and puts the albedo floor at display luma 0.446', () => {
+    const metalness = anodised('#fff').metalness as number
+    // Half the band's ratio, leaving the other half for the environment.
+    const working = bandLinearRatio(lo, hi) / 2
+    const floor = metalF0ForCylinderRatio(working)
+    expect(cylinderFresnelRatio(floor)).toBeCloseTo(working, 9)
+    // 0.161. Half of 3.6031 is 1.8015 rather than a round 1.80, which moves the
+    // fourth decimal and nothing that matters.
+    expect(floor).toBeCloseTo(0.161, 3)
+    // Back out to an albedo: the display luma a candidate colour has to clear.
+    const albedoFloor = linearToSrgb((floor - 0.04 * (1 - metalness)) / metalness)
+    expect(albedoFloor).toBeCloseTo(0.446, 3)
+    expect(linearToSrgb(linearLuma('#6e7e9e'))).toBeGreaterThan(albedoFloor)
+    expect(linearToSrgb(linearLuma('#3c465a'))).toBeLessThan(albedoFloor)
+    // Degenerate ask: a ratio of 1 or less needs a mirror.
+    expect(metalF0ForCylinderRatio(1)).toBe(1)
+  })
+
+  it('cannot bloom off the environment even at the silhouette', () => {
+    // F reaches 1 at grazing, so the worst case is the whole reflected radiance,
+    // and the hub rig's brightest is 1.088 against a threshold of 1.45. The rim is
+    // 1.0 px on a 20.4 px strut, which is why p5-p95 and not the extremes is the
+    // statistic - but it is worth knowing it could not bloom even if it were wide.
+    expect(schlickF(f0, 0) * 1.5543 * 0.7 * (anodised('#fff').envMapIntensity as number)).toBeLessThan(
+      BLOOM_THRESHOLD,
+    )
+  })
+})
+
+describe('the two-lobe rule under a roughness map, which every binding breaks today', () => {
+  /*
+    The rule is asserted on the PRESETS above and the maps are bound at the call
+    site, so the preset passes and the material the player sees does not. A map
+    that takes the base lobe down while the coat stays pinned walks the two lobes
+    back on top of each other - the exact defect plastic() was rebuilt to remove,
+    reintroduced by a texture.
+  */
+  const shipped = [
+    { kind: 'deck' as const, preset: mattePlastic('#ffffff'), unmapped: 4.96 },
+    { kind: 'trim' as const, preset: mattePlastic('#ffffff'), unmapped: 5.71 },
+  ]
+
+  for (const { kind, preset, unmapped } of shipped) {
+    const spec = DECAL_KINDS[kind]
+    const base = preset.roughness as number
+    const coat = preset.clearcoatRoughness as number
+    const bias = spec.roughness / 0.8
+    const smoothestByte = roughnessByte(spec.roughness - spec.swing, spec.roughness)
+
+    it(`${kind}: breaks the rule at its smoothest texel with the coat unmapped`, () => {
+      expect(lobeRatioUnderRoughnessMap(bias, coat, smoothestByte)).toBeCloseTo(unmapped, 2)
+      expect(lobeRatioUnderRoughnessMap(bias, coat, smoothestByte)).toBeLessThan(TWO_LOBE_MIN_RATIO)
+    })
+
+    it(`${kind}: mapping the coat fixes it and makes the ratio invariant`, () => {
+      const roughestByte = roughnessByte(spec.roughness + spec.swing, spec.roughness)
+      const at = (b: number) => lobeRatioUnderRoughnessMap(bias, coat, b, true)
+      expect(at(smoothestByte)).toBeCloseTo(11.98, 2)
+      expect(at(roughestByte)).toBeCloseTo(at(smoothestByte), 6)
+      expect(at(ROUGHNESS_MID_BYTE)).toBeCloseTo(at(smoothestByte), 6)
+      expect(at(smoothestByte)).toBeGreaterThanOrEqual(TWO_LOBE_MIN_RATIO)
+      // And it lands ABOVE the unmapped preset's own 8.3, so this is a correction
+      // rather than a trade.
+      expect(at(smoothestByte)).toBeGreaterThan(lobeRatio(base, coat))
+    })
+  }
+
+  it('strut: the same, on the preset the frame members want', () => {
+    const spec = DECAL_KINDS.strut
+    const preset = anodised('#6e7e9e')
+    const bias = spec.roughness / 0.8
+    const coat = preset.clearcoatRoughness as number
+    const smoothest = roughnessByte(spec.roughness - spec.swing, spec.roughness)
+    expect(lobeRatioUnderRoughnessMap(bias, coat, smoothest)).toBeCloseTo(5.26, 2)
+    expect(lobeRatioUnderRoughnessMap(bias, coat, smoothest)).toBeLessThan(TWO_LOBE_MIN_RATIO)
+    expect(lobeRatioUnderRoughnessMap(bias, coat, smoothest, true)).toBeCloseTo(14.06, 2)
+    expect(lobeRatioUnderRoughnessMap(bias, coat, smoothest, true)).toBeGreaterThanOrEqual(
+      TWO_LOBE_MIN_RATIO,
+    )
+  })
+
+  it('is a no-op at the neutral byte when the coat is left alone', () => {
+    // Byte 204 is ROUGHNESS_MID, and the bias exists so that the neutral texel
+    // reproduces the authored roughness exactly. If that identity ever breaks, the
+    // whole ladder is offset and nothing else in this file would notice.
+    expect(lobeRatioUnderRoughnessMap(0.75 / 0.8, 0.26, ROUGHNESS_MID_BYTE)).toBeCloseTo(
+      lobeRatio(0.75, 0.26),
+      6,
+    )
   })
 })

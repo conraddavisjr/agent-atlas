@@ -302,33 +302,44 @@ export const HEAD_CAP = {
 /**
  * The bright blue oval on the sole of each foot.
  *
- * The foot is a `RoundedBox` of `FOOT.width` by `FOOT.height` by `FOOT.depth` at
- * `FOOT.radius`, so its bottom face is only FLAT over the inner box:
- * `|x| <= 0.040` and `|z| <= 0.070`. Anything wider than that straddles a corner
- * round and leaves a crescent gap between the pad and the sole, which is exactly
- * the artefact that made the ear pods read as a hole in the cheek. At radius 0.033
- * stretched 1.6 in z the oval spans 0.033 by 0.053, so it clears the flat region by
- * 0.007 and 0.017.
+ * The foot is now a filleted truncated cone, narrow end down, so its bottom face is
+ * FLAT only inside where the sole fillet begins: `footSoleFlat()` returns
+ * `|x| <= 0.0485` and `|z| <= 0.0631`. Anything wider than that straddles the rim
+ * round and leaves a crescent gap between the pad and the sole, which is exactly the
+ * artefact that made the ear pods read as a hole in the cheek. At radius 0.033
+ * stretched 1.6 in z the oval spans 0.033 by 0.0528, so it clears the flat region by
+ * 0.0155 in x and 0.0103 in z.
+ *
+ * ## The cone nearly broke this, which is why the boot is wider than it was
+ *
+ * Two things shrink a cone's sole relative to a box's of the same width: the 30%
+ * taper, and then a fillet on a SLANTED rim whose tangent length is longer than the
+ * fillet radius. Holding the top at the box's 0.140 gives a flat of 0.0354 in x, so
+ * 0.0505 in z - and the pad needs 0.0528. It misses by 2.3 mm. So `FOOT.topRadius`
+ * went to 0.088 to make room, and the widening the note offered as licence was in
+ * fact forced by this block. That is the third time this pad's fit has driven a
+ * dimension of the boot rather than the other way round.
  *
  * ## The radius came down from 0.085 and it was not optional
  *
- * The boot is 0.14 wide now rather than 0.32, so the flat region it has to sit on
- * went from 0.095 to 0.040 of half-width. At the old 0.085 the pad was more than
- * twice as wide as the flat it needed and would have wrapped over the corner round
- * on both sides - the crescent-gap artefact, on the one part of the character that
- * has already shipped an invisible light once. The shrink is a consequence of the
- * foot note and not a taste change, and the two are now bound together by reading
- * `FOOT` instead of copying its numbers.
+ * Kept on the record because it is the same failure mode. When the boot went from
+ * 0.32 wide to 0.14, the flat region went from 0.095 to 0.040 of half-width, and at
+ * the old 0.085 the pad was more than twice as wide as the flat it needed - it would
+ * have wrapped over the corner round on both sides, on the one part of the character
+ * that has already shipped an invisible light once. Neither shrink was a taste
+ * change, and the two parts are bound together by reading `footSoleFlat()` rather
+ * than by copying numbers between blocks.
  *
  * ## It has to PROTRUDE, and the first version of it was invisible
  *
  * This shipped for one iteration with a `lift` of 0.001 meaning "sits a
  * millimetre above the sole plane", on the reasoning that flush would z-fight
  * with the ground. That reasoning describes a decal on a surface, and this is not
- * one: the foot is a SOLID `RoundedBox` spanning y -0.085 to 0.085, so a pad from
- * -0.084 to -0.072 sat entirely inside opaque rubber and could not be seen from
- * any angle at any time. A recess only reads if something is cut out of the
- * housing, and nothing here cuts.
+ * one: the foot was a SOLID `RoundedBox` spanning y -0.085 to 0.085 at the time, so
+ * a pad from -0.084 to -0.072 sat entirely inside opaque rubber and could not be
+ * seen from any angle at any time. A recess only reads if something is cut out of
+ * the housing, and nothing here cuts - which is no less true of the cone that
+ * replaced the box, so the whole argument carries over unchanged.
  *
  * That is the defect this whole pass is about, committed while writing the fix for
  * it: no error, a clean frame, every triangle present, and an emissive rendering
@@ -694,18 +705,231 @@ export function fingerCentreY(): number {
  * "the feet are too big" is about when you are looking down at a character - falls
  * 80.1%. The 0.44 depth it replaces was 32% of the whole body's height.
  */
+/**
+ * ## Now a truncated cone, narrow end down, and that is a change of shape FAMILY
+ *
+ * "Make his feet shaped like a cone. Where the bottoms are the pointy sides, but they
+ * don't need to be extremely narrow, you can widen them up a little bit. They should
+ * be 30% narrower than the top part of that cone."
+ *
+ * A `RoundedBox` cannot taper, so this is a lathe from `roundedConeProfile` with
+ * `depthScale` applied to the built geometry, the same two-step the ear pods use.
+ *
+ * ### "30% narrower" - the ambiguity is real but it is not the one flagged
+ *
+ * The brief for this pass flagged it as ambiguous between RADIUS and WIDTH. **It is
+ * not.** A ratio is scale invariant: `bottomRadius = 0.7 * topRadius` and
+ * `bottomWidth = 0.7 * topWidth` are the same solid, because width is twice radius at
+ * both ends. There was never anything to choose between.
+ *
+ * It also flagged the cone's own top versus the ankle it meets, and that one is real
+ * but settles immediately. The note says "the top part of that cone", and arithmetic
+ * agrees rather than merely permitting: the shin at the boot's top plane is 0.0964
+ * across, 30% off that is a bottom width of 0.0675, and `SOLE_LIGHT` is 0.066 across
+ * before any fillet is subtracted. The ankle reading builds a boot whose sole cannot
+ * hold the light that has to sit on it.
+ *
+ * **The ambiguity that actually bites is a third one nobody named: WHERE on the cone.**
+ * A filleted cone has two candidate widths at each end, and the fillets at the two ends
+ * are not the same size - the bottom corner is sharper than a right angle and the top
+ * one is blunter, so the top fillet eats 6.5 mm more radius than the bottom one does.
+ * Measured on the built mesh, all three readings of the same solid:
+ *
+ *     authored cone radii        0.7000    30.0% narrower
+ *     flat FACE to flat FACE     0.7091    29.1%     0.0971 against 0.1369
+ *     widest RIM to widest RIM   0.7621    23.8%     0.1284 against 0.1685
+ *
+ * Shipped `narrow` is 0.7, so the cone the note describes is exactly the cone built,
+ * and the two readings that measure the FACES land at 30.0% and 29.1%. The number a
+ * reviewer would get by measuring the silhouette's widest points is 23.8%, and that
+ * gap is entirely the bevel discipline: the fillets pull the two rims toward each
+ * other. It is stated because someone will measure it and should not have to guess
+ * whether it was intended.
+ *
+ * If the SILHOUETTE is what the 30% was about, `narrow` 0.6297 puts the rim-to-rim
+ * ratio at exactly 0.700. It is not shipped because it takes the sole's flat to 0.0429
+ * of half-width, so 0.0558 in z against a pad needing 0.0528 - a clearance of 3.0 mm
+ * where 0.7 gives 10.3 mm, on the one margin on this character that has come close to
+ * failing twice. That is a trade for the user to make, not this pass.
+ *
+ * ### The boot had to get WIDER, and that is a constraint rather than the licence
+ *
+ * "You can widen them up a little bit" reads as permission. It is a requirement, and
+ * `SOLE_LIGHT` is why. A cone's bottom face is smaller than a box's of the same width
+ * twice over: the 0.7 ratio takes 30% off, and then the fillet's tangent length on a
+ * slanted rim takes more than the fillet radius. Holding the top at the box's 0.140
+ * gives a sole flat of 0.0354 of half-width, so 0.0505 in z after `depthScale` -
+ * against a pad that needs 0.0528. **The light does not fit on a cone of the present
+ * width.** It misses by 2.3 mm, which is the third time this part's fit has been
+ * within millimetres of shipping an invisible light. `topRadius` 0.088 is sized so the
+ * sole flat clears the pad on both axes: 0.0485 against 0.033 in x, 0.0631 against
+ * 0.0528 in z. See `footSoleFlat`, which the profile above and the test both read.
+ *
+ * ### Built dimensions, measured on the mesh rather than read off the parameters
+ *
+ * The distinction matters here for the same reason it does on `TORSO`: the authored
+ * `topRadius` 0.088 is the UNFILLETED corner, which the fillet cuts off, so the solid
+ * never reaches it. The bounding box is
+ *
+ *     bounding box   0.1685 x 0.1300 x 0.2190    was 0.140 x 0.130 x 0.200
+ *                                                   (+20.3%, 0, +9.5%)
+ *     top flat       0.1369 x 0.1779    the face the shin emerges through
+ *     lower rim      0.1284 x 0.1669    the widest part of the taper's bottom
+ *     sole flat      0.0971 x 0.1262    the only part that touches the ground
+ *
+ * Plan footprint rises 6.4% on the widest ellipse, which is the "widen them up a little
+ * bit" asked for.
+ *
+ * ### Two numbers that moved the wrong way, stated rather than smoothed over
+ *
+ * **The old 80% note no longer clears 80% on bounding volume.** The box measured -84.8%
+ * against the 0.32 x 0.17 x 0.44 boots; the cone measures **-79.96%**, so widening for
+ * the sole light's sake spent about five points and landed a hair under the round number
+ * the previous pass celebrated. Plan footprint, which is the measure that note was
+ * really about, goes -80.1% to **-78.9%**. Both are asserted at 0.78 in the test so the
+ * figures above are what the tests actually permit, and anyone widening the boot further
+ * gets a failure rather than a surprise.
+ *
+ * **Ground contact narrows more than the silhouette does**, because only the sole's flat
+ * touches the floor: 0.080 x 0.140 to 0.097 x 0.126, a 14.1% smaller contact area, and
+ * with `REST.legL/R.x` also coming inboard the support half-width goes 0.230 to 0.194,
+ * down 15.9%. A cone balancing on its narrow end is genuinely less planted than a box
+ * under a head 0.72 wide, and this is the arithmetic of it rather than a reassurance.
+ *
+ * ### Is it a wedge heel?
+ *
+ * No, and the slope says so: `alpha` is 11.5 degrees off vertical over 0.13 of
+ * height. A wedge reads from a slope steep enough to make the sole look like a point,
+ * and at 11.5 degrees the silhouette narrows gently over the boot's height and reads
+ * as a moulded, tapered boot. What it does NOT read as is a heel, because the taper
+ * is radially symmetric - there is no front-to-back asymmetry anywhere in a lathe.
+ *
+ * ### The fillet is not cosmetic here
+ *
+ * 0.016 with 5 steps on both rims. The world rule is that nothing takes a hard 90
+ * degree corner, and a bare cone has two: the sole rim and the top rim. It is also
+ * the surface that catches the key as a bright line, which on the sole rim is the
+ * only thing separating the boot from the ground plane in a backlit frame.
+ */
 export const FOOT = {
-  width: 0.14,
-  height: 0.13,
-  depth: 0.2,
   /**
-   * 0.030, scaled with the box rather than kept at 0.065. `RoundedBoxGeometry`
-   * clamps to half the smallest dimension, which is now `0.13 / 2 = 0.065`, so the
-   * old radius would not have errored - it would have silently produced a pill,
-   * which is the same trap `DIAPER` records for the shape it replaced.
+   * Unchanged at 0.13 and it is still the shin that fixes it, but the margin is now
+   * far better than the box's and the box's stated margin was wrong.
+   *
+   * The old note claimed a half-width of 0.070 contained the shin's 0.0482 at the top
+   * plane "with 0.0218 to spare". That measured against the box's full half-width,
+   * and a `RoundedBox` is not at full width at its top plane - it is inset by the
+   * corner radius, so the flat was 0.040 and the shin at 0.04822 was 0.008 OUTSIDE
+   * it. Harmless, because the shin continues upward and the two solids interpenetrate
+   * rather than gapping, but the quoted 0.0218 of margin never existed. It is the
+   * same error class as the test that checked the shin's inner edge instead of its
+   * axis: a number read off the shape someone had in mind rather than the one built.
+   *
+   * The cone has no such problem. Its top FLAT is 0.0684 of half-width against the
+   * shin's 0.04822, so the leg emerges through the flat face with 0.0202 to spare,
+   * and `footTopFlat` is what the test reads.
    */
-  radius: 0.03,
+  height: 0.13,
+  /** Lathe radius at the top face, before `depthScale`. Half the 0.176 top width. */
+  topRadius: 0.088,
+  /** The note's 30%: the bottom face's radius as a fraction of the top's. */
+  narrow: 0.7,
+  /**
+   * Scales Z on the BUILT geometry, so the boot is longer fore and aft than across.
+   *
+   * 1.30, down from the box's 0.20 / 0.14 = 1.4286, because the top radius went up
+   * and holding the old aspect would have made the boot 0.251 deep. A boot needs to
+   * be longer than it is wide to read as a foot rather than a peg, and 1.30 keeps
+   * that while adding only 14.4% of depth. Same mechanism as `EAR_POD_SHAPE`: the
+   * fillet is authored in the lathe's frame, so its effective radius in Z is
+   * `0.016 * 1.30 = 0.0208`.
+   */
+  depthScale: 1.3,
+  fillet: 0.016,
+  filletSteps: 5,
+  radialSegments: 24,
 } as const
+
+/**
+ * Where a filleted cone's two flat faces end up, solved once for everyone who asks.
+ *
+ * `roundedConeProfile` needs these to place its arcs, `footSoleFlat` needs the bottom
+ * one to clear `SOLE_LIGHT`, and `footTopFlat` needs the top one to pass the shin.
+ * Three callers deriving the same trigonometry independently is how the sole light
+ * ends up measured against a sole nobody built - so it is derived here and nowhere
+ * else, the same rule `fingerCentreY` exists for.
+ *
+ * The two tangent lengths differ and that is the whole subtlety. A fillet tangent to
+ * a flat face and to a slanted rim sits back along each edge by `fillet * tan(t / 2)`
+ * where `t` is the angle the corner turns through, and the slant leans outward as it
+ * rises, so the bottom corner turns through `90 - alpha` and the top through
+ * `90 + alpha`. Using the fillet radius itself for both - which is what a vertical rim
+ * would let you do - is wrong at both ends and in opposite directions: at the boot's
+ * `alpha` of 11.48 degrees it overstates the sole by 2.9 mm and understates the top
+ * face by 3.6 mm, so the two flats differ by 6.5 mm more than a naive reading expects.
+ */
+export function coneFillet(
+  bottomRadius: number,
+  topRadius: number,
+  height: number,
+  fillet: number,
+): { alpha: number; tBot: number; tTop: number; flatBot: number; flatTop: number } {
+  const alpha = Math.atan2(topRadius - bottomRadius, height)
+  const tBot = fillet * Math.tan(Math.PI / 4 - alpha / 2)
+  const tTop = fillet * Math.tan(Math.PI / 4 + alpha / 2)
+  return { alpha, tBot, tTop, flatBot: bottomRadius - tBot, flatTop: topRadius - tTop }
+}
+
+/** The bottom face's radius. The note's 30% narrowing, applied. */
+export function footBottomRadius(): number {
+  return FOOT.topRadius * FOOT.narrow
+}
+
+/**
+ * The FLAT part of the sole, as half-extents in x and z, which is the region
+ * `SOLE_LIGHT` has to sit inside.
+ *
+ * Exported and read by `robotParts.tsx`, `SOLE_LIGHT`'s own reasoning and the test,
+ * for the reason `fingerCentreY` gives: if the component and the test each derived
+ * this, they would be checking their own arithmetic and a change to the fillet or the
+ * taper could put the pad over the rim while both still agreed with each other. The
+ * sole light has already shipped invisible once and been within 2.3 mm of it twice.
+ *
+ * The fillet is tangent to the sole, so it eats `fillet * tan(45 - alpha/2)` of
+ * radius rather than `fillet`. Getting that wrong overstates the flat by 3 mm.
+ */
+export function footSoleFlat(): { x: number; z: number } {
+  const x = coneFillet(footBottomRadius(), FOOT.topRadius, FOOT.height, FOOT.fillet).flatBot
+  return { x, z: x * FOOT.depthScale }
+}
+
+/**
+ * The FLAT part of the top face, as half-extents. This is what the shin emerges
+ * through, and the blunter corner there means the fillet eats MORE than at the sole.
+ */
+export function footTopFlat(): { x: number; z: number } {
+  const x = coneFillet(footBottomRadius(), FOOT.topRadius, FOOT.height, FOOT.fillet).flatTop
+  return { x, z: x * FOOT.depthScale }
+}
+
+/**
+ * The boot's widest half-extents - the silhouette, which is NOT `FOOT.topRadius`.
+ *
+ * The authored `topRadius` is the corner of the unfilleted cone, and the fillet cuts
+ * that corner off, so the solid never reaches it: the widest point is the top
+ * fillet's centre plus its radius, which is 3.6 mm short. Reading `topRadius` as the
+ * boot's width is the same mistake as reading `TORSO.a` as the torso's, and it made
+ * every dimension in this pass's first draft wrong.
+ *
+ * This is the CONTINUOUS maximum. The built mesh samples the arc at `filletSteps`, so
+ * it comes out a further 0.2 mm inside this; the test pins that the built value never
+ * exceeds this one, which makes this the safe number for a clearance to be measured
+ * against and the reason `robotPose.test.ts` uses it for the gap between the boots.
+ */
+export function footMaxHalfWidth(): { x: number; z: number } {
+  const x = footTopFlat().x + FOOT.fillet
+  return { x, z: x * FOOT.depthScale }
+}
 
 /**
  * The backpack block, and the circular port that says the thing is powered.
@@ -1386,6 +1610,48 @@ export const TORSO = {
  * because the wide planted stance is doing the low-centre-of-gravity read that
  * `Foot`'s comment describes, and narrowing it was not asked for.
  *
+ * ## The next note DID ask for it, and this one lands literally
+ *
+ * "Bottom portion of his waist a bit more, by another 25%, and make sure his legs come
+ * in more to his narrowed waist." Two halves, and the second is what makes the first
+ * possible - which is exactly the trade the paragraph above said was available.
+ *
+ * It is `taperBot` 0.75 rather than `a * 0.75`, and that distinction is the whole
+ * reason the note lands where it was aimed. The note says the BOTTOM of the waist. `a`
+ * is the whole garment, and the two parameters that already exist can only pull the
+ * bottom in by reshaping everything above it. Measured, `a * 0.75` with
+ * `taperTop / 0.75` reproduces the two POLES exactly and distorts the whole profile
+ * between them: the equator comes in 12.1%, and because the steeper taper partly
+ * compensates as the rim falls, the widest band MIGRATES UPWARD while its own value
+ * drops only 6.7%. That moves the widest band of the silhouette and breaks the 0.0000
+ * crossover with the torso, which were the two hardest-won numbers of the last pass.
+ * `taperBot` acts only below the equator, so both survive by construction rather than
+ * by re-tuning. See `SuperellipsoidOptions`.
+ *
+ * ### The legs, and how far in they actually had to come
+ *
+ * Measured on the built mesh, as the lowest world y at which the garment still reaches
+ * the leg axis, against the shin's top at world 0.385. The last pass shipped 0.0115 of
+ * the shin's top buried in the garment, and that is the standard held to here rather
+ * than mere non-negativity, because the defect it replaced was -0.0066 and passed its
+ * test:
+ *
+ *     legs at  0.190   -0.0076   the -0.0066 defect again, slightly worse
+ *     legs at  0.175   -0.0001   grazing, which is the 1.5 mm graze under a new name
+ *     legs at  0.160    0.0063
+ *     legs at  0.150    0.0100
+ *     legs at  0.145    0.0115   equal to what shipped, to four places
+ *
+ * So `REST.legL/R.x` goes to `+-0.145`. That is the largest bottom narrowing the note
+ * asked for - the full literal 25% - landed at the leg position that keeps the
+ * attachment exactly as deep as the one the last pass fought for. Nothing here is a
+ * softened version of the note.
+ *
+ * Note how flat that column is: 45 mm of leg movement buys 19 mm of burial, because
+ * `e1` 0.35 makes the garment very blunt near the pole. That is also the warning - the
+ * curve is shallow, so a further narrowing of `taperBot` costs leg position fast. At
+ * `taperBot` 0.70 the legs would have to reach 0.150 for a burial of only 0.0055.
+ *
  * The narrowing the note is really about does land, because "waist" is the junction
  * and not the widest band. The visible half-width at the waist, world y 0.62, goes
  * from 0.2973 to 0.2465, and the torso above it now peaks at 0.2900 rather than
@@ -1440,6 +1706,26 @@ export const DIAPER = {
   e1: 0.35,
   e2: 0.72,
   taperTop: 1.06,
+  /**
+   * 0.75: the bottom of the garment, 25% narrower. See the note above for the legs
+   * that had to move with it.
+   *
+   * This dial and not `a`, because the note is about the BOTTOM of the waist and `a`
+   * is the whole garment. Measured on the built mesh, the narrowing this produces
+   * against what it replaces, band by band up from the bottom pole:
+   *
+   *     world 0.3656   0.1201 -> 0.0898   -25.2%   the pole itself
+   *     world 0.3741   0.1925 -> 0.1474   -23.5%   where the legs attach
+   *     world 0.3950   0.2265 -> 0.1946   -14.1%
+   *     world 0.4417   0.2436 -> 0.2402    -1.4%
+   *     world 0.5200   0.2460 -> 0.2460     0.0%   the equator, untouched
+   *
+   * So the widest band still measures 0.2478 to four places, and the 0.0000 width
+   * crossover with the torso at world 0.626 that stops the waist reading as a separate
+   * unit is arithmetically unreachable by this parameter. Both were re-measured rather
+   * than assumed, because they were the two hardest-won numbers of the last pass.
+   */
+  taperBot: 0.75,
   latSegments: 22,
   lonSegments: 32,
   /**
@@ -1727,6 +2013,139 @@ export function roundedDiscProfile(
   return points
 }
 
+/**
+ * A truncated cone, narrow end DOWN, with both rims filleted, as a lathe profile.
+ *
+ * The boot. `roundedDiscProfile` above cannot express it: its rim is vertical, so
+ * the fillet at each end is a quarter circle and the tangent length equals the
+ * fillet radius. On a slanted rim neither is true, and getting that wrong is the
+ * whole difficulty of this shape.
+ *
+ * ## The fillets are solved, not eyeballed, and they are NOT the same size
+ *
+ * Each fillet is the circle tangent to both the flat face and the slant. For a
+ * corner whose two edges turn through `theta`, the tangent length back along each
+ * edge is `fillet * tan(theta / 2)`, and the two corners here have different
+ * `theta` because the slant leans outward as it rises:
+ *
+ *     bottom   theta = 90 - alpha   so the corner is SHARPER than a right angle
+ *     top      theta = 90 + alpha   so the corner is BLUNTER than a right angle
+ *
+ * where `tan(alpha) = (topRadius - bottomRadius) / (2 * halfHeight)`. So the top
+ * fillet eats more radius off its face than the bottom one does, and a generator
+ * that used one tangent length for both would put the flat faces in the wrong place
+ * by `fillet * (tan(45 + alpha/2) - tan(45 - alpha/2))`. At the boot's numbers that
+ * is 6.5 mm on a 0.088 radius, and it lands on the two faces whose sizes are load
+ * bearing: the bottom one carries `SOLE_LIGHT`, and the top one is what the shin
+ * emerges through.
+ *
+ * Both arcs are checked in `robotGeometry.test.ts` by measuring the distance from
+ * each fillet's centre to the slant line and requiring it to equal `fillet`, which
+ * is the property the construction is FOR rather than a restatement of it. A useful
+ * consistency fact that falls out: both arcs end at the same polar angle
+ * `-alpha` on their own centres, because both are tangent to the same line and
+ * therefore share its normal direction.
+ *
+ * ## It ASCENDS, for the reason `roundedDiscProfile` records at length
+ *
+ * `LatheGeometry` takes winding and normals from the profile's direction of travel,
+ * and a descending profile ships a solid with every radial normal pointing at the
+ * axis, which `MeshPhysicalMaterial` then culls. That cost this project the ear pods
+ * and both arm rings for three rounds. This profile runs axis-bottom, out across the
+ * sole, round the bottom fillet, up the slant, round the top fillet, in across the
+ * top face, axis-top - strictly increasing in y at every step, which the test
+ * asserts directly so the winding cannot silently invert again.
+ *
+ * The slant itself contributes no interior points. Two fillet endpoints and the
+ * straight edge between them is the exact shape; subdividing it would only add
+ * vertices whose normals are identical.
+ */
+export function roundedConeProfile(
+  bottomRadius: number,
+  topRadius: number,
+  halfHeight: number,
+  fillet: number,
+  filletSteps: number,
+): Vector2[] {
+  if (!(fillet > 0)) {
+    throw new Error(`robotGeometry: a cone fillet must be positive, got ${fillet}`)
+  }
+  if (!(bottomRadius > 0) || !(topRadius > 0) || !(halfHeight > 0)) {
+    throw new Error(
+      `robotGeometry: a cone needs positive radii and height, got ${bottomRadius}, ` +
+        `${topRadius}, ${halfHeight}`,
+    )
+  }
+  if (filletSteps < 1) {
+    throw new Error(`robotGeometry: a cone fillet needs at least 1 step, got ${filletSteps}`)
+  }
+
+  // One derivation, shared with `footSoleFlat` and `footTopFlat`. See `coneFillet`.
+  const { alpha, tBot, tTop, flatBot, flatTop } = coneFillet(
+    bottomRadius,
+    topRadius,
+    2 * halfHeight,
+    fillet,
+  )
+  const cosA = Math.cos(alpha)
+  if (!(flatBot > 0) || !(flatTop > 0)) {
+    throw new Error(
+      `robotGeometry: a cone fillet of ${fillet} leaves no flat face - bottom ${flatBot}, ` +
+        `top ${flatTop}; the profile would fold through itself`,
+    )
+  }
+  // The slant must still have length after both fillets have eaten into it.
+  if ((tBot + tTop) * cosA >= 2 * halfHeight) {
+    throw new Error(
+      `robotGeometry: a cone fillet of ${fillet} consumes the whole slant over a height of ` +
+        `${2 * halfHeight}; the two fillets would cross`,
+    )
+  }
+
+  const points: Vector2[] = []
+  const thetaBot = Math.PI / 2 - alpha
+  const thetaTop = Math.PI / 2 + alpha
+
+  // Sole, from the axis out to where the bottom fillet begins.
+  points.push(new Vector2(0, -halfHeight))
+  points.push(new Vector2(flatBot, -halfHeight))
+
+  /*
+    Bottom fillet. Centre sits one fillet radius above the sole at the flat's edge,
+    and the arc starts pointing straight down and sweeps out to the slant's normal.
+    Starts at i = 1 because i = 0 lands exactly on the point just pushed, and
+    `latheProfile` rejects coincident points rather than shipping a zero-length
+    normal ring.
+  */
+  const obX = flatBot
+  const obY = -halfHeight + fillet
+  for (let i = 1; i <= filletSteps; i++) {
+    const ang = -Math.PI / 2 + (i / filletSteps) * thetaBot
+    points.push(new Vector2(obX + fillet * Math.cos(ang), obY + fillet * Math.sin(ang)))
+  }
+
+  /*
+    Top fillet. Its arc BEGINS at the same polar angle the bottom arc ended on,
+    because both are tangent to the slant, and the straight run between the two
+    endpoints is the slant itself. Starts at i = 0 here - unlike the bottom arc -
+    because that first sample is the far end of the slant and is a genuinely new
+    point, and it ends one step short with the flat pushed separately, for the
+    coincidence reason above.
+  */
+  const otX = flatTop
+  const otY = halfHeight - fillet
+  for (let i = 0; i < filletSteps; i++) {
+    const ang = Math.PI / 2 - thetaTop + (i / filletSteps) * thetaTop
+    points.push(new Vector2(otX + fillet * Math.cos(ang), otY + fillet * Math.sin(ang)))
+  }
+
+  // Top face, from where the fillet ends back in to the axis.
+  points.push(new Vector2(flatTop, halfHeight))
+  points.push(new Vector2(0, halfHeight))
+
+  return points
+}
+
 export type SuperellipsoidOptions = {
   /** Half-extents on x, y and z before the taper. */
   a: number
@@ -1747,6 +2166,29 @@ export type SuperellipsoidOptions = {
   e2: number
   /** Width multiplier at the crown. Below 1 makes the shape wider at the base. */
   taperTop: number
+  /**
+   * Width multiplier at the BOTTOM pole, applied only below the equator.
+   *
+   * Optional and defaulting to 1, which is exactly the shape this generator built
+   * before it existed. Every caller that omits it is bit-for-bit unchanged.
+   *
+   * ## Why a second dial rather than re-solving `a` and `taperTop`
+   *
+   * `taperTop` is normalised so the taper is 1 at the bottom pole, so the only way
+   * to pull the bottom in with the existing parameters is `a * k` with
+   * `taperTop / k`. That reproduces the two poles and reshapes everything between
+   * them: at `DIAPER`'s numbers, taking the bottom in 25% that way takes the EQUATOR
+   * in 12.1% as well and migrates the widest band upward. The equator is where two
+   * separately tuned constraints live - the widest band of the silhouette, and the
+   * 0.0000 width crossover with the torso at world 0.626 that stops the waist reading
+   * as a separate unit. A dial that only acts below the equator leaves both untouched
+   * by construction rather than by re-tuning.
+   *
+   * The factor is smoothstepped over the lower hemisphere, so its derivative is
+   * zero AT the equator and the two halves meet with no crease. A linear ramp would
+   * put a visible corner all the way round the widest part of the garment.
+   */
+  taperBot?: number
   latSegments: number
   lonSegments: number
 }
@@ -1887,6 +2329,7 @@ function sp(t: number, e: number): number {
  */
 export function taperedSuperellipsoid(opts: SuperellipsoidOptions): BufferGeometry {
   const { a, b, c, e1, e2, taperTop, latSegments, lonSegments } = opts
+  const taperBot = opts.taperBot ?? 1
   if (latSegments < 3 || lonSegments < 3) {
     throw new Error(
       `robotGeometry: superellipsoid needs at least 3 segments on each axis, ` +
@@ -1914,7 +2357,17 @@ export function taperedSuperellipsoid(opts: SuperellipsoidOptions): BufferGeomet
     // 0 at the base, 1 at the crown, smoothstepped so the taper has no crease.
     const t = (sinV + 1) / 2
     const smooth = t * t * (3 - 2 * t)
-    const taper = 1 + (taperTop - 1) * smooth
+    /*
+      The lower-hemisphere taper, which is 1 at the equator and everywhere above it,
+      so a `taperBot` below 1 narrows the bottom of the solid and provably cannot
+      move its widest band. Smoothstepped for the same reason as `smooth` above, and
+      the smoothstep matters more here: its derivative is zero at BOTH ends, so the
+      lower taper meets the upper one at the equator with no crease across the
+      widest part of the shape, which is the most visible line on the garment.
+    */
+    const low = Math.max(0, 1 - t / 0.5)
+    const lowSmooth = low * low * (3 - 2 * low)
+    const taper = (1 + (taperTop - 1) * smooth) * (1 + (taperBot - 1) * lowSmooth)
 
     const py = b * sp(sinV, e1)
     const rim = sp(cosV, e1)
