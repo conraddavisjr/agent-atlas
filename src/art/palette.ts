@@ -26,11 +26,87 @@
 
 export const palette = {
   /** Robot shell. Slightly warm off-white so it never reads as clinical grey. */
-  shell: '#f4f1ea',
+  shell: '#EEF0F4',
   shellShadow: '#d8d2c6',
-  /** The robot's single accent. Warm amber, chosen to sit clear of PlayStation blue. */
+  /**
+   * **RETIRED FROM THE CHARACTER. One call site remains, in `Portal.tsx`.**
+   *
+   * The direction is that a high-contrast blue-and-orange scheme is not the
+   * reference's language, and `90-astro-design-system.md` section 2.1 records the
+   * search that backs it: the first-party record names a "PlayStation blue
+   * livery", an "iconic blue livery pattern" and a silver head plate, and names
+   * blue LED for ally and red LED for enemy as the only colour semantics. **No
+   * source of any kind describes that palette as blue-and-orange complementary.**
+   * It is a documented negative rather than a preference.
+   *
+   * Section 2.2 gives the mechanism, and it is the thing three rounds of value
+   * tuning could not see: chroma has a ceiling that falls with value, roughly
+   * `0.62 * (1 - displayLuma)`. `accent` is chroma 0.765 at luma 0.662 against a
+   * ceiling of 0.210 - a debt of 3.64, which caps it at 1.10% of frame. It was
+   * covering the chest panel, both ear pods, the head cap, the backpack port, an
+   * arm cuff and the cape. That is the single largest violation of the rule on the
+   * character, and it is why every neutral around it read as tinted.
+   *
+   * The replacements are `hardware`, `plate` and `hull` below - a neutral metal
+   * and two darks - plus `helmet` blue spent exactly twice. Nothing warm survives
+   * on the character at all.
+   *
+   * Kept rather than deleted because `Portal.tsx` still colours its unlocked arch
+   * with `accent`, and choosing what an open gate is made of is a readability
+   * decision about a prop rather than a find-and-replace. Doing it blind inside a
+   * character commit is how a world ends up with two schemes in it, which is the
+   * failure this migration exists to avoid.
+   */
   accent: '#ff9a3c',
   accentDeep: '#e0651a',
+
+  /**
+   * The character's hardware family, and the direct replacement for `accentDeep`
+   * on every moulded fitting: the head cap, the ear pods, the arm cuff.
+   *
+   * Blue-anodised aluminium. `90-astro-design-system.md` section 2.3 corrects its
+   * own first draft here and the correction is the reason this exact hex: Filament
+   * puts a metal's base colour in **[170..255] sRGB**, and the `#8FA2B8` that was
+   * proposed first has a red channel of 143. `#AEB9C6` clears 170 on every
+   * channel, keeps the blue-steel cast, and at display luma 0.720 clears the 0.446
+   * floor `metalF0ForCylinderRatio` requires for a metal cylinder to hold a band.
+   *
+   * Bound through `anodised()` and only on lathed parts, because `anodised()`'s
+   * own finding rules a metal out on a flat face: a flat metal sweeps its value
+   * with camera yaw and cannot hold a band. Both call sites are lathes.
+   */
+  hardware: '#AEB9C6',
+
+  /**
+   * The character's DARK, and the thing the body did not have.
+   *
+   * `91-design-critique.md`'s direction: the trap in this migration is treating it
+   * as "orange becomes blue", which keeps the structure and swaps the hue. It
+   * cannot work arithmetically - `helmet` at debt 2.24 caps at 1.79% of frame and
+   * the character is 3 to 6% of it, so all seven amber sites cannot become blue.
+   * The reference's structure is a white body, a lot of neutral hardware, ONE
+   * dark, and blue spent once.
+   *
+   * So the largest coloured area on the character, the chest panel, becomes that
+   * one dark. Against a shell at 0.9406 this is a drop of about 0.61 of display
+   * luma, which is the strongest value edge anywhere on the body and did not exist
+   * before at any hue.
+   *
+   * Deliberately the same value as `bandTrim`, which draws every raised deck's
+   * outline. The character's dark and the world's dark being one value is what
+   * stops the hero reading as a separate illustration pasted onto the level.
+   */
+  plate: '#4B5568',
+
+  /**
+   * One rung brighter than `plate`, for the backpack.
+   *
+   * Two darks on one character have to separate in GREYSCALE or they are one dark
+   * with a seam in it, which is the bible's section 8 test applied at part scale.
+   * `#5F6871` is display luma 0.4029 against `plate`'s 0.3304 - 0.07 apart, about
+   * four times what a single byte buys at this end of the curve.
+   */
+  hull: '#5F6871',
   /**
    * The helmet blue, promoted from a local const in `robotParts.tsx`.
    *
@@ -49,7 +125,7 @@ export const palette = {
    * lavender than cobalt, which is the environment's cool wrap plus the shell
    * preset's clearcoat and sheen desaturating it. The hex is not the problem.
    */
-  helmet: '#2f6fc4',
+  helmet: '#2F7AD2',
   /** Emissive cyan for the eye lenses and every "this is powered" cue in the world. */
   visor: '#4de2ff',
   visorDim: '#1b7f96',
@@ -222,24 +298,47 @@ export const palette = {
    * side face cannot drift away from the top it is defined relative to.
    */
   /**
-   * The two gameplay-band surfaces are WARM and the two frame surfaces are
-   * COOL, and that split is the point rather than a coincidence of picking.
+   * **The two gameplay-band surfaces were WARM and are now NEUTRAL, and that
+   * reverses a decision this comment used to defend.**
    *
-   * The reference brief asks for cool shadows against warm highlights, and the
-   * build had only the first half: every lit surface measured red-lowest, so
-   * there was nothing for the cool to be cool against. Putting the warmth on
-   * exactly the surfaces the player stands on means the temperature axis and
-   * the value axis carry the same message - warm and light is floor, cool and
-   * dark is frame - instead of the temperature wandering independently.
+   * What it defended: the reference asks for cool shadows against warm
+   * highlights, the build had only the cool half, and putting the warmth on
+   * exactly the surfaces the player stands on made the temperature axis and the
+   * value axis carry the same message. Every word of that is still right about
+   * the GOAL. What was wrong was the mechanism.
    *
-   * Luma is held to within two thousandths of the values the bible's section 8
-   * table records, so the greyscale test is unaffected by this and the two axes
-   * stay independently checkable.
+   * MEASURED, `hub-character`, high, on a lit deck: `#bfbbb4` is R-B +11 as an
+   * albedo and rendered **R-B +23**, so the deck read as tan sandstone. That is
+   * not a warm light on a neutral floor, it is a coloured floor, and once the
+   * platform became masonry it became the largest single warm area in the frame -
+   * with a character wearing saturated orange standing on it.
+   *
+   * `90-astro-design-system.md` section 2.1 states the rule this violates:
+   * **the world's hue belongs in the light, not in the albedo.** Where warmth
+   * appears in frame it should be a lit surface rather than a coloured one, and
+   * that is why the reference reads as photographed rather than painted.
+   *
+   * `#BABCBD` is display luma 0.7359 against `#bfbbb4`'s 0.7347 - **1.2
+   * thousandths** - so every band assertion and every number in the bible's
+   * section 8 table survives untouched and only the hue moves, from R-B +11 to
+   * R-B -3. `#94989B` does the same for the side face at 0.5936 against 0.5920.
+   *
+   * **What is deliberately NOT done in the same change.** The design system pairs
+   * this with warming the key softbox and the key directional to put the lost
+   * temperature back into the rig. `91-design-critique.md` finding 3 falsifies the
+   * two-point fit that number came from - it predicts a neutral-albedo deck at
+   * R-B -9.9 and the shipped one measured +23, a 25-point miss - so the rig half
+   * waits for a three-point fit. Until then the world is cooler than it was, which
+   * is a knowing intermediate state and not the destination.
+   *
+   * These no longer track `rock`. `rock` still carries the warm neutral, because
+   * its other call sites are boulders, portal stone and hardware on the character,
+   * and moving those belongs to the palette migration rather than to this change.
    */
-  /** Band 1, 0.735. Deck and puck tops - anything the capsule stands on. */
-  bandDeckTop: '#bfbbb4',
-  /** Band 1, 0.592. Deck and puck side faces, one step down from their tops. */
-  bandDeckSide: '#9d968d',
+  /** Band 1, 0.7359. Deck and puck tops - anything the capsule stands on. */
+  bandDeckTop: '#BABCBD',
+  /** Band 1, 0.5936. Deck and puck side faces, one step down from their tops. */
+  bandDeckSide: '#94989B',
   /** Band 2, 0.330. Kerbs and trim, which draw a raised deck's outline. */
   bandTrim: '#4b5568',
   /** Band 2, 0.272. Pylons, struts and arcs - the frame, never the floor. */

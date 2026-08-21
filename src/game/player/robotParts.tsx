@@ -2,6 +2,7 @@ import { RoundedBox } from '@react-three/drei'
 import { palette } from '@/art/palette'
 import {
   GLOW,
+  anodised,
   emissive,
   mattePlastic,
   metal,
@@ -62,7 +63,7 @@ import {
 //
 // Only ONE new hue is needed, which is worth stating because a livery change
 // sounds like it should need a family. The copper on the head and the copper on
-// the arm are `palette.accentDeep`, already the character's hardware colour on
+// the arm are `palette.hardware`, the character's hardware colour on
 // the ear pods and the backpack, and the blue on the limbs is the same blue as
 // the helmet.
 // ---------------------------------------------------------------------------
@@ -364,7 +365,10 @@ export function HeadShell({ quality }: Q) {
  * and because a painted band on a `RoundedBox` would need a UV layout this head
  * does not have.
  *
- * `palette.accentDeep` rather than `palette.gold`. Gold is `#e8b84b` at display
+ * **`anodised(palette.hardware)` rather than the amber this shipped with**, and
+ * the argument against gold below is unchanged and is why it is not gold either.
+ *
+ * `palette.hardware` rather than `palette.gold`. Gold is `#e8b84b` at display
  * luma 0.731, which sits inside the gameplay band of 0.56 to 0.74 and within
  * 0.004 of `palette.rock`'s 0.735 - so in greyscale a cap on the character's head
  * would read at exactly the value of the deck he walks on, which is the same
@@ -380,7 +384,7 @@ export function HeadShell({ quality }: Q) {
 export function HeadCap() {
   return (
     <mesh geometry={HEAD_CAP_GEOMETRY} castShadow receiveShadow>
-      <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+      <meshPhysicalMaterial {...anodised(palette.hardware)} />
     </mesh>
   )
 }
@@ -423,7 +427,7 @@ export function FacePlate() {
  * profile they read by shading, which is why the fillet went 0.030 to 0.055.
  *
  * One material and not two. This used to pick `chrome()` on a tier with
- * `sheenHero` and `plastic(palette.accentDeep)` otherwise, and describe itself
+ * `sheenHero` and `anodised(palette.hardware)` otherwise, and describe itself
  * as "the one chrome element on the character".
  *
  * **The claim that justified deleting the chrome branch has gone stale and is
@@ -455,7 +459,7 @@ export function FacePlate() {
 export function EarPod() {
   return (
     <mesh geometry={EAR_POD_GEOMETRY} castShadow receiveShadow>
-      <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+      <meshPhysicalMaterial {...anodised(palette.hardware)} />
     </mesh>
   )
 }
@@ -497,7 +501,7 @@ export function AntennaUpper() {
       */}
       <mesh position={[0, 0.075, 0]}>
         <sphereGeometry args={[0.05, 14, 12]} />
-        <meshPhysicalMaterial {...emissive(palette.accent, GLOW.bloom)} />
+        <meshPhysicalMaterial {...emissive(palette.visor, GLOW.bloom)} />
       </mesh>
     </>
   )
@@ -530,7 +534,7 @@ export function Torso({ quality }: Q) {
 export function ChestPanel() {
   return (
     <RoundedBox args={[0.3, 0.2, 0.05]} radius={0.02} smoothness={3} position={[0, 0.02, 0.245]} castShadow>
-      <meshPhysicalMaterial {...plastic(palette.accent)} />
+      <meshPhysicalMaterial {...mattePlastic(palette.plate)} />
     </RoundedBox>
   )
 }
@@ -574,7 +578,7 @@ export function Backpack() {
   return (
     <>
       <RoundedBox args={[width, height, depth]} radius={radius} smoothness={3} castShadow receiveShadow>
-        <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+        <meshPhysicalMaterial {...mattePlastic(palette.hull)} />
       </RoundedBox>
 
       {/*
@@ -589,7 +593,7 @@ export function Backpack() {
       */}
       <mesh position={[0, 0, port.bezelZ]} rotation={[Math.PI / 2, 0, 0]} castShadow>
         <cylinderGeometry args={[port.bezelRadius, port.bezelRadius, port.bezelDepth, port.segments]} />
-        <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+        <meshPhysicalMaterial {...anodised(palette.hardware)} />
       </mesh>
 
       {/*
@@ -633,9 +637,14 @@ export function Backpack() {
  *
  * `heroShell` rather than `plastic(palette.shell)`, so the arm shades as the same
  * moulded material as the torso it hangs off rather than as a separate white
- * object. That does cost the character its only amber limb, and the amber is not
- * lost: `ChestPanel` is unchanged and is still the single accent panel, which was
- * always where the spec's part table put the focal point.
+ * object.
+ *
+ * **The sentence that used to end this paragraph is now false and is worth
+ * keeping as a marker.** It read: "that does cost the character its only amber
+ * limb, and the amber is not lost: `ChestPanel` is unchanged and is still the
+ * single accent panel". There is no amber anywhere on this character now. The
+ * chest panel is `palette.plate`, the character's dark, and the cuff below is
+ * `palette.hardware`. See `palette.accent` for the search that settled it.
  *
  * Both rings sit inside y -0.175 to -0.085, which is the only band where the
  * capsule is at its full 0.075 radius. See `ARM_BAND`: outside it the capsule is
@@ -659,7 +668,7 @@ export function UpperArm({ quality }: Q) {
       {/* The cuff bevel, in the hardware copper. Narrower and less proud, so it
           reads as a moulded step rather than as a second band. */}
       <mesh geometry={ARM_BEVEL_GEOMETRY} position={[0, ARM_BEVEL.y + 0.13, 0]} castShadow>
-        <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+        <meshPhysicalMaterial {...anodised(palette.hardware)} />
       </mesh>
     </group>
   )
@@ -876,18 +885,37 @@ export function Foot() {
  * `robotGeometry.ts` carries the construction and the reason it is skinned on the
  * CPU rather than in a vertex shader.
  *
- * ## Why it is still `accentDeep`
+ * ## Why it is `hull` now, and why the COLOUR moved while the geometry did not
  *
  * `palette.token` is a semantic hue and it is spoken for. `Flowers.tsx` uses it
  * for the pink dome flowers and `HubIsland.tsx` for the token crystal, so it means
  * "collectible" everywhere else in the world, and the bible's rule is that
- * semantic hues are globally constant. It is also the same hue as the pink cones
- * F6 is about, at a display luma of about 0.57, which puts the hero's cape squarely
- * inside the walkable gameplay band.
+ * semantic hues are globally constant.
  *
- * `accentDeep` at 0.4775 is the character's own hardware family - the pods, the
- * head cap, the arm bevels, and the backpack the cape literally hangs off - and it
- * sits in the empty gap between bands where the hero belongs.
+ * `accentDeep` was chosen because it was "the character's own hardware family -
+ * the pods, the head cap, the arm bevels, and the backpack the cape literally
+ * hangs off". Every one of those parts has since become `palette.hardware` or
+ * `palette.hull`, so that argument now points at a different colour rather than
+ * failing: the cape follows the family it was always meant to match.
+ *
+ * **This was directed to be held and it is being taken anyway, for a stated
+ * reason.** `91-design-critique.md` says to colour the cape in the commit that
+ * gives it thickness, because it is still round 1's F4 flat quad. That is right
+ * about the geometry and it does not bind the colour: leaving one warm element on
+ * an otherwise entirely neutral character makes the cape the loudest thing on the
+ * hero, which is strictly worse than either end state and worse than what shipped
+ * before this pass, where at least the chest matched it. Colour and thickness are
+ * separable and only one of them was asked for.
+ *
+ * **NOT `hero.blueDeep`**, which the critique also rules out and for arithmetic
+ * this file should carry: at chroma 0.797 and display luma 0.2806 it is over the
+ * ceiling at debt 1.79, capping it at 2.24% of frame, and a cape is not a 2%
+ * feature.
+ *
+ * `hull` at display luma 0.4029 keeps the cape in the empty gap between bands
+ * where the hero belongs, one rung off `plate` so it separates from the chest
+ * panel in greyscale, and matches the backpack it hangs from - which is the read
+ * that a cape and a pack are one fitting rather than two.
  *
  * `vinyl()` unpatched, which is the whole payoff of skinning on the CPU: the cape
  * keeps its clearcoat, its sheen, its shadow casting and its shadow receiving,
@@ -904,7 +932,7 @@ export function Foot() {
 export function CapeSurface({ ribbon }: { ribbon: CapeRibbon }) {
   return (
     <mesh geometry={ribbon.geometry} castShadow receiveShadow>
-      <meshPhysicalMaterial {...vinyl(palette.accentDeep)} />
+      <meshPhysicalMaterial {...vinyl(palette.hull)} />
     </mesh>
   )
 }

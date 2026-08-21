@@ -358,7 +358,21 @@ export const HEAD_CAP = {
  * camera angle.
  */
 export const SOLE_LIGHT = {
-  radius: 0.033,
+  /**
+   * 0.023, down from 0.033, because the sole it has to sit inside went with the boot.
+   *
+   * Sized against the FLAT rather than against the old pad. The sole flat is 0.0334
+   * once the boot and its fillet are both scaled by 0.7, and 0.023 is 68.9% of it -
+   * which is the same fraction 0.033 was of the old 0.0485, so the pad reads at
+   * exactly the size on the sole it read at before. Scaling the pad by 0.7 instead
+   * would have given 0.0231, almost the same number by luck rather than by rule, and
+   * would have been the wrong rule: the flats do not scale with the boot, because the
+   * fillet eats a tangent length rather than a proportion.
+   *
+   * This mark has already shipped invisible once and come within 2.3 mm of it twice,
+   * so it is sized against the surface it lands on and never against its own history.
+   */
+  radius: 0.023,
   /** Stretch along z, so it is an oval along the foot rather than a circle. */
   stretchZ: 1.6,
   thickness: 0.012,
@@ -830,8 +844,39 @@ export const FOOT = {
    * and `footTopFlat` is what the test reads.
    */
   height: 0.13,
-  /** Lathe radius at the top face, before `depthScale`. Half the 0.176 top width. */
-  topRadius: 0.088,
+  /**
+   * Lathe radius at the top face, before `depthScale`.
+   *
+   * **0.0616, down 30% from 0.088, on art direction: "the feet, particularly at the
+   * top portion, are too large in diameter... this gives the effect of an oaf rather
+   * than the bottom of a foot."**
+   *
+   * The reading taken is the LATHE RADIUS, so the plan footprint narrows 30% on both
+   * axes and `depthScale` still holds the boot longer than it is wide. The
+   * alternative reading - narrow across, keep the length - was considered and
+   * rejected: it needs `depthScale` to rise to 1.857 to hold z, which turns the boot
+   * into a plank, and it puts the boot NARROWER than the shin across while staying
+   * wider fore and aft, which is a worse silhouette from the one angle the character
+   * is most often seen from.
+   *
+   * What this measurably changes, all half-extents:
+   *
+   *   reading                      was       now       ratio
+   *   top face, authored radius     0.0880    0.0616    0.700
+   *   top FLAT, after the fillet    0.0684    0.0487    0.712
+   *   sole face                     0.0616    0.0431    0.700
+   *   sole FLAT                     0.0485    0.0334    0.689
+   *   shin where they meet          0.0482    0.0482    1.000
+   *
+   * **These are the flats with the fillet SCALED, which is what ships.** An earlier
+   * draft of this block quoted 0.0432 and 0.0292 and concluded that the shin no
+   * longer emerges through the top flat. Those were the flats with the fillet held
+   * at 0.016, which is the configuration the `fillet` note twenty lines below
+   * rejects and for that exact reason - so this docblock and that one disagreed,
+   * and this one was the stale half. Scaled, the flats fall by 29% and 31% rather
+   * than by 37% and 40%, and the shin still clears the top flat, by 0.0005.
+   */
+  topRadius: 0.0616,
   /** The note's 30%: the bottom face's radius as a fraction of the top's. */
   narrow: 0.7,
   /**
@@ -845,7 +890,25 @@ export const FOOT = {
    * `0.016 * 1.30 = 0.0208`.
    */
   depthScale: 1.3,
-  fillet: 0.016,
+  /**
+   * 0.0112, scaled with the boot rather than held at 0.016.
+   *
+   * A fillet is a fraction of the shape it rounds. Held at 0.016 on a radius that
+   * fell 30% it goes from 18.2% of `topRadius` to 26.0%, which turns a moulded boot
+   * into a lozenge and - the part that matters - eats 0.0184 off the top face, taking
+   * the flat to 0.0432 against a shin of 0.0482. The leg would then overhang its own
+   * boot by 5 mm per side, which is the same defect as the box this cone replaced,
+   * one order of magnitude smaller.
+   *
+   * `0.016 * 0.7 = 0.0112` holds the ratio exactly, and the flat comes to 0.0487,
+   * which clears the shin. It clears it by 0.5 mm, and that is stated rather than
+   * dressed up: at this diameter the geometry has no more to give, because
+   * `topRadius - shin` is 0.0134 with a fillet of ZERO. The 0.015 of margin the
+   * previous pass asserted is unreachable at a 30% narrower boot by arithmetic, and
+   * the test that asserted it has been rewritten to the invariant it was really
+   * about. See `footTopFlat`.
+   */
+  fillet: 0.0112,
   filletSteps: 5,
   radialSegments: 24,
 } as const

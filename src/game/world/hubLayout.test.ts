@@ -4,8 +4,9 @@ import {
   PLATEAU_RADIUS,
   POOL,
   TRACE,
-  WATER_SECTION,
-  WATER_SHORE_ATTRIBUTE,
+  INLAY_PROFILE,
+  INLAY_SECTION,
+  INLAY_SHORE_ATTRIBUTE,
   arcsWithBothEnds,
   assertDrawable,
   chamferCorners,
@@ -23,8 +24,8 @@ import {
   sweepChannel,
   traceSegments,
   trunkTraceCorners,
-  waterDisc,
-  waterSection,
+  inlayDisc,
+  inlaySection,
   basinLathe,
   STEP,
   CORE_PUCKS,
@@ -33,7 +34,6 @@ import {
 import { mulberry32 } from '@/art/placement'
 import { displayLuma, palette } from '@/art/palette'
 import { mergeProp, puck } from '@/art/geometry'
-import { WATER } from '@/art/waterMaterial'
 import { BODY } from '@/game/player/tuning'
 import type { BufferAttribute as Attribute, InterleavedBufferAttribute } from 'three'
 
@@ -170,7 +170,7 @@ describe('the trace routes', () => {
       against the section rather than against a literal so a re-authored section
       cannot quietly breach it.
     */
-    const apex = Math.max(...WATER_SECTION.map((p) => p.up))
+    const apex = Math.max(...INLAY_SECTION.map((p) => p.up))
     const crown = TRACE.standoff + apex * TRACE.trunkHalfWidth
     expect(crown).toBeCloseTo(0.038, 3)
     expect(crown).toBeLessThanOrEqual(0.12)
@@ -321,8 +321,8 @@ describe('the swept trace geometry', () => {
   })
 })
 
-describe('waterSection', () => {
-  const full = waterSection()
+describe('inlaySection', () => {
+  const full = inlaySection()
   const rim = full[full.length - 2]
   const tuck = full[full.length - 1]
 
@@ -331,7 +331,7 @@ describe('waterSection', () => {
       The crown's normal is the one point that goes wrong if the section is halved
       before its normals are derived rather than after: with one neighbour instead of
       two it comes out tilted 5.7 degrees outward. That tilt would then be the normal
-      of a POOL's entire flat interior, because `waterDisc` takes the half form -
+      of a POOL's entire flat interior, because `inlayDisc` takes the half form -
       two square metres of still water at centre frame lit as a shallow cone.
     */
     const crown = full[(full.length - 1) / 2]
@@ -340,13 +340,13 @@ describe('waterSection', () => {
     expect(crown.normalUp).toBeCloseTo(1, 12)
 
     // And the halved form has to agree with the full one point for point.
-    const half = waterSection(true)
+    const half = inlaySection(true)
     expect(half).toEqual(full.slice((full.length - 1) / 2))
   })
 
   it('hands back unit normals at every point, at every relief', () => {
     for (const relief of [1, TRACE.endRelief, POOL.rimDrop]) {
-      for (const p of waterSection(false, relief)) {
+      for (const p of inlaySection(false, relief)) {
         expect(Math.hypot(p.normalAcross, p.normalUp), `relief ${relief}`).toBeCloseTo(1, 12)
       }
     }
@@ -363,13 +363,13 @@ describe('waterSection', () => {
   it('lands every visible point inside the shader alpha window and the tuck outside it', () => {
     const visible = full.filter((p) => p.up >= 0)
     for (const p of visible) {
-      expect(p.normalUp, `visible point at across ${p.across}`).toBeGreaterThan(WATER.shoreTop)
+      expect(p.normalUp, `visible point at across ${p.across}`).toBeGreaterThan(INLAY_PROFILE.visibleTop)
     }
     // The rim sits at the bed plane and must still be fully opaque.
     expect(rim.up).toBe(0)
-    expect(rim.normalUp).toBeGreaterThan(WATER.shoreTop)
+    expect(rim.normalUp).toBeGreaterThan(INLAY_PROFILE.visibleTop)
     // The buried tuck must fade to nothing, or the water shows inside the deck.
-    expect(tuck.normalUp).toBeLessThan(WATER.shoreBottom)
+    expect(tuck.normalUp).toBeLessThan(INLAY_PROFILE.tuckBottom)
   })
 
   it('keeps the rim near grazing, which is where the sky reflection comes from', () => {
@@ -380,24 +380,24 @@ describe('waterSection', () => {
       asserted at both reliefs rather than only at the channel's.
     */
     expect(rim.normalUp).toBeLessThan(0.15)
-    const flattened = waterSection(true, POOL.rimDrop)
+    const flattened = inlaySection(true, POOL.rimDrop)
     expect(flattened[flattened.length - 2].normalUp).toBeLessThan(0.15)
   })
 
   it('opens the meniscus inboard of the shoulder, not at the rim', () => {
     /*
       The rim is the part of the section that dips under the surface it is held in, so
-      a band anchored there is a band mostly buried. `WATER.foamShore` has to fall
+      a band anchored there is a band mostly buried. `INLAY_PROFILE.edgeBand` has to fall
       between the dome's shore value and the shoulder's for the band to sit on
-      visible water. See `WATER_SECTION`'s note for the pool arithmetic.
+      visible water. See `INLAY_SECTION`'s note for the pool arithmetic.
     */
-    const dome = WATER_SECTION[1]
-    const shoulder = WATER_SECTION[2]
-    expect(WATER.foamShore).toBeGreaterThan(dome.shore)
-    expect(WATER.foamShore).toBeLessThanOrEqual(shoulder.shore)
+    const dome = INLAY_SECTION[1]
+    const shoulder = INLAY_SECTION[2]
+    expect(INLAY_PROFILE.edgeBand).toBeGreaterThan(dome.shore)
+    expect(INLAY_PROFILE.edgeBand).toBeLessThanOrEqual(shoulder.shore)
     // Open water carries none of it and the bank carries all of it.
-    expect(WATER_SECTION[0].shore).toBe(0)
-    expect(WATER_SECTION[WATER_SECTION.length - 1].shore).toBe(1)
+    expect(INLAY_SECTION[0].shore).toBe(0)
+    expect(INLAY_SECTION[INLAY_SECTION.length - 1].shore).toBe(1)
   })
 
   it('is self-similar, so one shoreline is right on all four pieces', () => {
@@ -410,7 +410,7 @@ describe('waterSection', () => {
       metres would silently bring it back.
       */
     const trunk = full.map((p) => p.normalUp)
-    const spur = waterSection().map((p) => p.normalUp)
+    const spur = inlaySection().map((p) => p.normalUp)
     expect(trunk).toEqual(spur)
     expect(TRACE.spurHalfWidth).toBeLessThan(TRACE.trunkHalfWidth)
   })
@@ -426,7 +426,7 @@ describe('sweepChannel', () => {
       without this one silently strips the meniscus from the entire water batch rather
       than from itself. Checked on both builders for that reason.
     */
-    const shore = trunk.getAttribute(WATER_SHORE_ATTRIBUTE)
+    const shore = trunk.getAttribute(INLAY_SHORE_ATTRIBUTE)
     expect(shore).toBeTruthy()
     expect(shore.count).toBe(trunk.getAttribute('position').count)
     for (let i = 0; i < shore.count; i++) {
@@ -474,7 +474,7 @@ describe('sweepChannel', () => {
         levels.
       - somewhere on the run the crown is HORIZONTAL, which is the frame rotating to
         stand the section on its edge down a riser. That is the twelve waterfalls.
-      - and no crown anywhere on the run falls to or below `WATER.shoreTop`, which is
+      - and no crown anywhere on the run falls to or below `INLAY_PROFILE.visibleTop`, which is
         the property that keeps those waterfalls opaque.
 
     The mitres are why this is written as a distribution rather than as two filtered
@@ -497,7 +497,7 @@ describe('sweepChannel', () => {
     // Riser climbs: the top faces away from the face instead.
     expect(Math.min(...crowns)).toBeLessThan(0.1)
     // And nothing on the whole run is read as shore, which is what keeps it opaque.
-    expect(Math.min(...crowns)).toBeGreaterThan(WATER.shoreTop)
+    expect(Math.min(...crowns)).toBeGreaterThan(INLAY_PROFILE.visibleTop)
   })
 
   it('tapers its relief to nothing at both mouths, so a run can meet standing water', () => {
@@ -507,7 +507,7 @@ describe('sweepChannel', () => {
       junctions, because water would have to climb it. See `TRACE.mouthTaper`.
     */
     const position = trunk.getAttribute('position')
-    const across = WATER_SECTION.length * 2 - 1
+    const across = INLAY_SECTION.length * 2 - 1
     const rings = position.count / across
     const crownIndex = (across - 1) / 2
     const reliefAt = (ring: number) => {
@@ -538,8 +538,8 @@ describe('sweepChannel', () => {
   })
 })
 
-describe('waterDisc', () => {
-  const disc = waterDisc(POOL.radius, POOL.rimWidth, POOL.ringFraction)
+describe('inlayDisc', () => {
+  const disc = inlayDisc(POOL.radius, POOL.rimWidth, POOL.ringFraction)
 
   it('lies flat at the bed plane with its rim exactly on the authored radius', () => {
     const position = disc.getAttribute('position')
@@ -599,7 +599,7 @@ describe('waterDisc', () => {
   })
 
   it('carries the shore attribute, with the meniscus above the waterline', () => {
-    const shore = disc.getAttribute(WATER_SHORE_ATTRIBUTE)
+    const shore = disc.getAttribute(INLAY_SHORE_ATTRIBUTE)
     expect(shore).toBeTruthy()
     expect(shore.count).toBe(disc.getAttribute('position').count)
 
@@ -660,15 +660,15 @@ describe('the merged water batch', () => {
       rotation: [0, (Math.PI / 2) * i, 0] as Point3,
     })),
     {
-      geometry: waterDisc(POOL.radius, POOL.rimWidth, POOL.ringFraction),
+      geometry: inlayDisc(POOL.radius, POOL.rimWidth, POOL.ringFraction),
       position: [0, 3 * STEP, 0] as Point3,
     },
     { geometry: sweepChannel(orthoTrace(trunkTraceCorners()), TRACE.trunkHalfWidth, 120) },
-    { geometry: waterDisc(0.9, POOL.rimWidth, POOL.ringFraction), position: [0, 7 * STEP, -14.1] as Point3 },
+    { geometry: inlayDisc(0.9, POOL.rimWidth, POOL.ringFraction), position: [0, 7 * STEP, -14.1] as Point3 },
   ])
 
   it('survives the merge with its shore attribute intact', () => {
-    const shore = batch.getAttribute(WATER_SHORE_ATTRIBUTE)
+    const shore = batch.getAttribute(INLAY_SHORE_ATTRIBUTE)
     expect(shore).toBeTruthy()
     expect(shore.count).toBe(batch.getAttribute('position').count)
 
@@ -677,7 +677,7 @@ describe('the merged water batch', () => {
     let bank = 0
     for (let i = 0; i < shore.count; i++) {
       if (shore.getX(i) < 0.01) open++
-      if (shore.getX(i) > WATER.foamShore) bank++
+      if (shore.getX(i) > INLAY_PROFILE.edgeBand) bank++
     }
     expect(open).toBeGreaterThan(0)
     expect(bank).toBeGreaterThan(0)

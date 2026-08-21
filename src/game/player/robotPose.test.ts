@@ -194,10 +194,20 @@ describe('proportions', () => {
       A test at its boundary tells you nothing about which way the margin is going.
 
       Both terms have since moved, in opposite directions and for the same note. The
-      boots are a cone 0.1688 across the widest band, and `REST.legL/R.x` came in to
-      +-0.145 so the legs meet the narrowed waist. The gap is 0.1212, down from 0.240 -
-      halved, still twice the floor. That is the number this pass spent and it is
-      asserted rather than left implicit.
+      boots became a cone and `REST.legL/R.x` came in to +-0.145 so the legs meet the
+      narrowed waist, which took the gap to 0.1212 from 0.240.
+
+      **AND THE ART DIRECTION HAS SINCE NARROWED THE BOOT 30%, which widens this gap
+      without anything moving.** `footMaxHalfWidth().x` fell from 0.0844 to 0.0599, so
+      the gap is now **0.1702** - wider than it has been since the boot was a box, and
+      1.42 times the boot's own width where it used to be 0.72 of it.
+
+      That is the number this change spent and it is asserted rather than left implicit,
+      because it is the most likely thing to read wrong in a frame: two narrow boots far
+      apart under two wide legs is a different silhouette from the one the stance was
+      tuned for. The stance was deliberately NOT pulled in to compensate - `REST.legL.x`
+      is where the hips put the legs, and moving it to flatter a boot change would be a
+      pose edit arriving inside a geometry commit, with nothing attributing it.
 
       `footMaxHalfWidth()` and not `FOOT.topRadius`: the fillet cuts the cone's corner
       off, so the authored radius overstates the boot by 3.6 mm - which here would
@@ -206,9 +216,15 @@ describe('proportions', () => {
     */
     const gap = REST.legR.x - REST.legL.x - 2 * footMaxHalfWidth().x
     expect(gap).toBeGreaterThanOrEqual(0.06)
-    // And it is no longer scraping that floor: 0.1212 against a 0.060 minimum.
-    expect(gap).toBeGreaterThan(0.1)
-    expect(gap).toBeLessThan(0.15)
+    // And it is nowhere near scraping that floor: 0.1702 against a 0.060 minimum.
+    expect(gap).toBeGreaterThan(0.16)
+    /*
+      The ceiling is the half that now does the work. Feet that touch read as a
+      pedestal; feet too far apart read as a straddle, and there is no floor test for
+      that. 0.18 is a hair above what ships, so a further narrowing of the boot fails
+      here and has to be argued with the stance rather than absorbed silently.
+    */
+    expect(gap).toBeLessThan(0.18)
   })
 
   it('keeps the antenna off centre', () => {

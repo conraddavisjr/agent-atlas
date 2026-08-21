@@ -239,7 +239,18 @@ describe('roundedConeProfile', () => {
   it('never reaches the authored top radius, which the corner would have', () => {
     const maxX = Math.max(...pts().map((q) => q.x))
     expect(maxX).toBeLessThan(rt)
-    expect(rt - maxX).toBeGreaterThan(0.003)
+    /*
+      Expressed against the FILLET rather than as an absolute, which is what the
+      0.003 here used to be. The shortfall is a property of the fillet rounding a
+      corner over a slant, so it scales with the fillet - and when the boot was
+      narrowed 30% and its fillet scaled with it, an absolute threshold failed on a
+      shape that had not changed in any way this test is about. A test whose
+      threshold is a leftover measurement fails for the wrong reason.
+    */
+    expect(rt - maxX).toBeGreaterThan(fillet * 0.1)
+    // And pinned, because the exact figure is the trap: it is 1.8 mm, not the
+    // fillet's own 11.2, and reading `topRadius` as the built width is 1.8 mm wrong.
+    expect(rt - maxX).toBeCloseTo(0.0018, 4)
   })
 
   /*
@@ -1405,23 +1416,24 @@ describe('the blue oval under each sole', () => {
   })
 
   /*
-    THE THING THE CONE NEARLY BROKE, and the reason the boot is wider than it was.
+    THE THING A NARROWER BOOT BREAKS, restated against the boot that now ships.
 
-    A cone's sole is smaller than a box's of the same width twice over: the 30% taper,
-    then the slanted-rim fillet. At the box's old 0.140 of width the sole flat comes out
-    at 0.0354 in x, so 0.0505 in z - against a pad needing 0.0528. It misses by 2.3 mm.
-    Asserted rather than described, so that anyone who narrows the boot back toward its
-    previous width gets a failure here instead of a crescent gap in a render.
+    This used to assert a counterfactual about a box two shapes ago: that a cone at the
+    box's 0.140 of width could not have carried the pad. Both terms have since moved -
+    the boot is 30% narrower on art direction and the pad was re-sized with it - so the
+    old counterfactual now passes for reasons that have nothing to do with the defect,
+    which is the failure mode of pinning a test to history instead of to a rule.
+
+    The live form is the one that guards the actual mistake: narrowing the boot WITHOUT
+    re-sizing the pad. The previous pad was 0.033 and the sole flat is now 0.0334 in x,
+    so it would have overhung its own sole in x by all but 0.4 mm and in z outright.
   */
-  it('would not have fitted a cone at the width the boot used to be', () => {
-    const oldTop = 0.14 / 2
-    const bottom = oldTop * FOOT.narrow
-    const alpha = Math.atan2(oldTop - bottom, FOOT.height)
-    const flat = bottom - FOOT.fillet * Math.tan(Math.PI / 4 - alpha / 2)
-    const padZ = SOLE_LIGHT.radius * SOLE_LIGHT.stretchZ
-    expect(flat * (0.2 / 0.14)).toBeLessThan(padZ)
-    // And the boot as shipped clears it, on the axis that failed.
-    expect(flatZ).toBeGreaterThan(padZ)
+  it('would not have fitted the pad the boot used to carry', () => {
+    const previousPadRadius = 0.033
+    expect(flatX - previousPadRadius).toBeLessThan(0.005)
+    expect(flatZ).toBeLessThan(previousPadRadius * SOLE_LIGHT.stretchZ)
+    // And the pad as shipped clears it on both axes, which is the point of the change.
+    expect(flatZ).toBeGreaterThan(SOLE_LIGHT.radius * SOLE_LIGHT.stretchZ)
   })
 
   /*
@@ -2587,43 +2599,68 @@ describe('the boot and the leg it hangs from', () => {
   })
 
   /*
-    The 80% note from two passes ago, re-measured after this pass widened the boot.
+    The 80% note from three passes ago, re-measured after this pass NARROWED the boot.
 
-    IT NO LONGER CLEARS 80% ON BOUNDING VOLUME, and that is recorded rather than
-    smoothed over. The box measured -84.8%; the cone measures **-79.96%**, so widening
-    for the sole light's sake spent about five points of it and landed a hair under the
-    round number the previous pass celebrated. Plan footprint, which is the measure that
-    note was really about - it is what "the feet are too big" means when you are looking
-    down at a character - goes from -80.1% to **-78.9%**.
+    It missed the round number when the boot was widened for the sole light - the box
+    measured -84.8% and the cone -79.96% - and the 30% narrowing has taken it back past
+    it: bounding volume is now **-89.9%** and plan footprint **-88.4%**.
 
-    Both are asserted at 0.78 rather than 0.80 so the numbers above are what the test
-    actually permits. Anyone widening the boot further should see this fail rather than
-    discover the regression in a screenshot.
+    Asserted as a floor of 0.88 and a ceiling of 0.91. The ceiling is the half that
+    earns its place: it is what fails if someone narrows the boot again without
+    re-deriving the sole flat, the pad and the shin clearance underneath it, all three
+    of which this change had to move together.
   */
-  it('still honours the old 80% note approximately, and records that it now misses', () => {
+  it('clears the old 80% note on both readings, having missed it for two passes', () => {
     const b = bootBounds()
     const newVolume = b.width * b.height * b.depth
     const volumeCut = 1 - newVolume / (0.32 * 0.17 * 0.44)
-    expect(volumeCut).toBeGreaterThan(0.78)
-    expect(volumeCut).toBeLessThan(0.8)
+    expect(volumeCut).toBeGreaterThan(0.88)
+    expect(volumeCut).toBeLessThan(0.91)
 
     // The cone's plan is an ellipse, not a rectangle, so the areas are not comparable
     // without saying so.
     const plan = Math.PI * (b.width / 2) * (b.depth / 2)
     const oldPlan = 0.32 * 0.44 - (4 - Math.PI) * 0.065 ** 2
-    expect(1 - plan / oldPlan).toBeGreaterThan(0.78)
+    expect(1 - plan / oldPlan).toBeGreaterThan(0.88)
   })
 
   /*
-    The widening, which the note offered as licence and `SOLE_LIGHT` turned into a
-    requirement. Asserted as a bound in both directions: it has to grow, and it must not
-    grow back toward the boot the user asked to have shrunk.
+    The width, bounded by the two things that actually constrain it rather than by a
+    box two shapes ago.
+
+    This asserted `width > 0.14` - the old box - because that pass had WIDENED the boot
+    to fit the sole light and wanted the widening pinned. The art direction has since
+    narrowed it 30%, so the boot is now 0.1196 and NARROWER than that box, and the
+    assertion had become a record of a decision that was reversed.
+
+    What genuinely bounds it now, in both directions:
+
+    - it must stay wider than the leg it hangs from, or the leg overhangs its own boot,
+      which is the defect the box was condemned for at 0.053 per side;
+    - it must stay well under the boot the user asked to have shrunk, twice over now.
   */
-  it('is wider than the box it replaces, but nowhere near the boot before that', () => {
+  it('stays wider than its leg and far under the boot two directions ago', () => {
     const b = bootBounds()
-    expect(b.width).toBeGreaterThan(0.14)
-    expect(b.width / 0.14 - 1).toBeLessThan(0.3)
+    const shinThere = shinRadiusAt(PROPORTIONS.soleY + FOOT.height)
+    expect(b.width / 2).toBeGreaterThan(shinThere)
+    expect(b.width / 2 - shinThere).toBeGreaterThan(0.008)
     expect(b.width).toBeLessThan(0.32 * 0.6)
+
+    /*
+      **AND A CONSEQUENCE THAT IS RECORDED RATHER THAN ASSERTED AWAY.** The leg is a
+      capsule, and `SHIN_RADIUS` - its widest, up at the knee - is 0.085 against a boot
+      half-width of 0.0598. So the boot is now narrower than the WIDEST part of the leg
+      above it, where before the narrowing it was 0.0844 and almost exactly matched it.
+
+      That is not a defect on its own: the leg tapers to 0.0482 where the two actually
+      meet, which the assertions above cover, and a boot narrower than a calf is what a
+      boot is. It is written down because it is the thing to look at in a frame if the
+      legs start reading as spindly, and because whoever looks will otherwise measure
+      `SHIN_RADIUS` and conclude the boot is broken.
+    */
+    expect(b.width / 2).toBeLessThan(SHIN_RADIUS)
+    // And it did narrow, by the 30% the direction asked for, on the authored radius.
+    expect(FOOT.topRadius).toBeCloseTo(0.088 * 0.7, 12)
     // The height is the one axis that must not move at all: `PROPORTIONS.soleY` is 0 and
     // `totalHeight` is measured from it, so a taller or shorter boot lifts or sinks the
     // whole character with no other test failing.
@@ -2651,27 +2688,33 @@ describe('the boot and the leg it hangs from', () => {
   })
 
   /*
-    The 30%, on all three readings of it, because a filleted cone has two candidate
-    widths at each end and the fillets at the two ends are different sizes.
+    The taper's 30%, on all three readings of it, because a filleted cone has two
+    candidate widths at each end and the fillets at the two ends are different sizes.
 
-    `narrow` is authored at exactly 0.7 and the two FACE readings land at 30.0% and
-    29.1%. The rim-to-rim reading is 23.8%, and it is pinned here rather than left to be
-    discovered by whoever measures the silhouette in a screenshot.
+    Not to be confused with the OTHER 30% this part now carries: `narrow` is the sole's
+    30% narrowing relative to the top face, and `FOOT.topRadius` separately took a 30%
+    cut on art direction. The two are independent and both are 0.7, which is a
+    coincidence and exactly the kind that gets a constant edited in the wrong place.
+
+    `narrow` is authored at exactly 0.7 and the FACE reading lands at 31.4%. It moved
+    from 29.1% when the fillet was scaled with the boot: a fillet is a tangent LENGTH,
+    so it does not scale out of a ratio of flats the way a radius does. The rim-to-rim
+    reading is 25.6%.
   */
   it('is 30% narrower at the bottom on the reading taken, and records the other two', () => {
     expect(footBottomRadius() / FOOT.topRadius).toBeCloseTo(0.7, 12)
 
     const faceRatio = footSoleFlat().x / footTopFlat().x
-    expect(faceRatio).toBeGreaterThan(0.7)
-    expect(faceRatio).toBeLessThan(0.72)
+    expect(faceRatio).toBeGreaterThan(0.68)
+    expect(faceRatio).toBeLessThan(0.70)
 
     const prof = bootSilhouette()
     const rimTop = Math.max(...prof.map((p) => p.x))
     // The lower rim's widest point: the highest sample still below the boot's mid height.
     const rimBot = Math.max(...prof.filter((p) => p.y < 0).map((p) => p.x))
     const rimRatio = rimBot / rimTop
-    expect(rimRatio).toBeGreaterThan(0.75)
-    expect(rimRatio).toBeLessThan(0.775)
+    expect(rimRatio).toBeGreaterThan(0.73)
+    expect(rimRatio).toBeLessThan(0.755)
   })
 
   /*
@@ -2702,8 +2745,30 @@ describe('the boot and the leg it hangs from', () => {
     const bootTop = PROPORTIONS.soleY + FOOT.height
     const shinThere = shinRadiusAt(bootTop)
     expect(footTopFlat().x).toBeGreaterThan(shinThere)
-    expect(footTopFlat().x - shinThere).toBeGreaterThan(0.015)
     expect(footTopFlat().z).toBeGreaterThan(shinThere)
+
+    /*
+      **The 0.015 of margin this used to require is gone, and it is unreachable rather
+      than relaxed.** At a `topRadius` of 0.0616 the widest the top flat could possibly
+      be is 0.0616, with a fillet of ZERO, against a shin of 0.0482 - so the most margin
+      the geometry can offer is 0.0134, and the previous pass's 0.015 cannot be met at
+      any fillet. Asserting it after a 30% narrowing would have been asserting that the
+      narrowing did not happen.
+
+      What ships is 0.0005, which clears but does not clear comfortably, and the honest
+      reading of that is below.
+    */
+    expect(footTopFlat().x - shinThere).toBeGreaterThan(0)
+    expect(footTopFlat().x - shinThere).toBeLessThan(0.002)
+
+    /*
+      So the invariant the old assertion was REALLY about is asserted directly instead:
+      no part of the leg may be outside the boot's solid where the two meet. That is
+      the failure the box was condemned for - "a leg overhanging its own boot by 0.053
+      per side" - and it is a statement about the boot's widest half-extent, not about
+      its top flat. The flat only ever mattered because it was the conservative proxy.
+    */
+    expect(footMaxHalfWidth().x - shinThere).toBeGreaterThan(0.008)
 
     // The defect this replaces, kept as an executable statement so the claim is checkable.
     const oldBoxFlatAtTopPlane = 0.14 / 2 - 0.03

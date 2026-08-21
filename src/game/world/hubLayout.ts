@@ -71,10 +71,10 @@ export const PLATEAU_RADIUS = 16
  * it is wide reads as liquid held in a surface, whatever it is painted with.
  *
  * **This version sweeps a flat-topped section instead**, authored once in
- * `WATER_SECTION` and shared by every piece of water in the level. The trunk is
+ * `INLAY_SECTION` and shared by every piece of water in the level. The trunk is
  * 0.22 m wide and 0.038 m proud, an aspect of 0.17, and the spur is 0.15 by
  * 0.026 - the same shape at a smaller size, which is a property version two did
- * not have and which is worth more than it sounds. See `WATER_SECTION`.
+ * not have and which is worth more than it sounds. See `INLAY_SECTION`.
  *
  * ## The deck is NOT carved, and that is a decision rather than an omission
  *
@@ -91,7 +91,7 @@ export const TRACE = {
   /**
    * Surface offset, and it is zero on purpose rather than by neglect.
    *
-   * `WATER_SECTION` is authored about the surface the water is held in - `up` 0
+   * `INLAY_SECTION` is authored about the surface the water is held in - `up` 0
    * is the deck plane, positive is proud of it, negative is buried in it - so
    * the path rides exactly ON the deck and the section carries the whole offset.
    * Version two's 0.04 was the tube's centre height, which is a number a circle
@@ -141,7 +141,7 @@ export const TRACE = {
    *
    * A HALF WIDTH rather than a radius, and the change of unit is the change of
    * shape. 0.11 makes the trunk 0.22 m across and, through
-   * `WATER_SECTION`'s fixed proportions, 0.038 m proud - inside the environment
+   * `INLAY_SECTION`'s fixed proportions, 0.038 m proud - inside the environment
    * spec's absolute 0.12 m rule with three times the margin the tube had.
    *
    * Wider than the tube it replaces, which was 0.127 m of visible width. That is
@@ -157,7 +157,7 @@ export const TRACE = {
    * meet standing water without a lip.
    *
    * **This exists because of an arithmetic result, not an aesthetic one.** A
-   * channel's surface DOMES - see `WATER_SECTION` - and a pool's is FLAT, so at
+   * channel's surface DOMES - see `INLAY_SECTION` - and a pool's is FLAT, so at
    * equal bed heights a channel's crown stands `0.345 * halfWidth` above the water
    * it runs into: 0.038 m on the trunk and 0.026 m on a spur. There are six such
    * junctions in the level and the lip is geometrically wrong at five of them,
@@ -273,7 +273,49 @@ export const TRACE = {
  * still exists, and its job is now only the places where the deck falls away
  * underneath: the twelve riser lips, and every 0.10 m fillet the water crosses.
  */
-export const WATER_SECTION = [
+/**
+ * The section's own landmarks, in the two coordinates its tests are written
+ * against.
+ *
+ * **These moved here from `waterMaterial.ts` when the water became steel**, and
+ * they are geometry rather than shader tuning, which is why they survived the
+ * deletion of every other number in that file. Each one is a threshold the
+ * SECTION has to satisfy for the sweep to behave, and `hubLayout.test.ts`
+ * asserts all three - they were the one thing tying the profile to the material,
+ * and without them a re-authored section could move its rim normal and nothing
+ * would notice.
+ *
+ * `visibleTop` and `tuckBottom` still describe live properties. Every point of
+ * the section that is above the bed plane presents a normal Y above
+ * `visibleTop`, and the buried tuck presents one below `tuckBottom`, so the
+ * whole visible surface faces the sky and the whole hidden one faces into the
+ * deck. That is what lets the inlay meet its recess with no edge on show, at
+ * every one of the trunk's five levels and down all twelve risers - including
+ * the vertical runs, whose crowns point away from the riser face rather than up,
+ * which is why `visibleTop` is NEGATIVE and is the edit here that would look
+ * tidier at zero and break the most.
+ *
+ * `edgeBand` is the one with no consumer, and that is stated rather than hidden.
+ * It marked where the old material opened its meniscus on the `aShore`
+ * coordinate, inboard of the shoulder rather than at the rim, because the rim is
+ * the part that dips under the surface it is held in. The attribute is still
+ * written by both builders and still asserted, and nothing samples it now. The
+ * number is kept because it is the landmark those assertions are phrased in and
+ * because it is where any future edge treatment - a printed reveal, a wear
+ * strip, a bevel highlight - would start from. If a round passes with no such
+ * treatment, delete it and the attribute together, in one commit that touches
+ * every builder.
+ */
+export const INLAY_PROFILE = {
+  /** Normal Y above which a point on the section is visible top face. */
+  visibleTop: -0.15,
+  /** Normal Y below which a point is in the tuck, inside the deck's own volume. */
+  tuckBottom: -0.55,
+  /** Where the section's edge band opens, on the `aShore` coordinate. */
+  edgeBand: 0.55,
+} as const
+
+export const INLAY_SECTION = [
   { across: 0, up: 0.345, shore: 0 },
   { across: 0.45, up: 0.3, shore: 0.35 },
   { across: 0.72, up: 0.17, shore: 1 },
@@ -335,15 +377,15 @@ export type WaterSectionPoint = {
  * reason: they are the input to the shoreline, and the shoreline is the thing
  * that decides whether the water's edge is a soft meniscus or a hard silhouette
  * line. `hubLayout.test.ts` asserts the resolved values land inside the windows
- * `WATER.shoreTop`, `WATER.shoreBottom` and `WATER.foamShore` open, so the
+ * `INLAY_PROFILE.visibleTop`, `INLAY_PROFILE.tuckBottom` and `INLAY_PROFILE.edgeBand` open, so the
  * geometry and the shader cannot drift apart without a test failing.
  *
  * `half` mirrors the section about the axis and returns only the outward half,
  * which is what a lathe and a radial disc need; the full form is what a swept
  * ribbon needs.
  */
-export function waterSection(half = false, verticalScale = 1): WaterSectionPoint[] {
-  const raw = WATER_SECTION.map((p) => ({ ...p, up: p.up * verticalScale }))
+export function inlaySection(half = false, verticalScale = 1): WaterSectionPoint[] {
+  const raw = INLAY_SECTION.map((p) => ({ ...p, up: p.up * verticalScale }))
   /*
     Normals are always derived on the FULL mirrored section and only then halved,
     which matters for exactly one point and matters a lot there. The crown is the
@@ -393,7 +435,7 @@ export function waterSection(half = false, verticalScale = 1): WaterSectionPoint
   })
 
   // The outward half runs from the crown, which is the mirror's midpoint.
-  return half ? resolved.slice(WATER_SECTION.length - 1) : resolved
+  return half ? resolved.slice(INLAY_SECTION.length - 1) : resolved
 }
 
 /**
@@ -808,12 +850,12 @@ export function traceSegments(length: number, tierSegments: number): number {
  * cleanly. `waterMaterial.test.ts` asserts the shader's `attribute` line quotes
  * this exact constant.
  */
-export const WATER_SHORE_ATTRIBUTE = 'aShore'
+export const INLAY_SHORE_ATTRIBUTE = 'aShore'
 
 const WORLD_UP = new Vector3(0, 1, 0)
 
 /**
- * Sweep `WATER_SECTION` along a route, with the section's "up" held to the
+ * Sweep `INLAY_SECTION` along a route, with the section's "up" held to the
  * surface the route is running on.
  *
  * ## Why not `tubeFromCurve`, which already exists and already works
@@ -822,7 +864,7 @@ const WORLD_UP = new Vector3(0, 1, 0)
  * that are wrong for a channel and neither can be fixed by choosing a radius.
  *
  * The section is not a circle - that is the whole point of this pass, see
- * `WATER_SECTION` - and a non-circular section swept on a Frenet-derived frame
+ * `INLAY_SECTION` - and a non-circular section swept on a Frenet-derived frame
  * ROLLS. Three's `computeFrenetFrames` picks its initial normal off the smallest
  * tangent component and then transports it, which is exactly right for a tube
  * because a tube is rotationally symmetric and cannot show the roll. A flat
@@ -899,10 +941,10 @@ export function sweepChannel(
   const sections = Array.from({ length: rings }, (_, i) => {
     const t = i / (rings - 1)
     const taper = ease(t / fraction) * ease((1 - t) / fraction)
-    return waterSection(false, TRACE.endRelief + (1 - TRACE.endRelief) * taper)
+    return inlaySection(false, TRACE.endRelief + (1 - TRACE.endRelief) * taper)
   })
   /*
-    Read off the resolved section rather than recomputed from `WATER_SECTION.length`,
+    Read off the resolved section rather than recomputed from `INLAY_SECTION.length`,
     so re-authoring the section - or changing how it mirrors - cannot leave the buffer
     stride and the point count disagreeing. They would disagree by reading past the end
     of an array, which in JS is `undefined` and then NaN rather than a throw.
@@ -983,7 +1025,7 @@ export function sweepChannel(
   geometry.setAttribute('position', new BufferAttribute(position, 3))
   geometry.setAttribute('normal', new BufferAttribute(normal, 3))
   geometry.setAttribute('uv', new BufferAttribute(uv, 2))
-  geometry.setAttribute(WATER_SHORE_ATTRIBUTE, new BufferAttribute(shore, 1))
+  geometry.setAttribute(INLAY_SHORE_ATTRIBUTE, new BufferAttribute(shore, 1))
   geometry.setIndex(index)
   return geometry
 }
@@ -1007,7 +1049,7 @@ export function sweepChannel(
  * it - `uv.x`, and therefore the whole wave field - is linear in radius, and a
  * linear function is interpolated exactly across a triangle however large it is.
  */
-export function waterDisc(
+export function inlayDisc(
   radius: number,
   rimWidth: number,
   ringFraction: number,
@@ -1015,10 +1057,10 @@ export function waterDisc(
 ): BufferGeometry {
   if (!(radius > rimWidth)) {
     throw new Error(
-      `hubLayout: waterDisc needs a radius wider than its rim, got ${radius} and ${rimWidth}`,
+      `hubLayout: inlayDisc needs a radius wider than its rim, got ${radius} and ${rimWidth}`,
     )
   }
-  const section = waterSection(true, POOL.rimDrop)
+  const section = inlaySection(true, POOL.rimDrop)
   const rings = section.length
   const crown = section[0].up
 
@@ -1105,7 +1147,7 @@ export function waterDisc(
   geometry.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3))
   geometry.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3))
   geometry.setAttribute('uv', new BufferAttribute(new Float32Array(uvs), 2))
-  geometry.setAttribute(WATER_SHORE_ATTRIBUTE, new BufferAttribute(new Float32Array(shores), 1))
+  geometry.setAttribute(INLAY_SHORE_ATTRIBUTE, new BufferAttribute(new Float32Array(shores), 1))
   geometry.setIndex(index)
   return geometry
 }

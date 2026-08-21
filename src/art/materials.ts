@@ -1342,3 +1342,184 @@ export function glowStrip(color: string, glow: number = GLOW.source): MeshBasicM
     depthWrite: false,
   }
 }
+
+/**
+ * The inlay's metalness, and the one number in this file that is knowingly not
+ * physical.
+ *
+ * ## What was measured, and why metalness 1 did not deliver the brief
+ *
+ * The brief is a highly reflective steel. Shipped at `metalness: 1` it rendered
+ * at display **0.423**, `rgb(83, 112, 137)`, on the junction pool at
+ * `hub-establishing` - a dark navy sheet, and 0.264 DARKER than the deck it is
+ * set into rather than brighter as the table below predicts.
+ *
+ * The table is not wrong, the geometry of the reflection is. A metal has no
+ * diffuse term, so its value is entirely what it reflects, and what an UP-FACING
+ * sheet reflects toward a camera at this depression angle is the environment at
+ * roughly the same elevation on the opposite bearing. This rig's environment
+ * there is the ambient floor card at `#243a52` and the negative fill at
+ * `#0b0f1a`. The bright cards - the key softbox and the highlight strip - are
+ * overhead, which is where a mirror sends a camera looking from LOW down, and
+ * this camera looks from high up.
+ *
+ * A roughness sweep does not fix it: raising roughness widens the lobe toward
+ * the environment's average, and this environment's average is dark. It is the
+ * same finding `anodised()` records from the other side, restated for a
+ * horizontal surface instead of a vertical one, and its conclusion applies
+ * unchanged: **making a pure metal read here is a light-rig change and not a
+ * material one.**
+ *
+ * ## Why the light rig is not what moved
+ *
+ * The physical fix is one more Lightformer, at the elevation band a horizontal
+ * surface reflects toward this camera, bright enough to put the inlay above the
+ * deck. That is the right fix and it is not this commit's to make. It would
+ * raise ambient on every surface in the hub, it lands in the middle of the
+ * de-axialising change round 4 is explicitly holding `Lighting.tsx` still for
+ * (handoff item 3), and it would arrive inside a change about materials where
+ * nobody would attribute it. It is written down here so the next round can make
+ * it deliberately.
+ *
+ * ## What moved instead, stated plainly
+ *
+ * 0.68 rather than 1. Below 1 the material regains a diffuse lobe from its own
+ * albedo, lit by the key rather than by the reflection, and that term is what
+ * puts the value where the brief wants it while the remaining 68% of metal keeps
+ * the sharp mirror streak that makes it read as polished rather than painted.
+ *
+ * A mixed metalness is not physical: a surface is a conductor or it is not. What
+ * makes it defensible here rather than merely convenient is `00-art-bible.md`'s
+ * own rule about where stylisation is allowed to live - "the stylisation lives
+ * entirely in the INPUTS, never in the BRDF". `metalness` is an input to an
+ * unmodified GGX; nothing about the shading model changes. It is the same class
+ * of decision as an albedo chosen for a value band rather than for a real
+ * material, which this project makes everywhere.
+ *
+ * The honest cost, so it is not discovered later: at 0.68 the inlay's reflection
+ * of a bright card is 32% weaker than a mirror's, so the streak is dimmer than
+ * true steel, and the surface picks up a shading gradient from the key that a
+ * real mirror would not have. Both are visible on close inspection and neither
+ * is visible at the distance this surface is played at.
+ */
+export const STEEL_METALNESS = 0.68
+
+/**
+ * Polished steel, for the inlay that replaced the water.
+ *
+ * ## Why a metal here is legal when `anodised()`'s finding rules it out elsewhere
+ *
+ * The finding above is that a metal cannot carry a value band, because a metal
+ * has no diffuse term and its rendered value is `F(theta) x environment`, which
+ * sweeps as the camera turns. That argument is about a surface whose normal
+ * varies across the frame or across the camera's orbit - a flat kerb face, a
+ * vertical cylinder.
+ *
+ * The inlay is neither. Every piece of it - four spur channels, the trunk, the
+ * junction pool, the threshold pad - is an essentially UP-FACING sheet lying in
+ * a recess in the deck, so what it reflects is the overhead half of the rig and
+ * almost nothing else, at a view angle set by the fixed camera pitch rather than
+ * by yaw. The whole batch presents one narrow run of normals. That is the case
+ * the anodised finding does not cover, and it is the reason chrome and steel
+ * have always been permitted on "elements too small to be measured as a surface"
+ * and on reveals inset into a deck edge, which is what this is.
+ *
+ * ## The numbers, and the two ceilings they clear
+ *
+ * `envMapIntensity` is written here for documentation only and DOES NOT RUN in
+ * the hub. `WebGLRenderer` overwrites it from `scene.environmentIntensity` for
+ * any material with a null `envMap`, and nothing in this project sets one - see
+ * `HUB_ENV.intensity` in `Lighting.tsx`, which is 0.70. So the environment this
+ * steel sees is the hub's Lightformer rig scaled by 0.70, and the two cards it
+ * can actually see from an up-facing sheet are the key softbox at a radiance of
+ * `1.36 x 0.70 = 0.952` and the highlight strip at `1.5543 x 0.70 = 1.088`.
+ *
+ *   what it reflects             F       linear luminance   display luma
+ *   key softbox, head on         0.6015  0.5726             0.7813
+ *   key softbox, grazing         1.0000  0.9520             0.9786
+ *   highlight strip, head on     0.6015  0.6544             0.8292
+ *   highlight strip, grazing     1.0000  1.0880             1.0000, clipped
+ *
+ * So the bloom ceiling is clear with room: 1.088 against a measured threshold of
+ * 1.45, the same 1.33x margin the strip itself carries, and no reachable
+ * configuration blooms. What it does NOT clear is the deck, which renders at
+ * 0.687 - the inlay is brighter than the surface it is set into, everywhere.
+ * That is deliberate here and it is the point of the brief, but it is the exact
+ * shape of handoff item 5 ("decoration still out-values the ground") and it has
+ * to be judged on a frame rather than argued in a comment.
+ *
+ * `roughness` 0.15 rather than `chrome()`'s 0.06, and it is the one lever that
+ * changes the above. A mirror hands back the Lightformer's own edges as a hard
+ * rectangle lying in the floor; 0.15 spreads the same energy over a lobe wide
+ * enough to read as a sheet of metal with a highlight on it. Raise it toward
+ * 0.25 if the inlay reads as a cut-out of the sky, lower it toward 0.10 if it
+ * reads as grey paint.
+ *
+ * No clearcoat, for `chrome()`'s reason: a clear coat over a mirror is a second
+ * Fresnel term over a surface that is already entirely Fresnel.
+ */
+export function steel(overrides: MeshPhysicalMaterialProps = {}): MeshPhysicalMaterialProps {
+  return {
+    /*
+      A cool steel rather than a neutral one. `#c6ccd8` linearises to a luminance
+      of 0.6015, which is the `F0` the reflectance table above is computed from,
+      and its slight blue puts it inside the blues-silvers-greys the design
+      direction asks for instead of on the warm side of neutral. At `metalness`
+      below 1 it is also the DIFFUSE albedo, which is the term that carries the
+      value - see `STEEL_METALNESS`.
+    */
+    color: '#c6ccd8',
+    roughness: 0.15,
+    metalness: STEEL_METALNESS,
+    clearcoat: 0,
+    envMapIntensity: 1,
+    ...overrides,
+  }
+}
+
+/**
+ * Moulded masonry: the brick the deck and the pylons are made of.
+ *
+ * Distinct from `stone()`, which it is intended to replace at every hub call
+ * site, on three counts and each of them was asked for by name.
+ *
+ * **No clearcoat at all.** `stone()` keeps 0.15 so that stone "sits in the same
+ * lighting response as its neighbours instead of going conspicuously dead", and
+ * that is the opposite of the brief here: the platform is to be highly matte and
+ * to reflect nothing of the environment. A coat is a mirror lobe, and 15% of a
+ * mirror lobe on a twelve-metre floor is precisely the sheet of shine being
+ * removed. Dropping it also takes this preset out of the two-lobe rule entirely,
+ * which is why it is not on the exemption list: it has no second lobe to
+ * separate.
+ *
+ * **`specularIntensity` rather than `envMapIntensity`, and that distinction is
+ * the whole reason this preset can do what was asked.** The obvious way to stop
+ * a surface reflecting its environment is to turn `envMapIntensity` down, and in
+ * this project that lever DOES NOT EXIST - the renderer overwrites it from
+ * `scene.environmentIntensity`, see `steel()` above. It would also be the wrong
+ * lever if it worked, because the environment map delivers this material's
+ * diffuse irradiance as well as its specular reflection, and cutting both would
+ * simply make the deck darker rather than matte. `specularIntensity` scales the
+ * dielectric specular lobe ONLY, leaving diffuse untouched: the deck keeps its
+ * measured 0.687 and loses the sheen. 0.25 rather than 0 because a stone with
+ * literally no specular response reads as printed paper, and because grazing
+ * Fresnel is what tells the eye a floor is a solid rather than a hole.
+ *
+ * **Roughness 0.95 and normals at 1.8.** Relief is the only channel a stone has
+ * once its gloss is gone, and the measurement on record says relief does almost
+ * nothing on an up-facing surface under a key 42.7 degrees overhead - a deck's
+ * p5-p95 moved 0.0387 to 0.039 when the generated maps were switched on. That is
+ * why `brickTexture.ts` carries an ALBEDO map as well, and why this preset is
+ * only half of the answer. Bind both.
+ */
+export function masonry(overrides: MeshPhysicalMaterialProps = {}): MeshPhysicalMaterialProps {
+  return {
+    roughness: 0.95,
+    metalness: 0,
+    clearcoat: 0,
+    specularIntensity: 0.25,
+    normalScale: new Vector2(1.8, 1.8),
+    aoMapIntensity: 1.35,
+    ...overrides,
+  }
+}
