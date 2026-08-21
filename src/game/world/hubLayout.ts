@@ -13,9 +13,23 @@
  * See `docs/design/03-environment.md` and `docs/design/00-art-bible.md`.
  */
 
-import { LatheGeometry, Vector2, type BufferGeometry } from 'three'
+import {
+  BufferAttribute,
+  BufferGeometry,
+  CatmullRomCurve3,
+  LatheGeometry,
+  Vector2,
+  Vector3,
+} from 'three'
 import { palette } from '@/art/palette'
-import { kerb, puck, slab, type LightmapAtlasOptions, type PropPart } from '@/art/geometry'
+import {
+  kerb,
+  latheProfile,
+  puck,
+  slab,
+  type LightmapAtlasOptions,
+  type PropPart,
+} from '@/art/geometry'
 
 export type Point3 = [number, number, number]
 
@@ -35,32 +49,80 @@ export const PLATEAU_RADIUS = 16
 // ---------------------------------------------------------------------------
 
 /**
- * How a trace sits on the world, and why every one of these numbers is small.
+ * How the watercourse sits on the world.
  *
- * The traces used to be fat tubes floating 0.12 m clear of the deck on a
- * Catmull-Rom through diagonal waypoints, which read as a glossy rubber hose
- * lying on the floor: 0.28 m across, standing 0.26 m proud, with a wandering
- * organic path, one specular streak down its length, no contact with the
- * surface and a square-cut end.
+ * ## Three versions, and what each one actually read as
  *
- * The reference brief names PCB traces as this world's digital DNA, and a PCB
- * trace has three properties this one did not: it is *in* the surface rather
- * than on it, it runs in straight lines that turn at right angles mitred at 45
- * degrees, and it ends in a via pad rather than in mid-air.
+ * **Version one** was a Catmull-Rom through diagonal waypoints swept at radius
+ * 0.14 with its centreline 0.12 clear of the deck: a 0.28 m glossy tube standing
+ * 0.26 m proud, wandering, with a square cut at each end. A rubber hose someone
+ * had left on the floor.
  *
- * `standoff` is the tube's CENTRE above the surface, so a tube of radius
- * `trunkRadius` sits with its underside 0.035 m INSIDE the deck and its crown
- * 0.115 m above it. Buried is the point: there is no gap to light through and
- * therefore no missing contact shadow to notice. It also keeps the crown inside
- * the environment spec's absolute rule that a trace segment is either at or
- * below 0.12 m above the surface beneath it or at or above 3.00 m, never
- * between.
+ * **Version two** - the one this replaces - fixed the path and buried the tube.
+ * Right angles mitred at 45 degrees, both ends terminating inside something, and
+ * a centreline 0.04 above the surface so the underside sat inside the deck. That
+ * path arithmetic was right and it is kept unchanged below. **The cross-section
+ * was still a circle, and that is what kept it reading as a pipe rather than as
+ * a channel.** The numbers say so plainly: a tube of radius 0.075 with its
+ * centre 0.04 up presents a visible width of `2 * sqrt(0.075^2 - 0.04^2)` =
+ * **0.127 m while standing 0.115 m proud**, so the trunk was very slightly
+ * taller than it was wide. A spur was worse - 0.060 wide and 0.090 proud, an
+ * aspect ratio of 1.5 to 1 the wrong way round. Nothing that stands taller than
+ * it is wide reads as liquid held in a surface, whatever it is painted with.
+ *
+ * **This version sweeps a flat-topped section instead**, authored once in
+ * `INLAY_SECTION` and shared by every piece of water in the level. The trunk is
+ * 0.22 m wide and 0.038 m proud, an aspect of 0.17, and the spur is 0.15 by
+ * 0.026 - the same shape at a smaller size, which is a property version two did
+ * not have and which is worth more than it sounds. See `INLAY_SECTION`.
+ *
+ * ## The deck is NOT carved, and that is a decision rather than an omission
+ *
+ * There is no groove under the channels. The water is a brim-full inlay: its
+ * surface sits at the deck plane, its edge rolls over and tucks back underneath
+ * where the deck's own solid volume hides it, and the read of "inset" is carried
+ * by value and by the meniscus line rather than by a recess. Section 3 of the
+ * build report prices the four alternatives and says what each would have cost.
+ *
+ * The **pool** is different: it is a real recess, because the character has to
+ * step down into it and a collider cannot follow a value trick. See `POOL`.
  */
 export const TRACE = {
-  /** Tube centre above a horizontal surface. */
-  standoff: 0.04,
-  /** Tube centre outside a vertical face, where a run climbs a riser. */
-  faceStandoff: 0.06,
+  /**
+   * Surface offset, and it is zero on purpose rather than by neglect.
+   *
+   * `INLAY_SECTION` is authored about the surface the water is held in - `up` 0
+   * is the deck plane, positive is proud of it, negative is buried in it - so
+   * the path rides exactly ON the deck and the section carries the whole offset.
+   * Version two's 0.04 was the tube's centre height, which is a number a circle
+   * needs and a section does not.
+   *
+   * Kept as a named zero rather than deleted because it is the one lever that
+   * floats the water off its bed again, and a future scene with water running
+   * over a grating will want it. `hubLayout.test.ts` asserts the crown that
+   * comes out of it against the environment spec's height rule.
+   */
+  standoff: 0,
+  /**
+   * The same on a vertical face, where a run climbs a riser, and this one is NOT
+   * zero because a riser is not vertical.
+   *
+   * Every puck in the kit is drafted 3 degrees, so Puck B's side runs from radius
+   * 4.000 at its foot to `4 * (1 - 0.4 * tan(3 deg) / 4)` = 3.979 at its crown, a
+   * travel of 0.021 over the riser's height, and its 0.10 m top fillet pulls the
+   * last centimetre in further. A sheet of water hung on the nominal face plane at
+   * 0 would therefore sit outside the real surface by up to 0.021 near the top of
+   * every riser, which exposes the section's tuck - and on a VERTICAL run the tuck
+   * points sideways rather than downward, so its normal Y is near zero, the
+   * shoreline ramp reads it as open water and it does not fade. An opaque lip of
+   * water standing 7 mm off the riser, twelve times in the level.
+   *
+   * 0.02 centres the sheet in the draft's travel instead of hanging it at one end,
+   * so the mismatch is plus or minus 0.010 rather than 0 to -0.021 and the tuck
+   * stays buried by at least 0.011 at every height on both radii. Small, and it is
+   * the difference between "buried everywhere" and "buried on average".
+   */
+  faceStandoff: 0.02,
   /**
    * The 45-degree mitre taken off each right-angle corner.
    *
@@ -74,13 +136,541 @@ export const TRACE = {
   chamfer: 0.12,
   /** Spacing of the polyline handed to the spline, along a straight run. */
   spacing: 0.15,
-  /** The north trunk, thicker because it is the main path made visible. */
-  trunkRadius: 0.075,
-  /** A totem spur, thinner so the player can tell it from the trunk at a glance. */
-  spurRadius: 0.05,
-  /** The via pad at the Core, where four inputs meet and the trunk leaves. */
-  junctionRadius: 1.05,
+  /**
+   * Half the visible width of the trunk's water surface.
+   *
+   * A HALF WIDTH rather than a radius, and the change of unit is the change of
+   * shape. 0.11 makes the trunk 0.22 m across and, through
+   * `INLAY_SECTION`'s fixed proportions, 0.038 m proud - inside the environment
+   * spec's absolute 0.12 m rule with three times the margin the tube had.
+   *
+   * Wider than the tube it replaces, which was 0.127 m of visible width. That is
+   * wanted rather than tolerated: the water body renders at display 0.212 against
+   * decks at 0.612 to 0.698, and round 2's critique measured 0.00% of the frame
+   * below display 0.10 with the conclusion that every other failing was
+   * downstream of a world with no shadow end. Widening the darkest surface in the
+   * scene by 73% spends area on exactly the thing the frame is short of.
+   */
+  trunkHalfWidth: 0.11,
+  /**
+   * Metres over which a channel's relief eases away at each end, so a run can
+   * meet standing water without a lip.
+   *
+   * **This exists because of an arithmetic result, not an aesthetic one.** A
+   * channel's surface DOMES - see `INLAY_SECTION` - and a pool's is FLAT, so at
+   * equal bed heights a channel's crown stands `0.345 * halfWidth` above the water
+   * it runs into: 0.038 m on the trunk and 0.026 m on a spur. There are six such
+   * junctions in the level and the lip is geometrically wrong at five of them,
+   * because water would have to climb it: the four spurs are OUTFALLS from the
+   * junction basin and the threshold pad is the trunk's SOURCE, so at all five the
+   * channel's water is uphill of the standing water feeding it. Only the trunk
+   * arriving at the junction happens to be right.
+   *
+   * Left alone it renders as four domed tongues 0.15 m wide and 0.026 m tall lying
+   * across the pool's surface with their open sections showing at the end - about
+   * 15 by 2 px each, in the pool the request is specifically about, directly under
+   * the Core node, where the character stands.
+   *
+   * Tapering the relief to nothing over the last 0.35 m fixes all six junctions at
+   * once instead of arguing about any of them, and it is what a real channel does:
+   * a dome held by surface tension across 0.22 m cannot survive the channel opening
+   * out into a basin. The visible effect is the trunk deflating from 0.038 m to
+   * 0.008 m over the 0.35 m before the rim - under a pixel of change per 35 px of
+   * length - which reads as the channel opening into the pool.
+   */
+  mouthTaper: 0.35,
+  /**
+   * The relief a channel keeps at its very last ring, as a fraction.
+   *
+   * NOT zero, and this is a degeneracy guard rather than a taste. `up` is what the
+   * taper scales and `across` is not, so a relief of exactly 0 puts all nine section
+   * points on one horizontal line - including both tucks, which fold back to
+   * `across` 0.545 and would land exactly on top of the shoulder samples. That is a
+   * ribbon whose end rings carry four zero-area quads, which is how a NaN gets into
+   * a normal buffer.
+   */
+  endRelief: 0.15,
+  /**
+   * A totem spur, narrower so the player can tell it from the trunk at a glance.
+   *
+   * The ratio to the trunk is 0.682, which is version two's 0.05/0.075 to three
+   * decimal places. The distinction the layout was making is preserved exactly;
+   * only the shape it is made with has changed.
+   */
+  spurHalfWidth: 0.075,
 } as const
+
+/**
+ * The water's cross-section, authored once and swept, lathed and radiated by
+ * everything wet in the level.
+ *
+ * ## Normalised, and that is the load-bearing property
+ *
+ * `across` is in units of the piece's half width and `up` is in the SAME units,
+ * so the section is **self-similar**: the trunk, the spurs, the junction pool's
+ * rim and the threshold pad's rim are all the same shape at four sizes. Two
+ * things fall out of that, and both were defects in version two.
+ *
+ * The shoreline becomes exact everywhere. Version two's alpha ramp was tuned
+ * against the trunk's waterline at normal Y `-0.04/0.075 = -0.533` and the same
+ * ramp met a spur at `-0.04/0.05 = -0.800`, so - as `waterMaterial.ts` recorded
+ * at the time - "on a spur the water stops about a centimetre short of its own
+ * shore". A self-similar section presents the identical distribution of normals
+ * at every size, so ONE pair of shore numbers is right on all four pieces rather
+ * than right on one and erring safely on the rest.
+ *
+ * And the meniscus becomes a fixed fraction of the width rather than a fixed
+ * distance, which is what makes a 0.15 m spur and a 2.10 m pool look like the
+ * same liquid.
+ *
+ * ## Why these five numbers
+ *
+ * Read from the axis outward:
+ *
+ * ```
+ *   across   up      what it is
+ *   0.000   +0.345   the crown, 0.038 m up on the trunk
+ *   0.450   +0.300   the dome
+ *   0.720   +0.170   the shoulder, where the meniscus lives
+ *   1.000    0.000   the RIM, exactly at the deck plane
+ *   0.545   -0.409   the tuck, folded back under and buried
+ * ```
+ *
+ * **The crown is 0.345 and not zero, and that is the most considered number
+ * here.** A dead-flat ribbon was tried on paper first and it kills the effect,
+ * for a reason worth writing down because it is not obvious: both of this water's
+ * strongest cues need a RANGE of normals, and a flat surface has one.
+ *
+ * The sky reflection is a Schlick term in `dot(N, V)`. At the gameplay camera's
+ * 33.8 degrees of depression a dead-flat surface gives `dot = sin(33.8) = 0.556`
+ * and a Fresnel of `(1 - 0.556)^4 = 0.039`, so a flat channel reflects
+ * essentially nothing and renders at its body colour, everywhere, forever.
+ *
+ * The specular streak is worse. It is a Blinn lobe at exponent 220 against a key
+ * 42.7 degrees up, so the half-vector sits near 38 to 55 degrees of elevation and
+ * a flat surface's normal misses it by about 45 degrees: `pow(0.7, 220)` is
+ * `e^-78`, which is zero in any float. **A flat water surface at this camera has
+ * no glint at all** - and the tube's single virtue was that a circle presents
+ * every normal, so somewhere on it the half-vector is hit exactly, which is what
+ * that streak down its length always was.
+ *
+ * 0.345 buys back a quarter turn. The section's outward normals run from
+ * `(0, 1)` at the crown through `(0.53, 0.85)` at the shoulder to `(1.00, 0.09)`
+ * at the rim, so the half-vector is hit somewhere on the shoulder and the
+ * grazing angle is reached at the bank. The cues survive; the pipe does not.
+ *
+ * It is also physically the right shape for the thing being drawn. A brim-full
+ * channel domes: 0.038 m of rise over 0.11 m is what surface tension does at this
+ * width, and it is why the crown is expressed as a fraction of the half width
+ * rather than as a height.
+ *
+ * ## The tuck
+ *
+ * The section's widest point is the rim, AT the deck plane, and everything below
+ * it folds back inward. So the last two points are inside the deck's own solid
+ * volume and are hidden by the depth test rather than by an alpha ramp - the same
+ * property version two got from burying a tube, kept deliberately. The alpha ramp
+ * still exists, and its job is now only the places where the deck falls away
+ * underneath: the twelve riser lips, and every 0.10 m fillet the water crosses.
+ */
+/**
+ * The section's own landmarks, in the two coordinates its tests are written
+ * against.
+ *
+ * **These moved here from `waterMaterial.ts` when the water became steel**, and
+ * they are geometry rather than shader tuning, which is why they survived the
+ * deletion of every other number in that file. Each one is a threshold the
+ * SECTION has to satisfy for the sweep to behave, and `hubLayout.test.ts`
+ * asserts all three - they were the one thing tying the profile to the material,
+ * and without them a re-authored section could move its rim normal and nothing
+ * would notice.
+ *
+ * `visibleTop` and `tuckBottom` still describe live properties. Every point of
+ * the section that is above the bed plane presents a normal Y above
+ * `visibleTop`, and the buried tuck presents one below `tuckBottom`, so the
+ * whole visible surface faces the sky and the whole hidden one faces into the
+ * deck. That is what lets the inlay meet its recess with no edge on show, at
+ * every one of the trunk's five levels and down all twelve risers - including
+ * the vertical runs, whose crowns point away from the riser face rather than up,
+ * which is why `visibleTop` is NEGATIVE and is the edit here that would look
+ * tidier at zero and break the most.
+ *
+ * `edgeBand` is the one with no consumer, and that is stated rather than hidden.
+ * It marked where the old material opened its meniscus on the `aShore`
+ * coordinate, inboard of the shoulder rather than at the rim, because the rim is
+ * the part that dips under the surface it is held in. The attribute is still
+ * written by both builders and still asserted, and nothing samples it now. The
+ * number is kept because it is the landmark those assertions are phrased in and
+ * because it is where any future edge treatment - a printed reveal, a wear
+ * strip, a bevel highlight - would start from. If a round passes with no such
+ * treatment, delete it and the attribute together, in one commit that touches
+ * every builder.
+ */
+export const INLAY_PROFILE = {
+  /** Normal Y above which a point on the section is visible top face. */
+  visibleTop: -0.15,
+  /** Normal Y below which a point is in the tuck, inside the deck's own volume. */
+  tuckBottom: -0.55,
+  /** Where the section's edge band opens, on the `aShore` coordinate. */
+  edgeBand: 0.55,
+} as const
+
+export const INLAY_SECTION = [
+  { across: 0, up: 0.345, shore: 0 },
+  { across: 0.45, up: 0.3, shore: 0.35 },
+  { across: 0.72, up: 0.17, shore: 1 },
+  { across: 1, up: 0, shore: 1 },
+  { across: 0.545, up: -0.409, shore: 1 },
+] as const
+
+/**
+ * Where the meniscus starts, as a `shore` value, and it is the number that
+ * decides whether the bank line is visible at all.
+ *
+ * `shore` reaches 1 at the SHOULDER rather than at the rim, which looks like
+ * sloppy authoring and is the opposite. The meniscus is `smoothstep(FOAM_SHORE, 1,
+ * aShore)`, so a ramp that only completed at the rim would put the whole band on
+ * the last quad of the section - and that quad is the one that dips below the
+ * surface it is held in and gets buried. Worked through on the pool, where it
+ * matters most: with `shore` reaching 1 at the rim, the water's visible edge sits
+ * at `shore` 0.75 and the meniscus renders at 43% of its authored weight, with the
+ * bright part of it under the bank.
+ *
+ * Reaching 1 at the shoulder puts the band between `across` 0.533 and 1.0, which
+ * is 0.467 half widths: **5.1 cm on the trunk, 3.5 cm on a spur and 5.1 cm on the
+ * pool's rim.** At the ground's foreshortened 57 px/m that is 2.9 px on the trunk
+ * and at the frontoparallel 103 px/m it is 5.3 px, against the 1.4 px the
+ * rim-anchored version would have delivered. A meniscus is allowed to be a
+ * hairline; it is not allowed to be a subpixel.
+ */
+export const FOAM_SHORE = 0.55
+
+/** One point of a resolved section: where it is, which way it faces, how near the bank. */
+export type WaterSectionPoint = {
+  /** Across the flow, in units of the piece's half width. */
+  across: number
+  /** Above the surface the water is held in, in the same units. */
+  up: number
+  /** Outward normal in the (across, up) plane, unit length. */
+  normalAcross: number
+  normalUp: number
+  /**
+   * 0 in open water, 1 at the bank, carried to the shader as `aShore`.
+   *
+   * **A vertex attribute rather than a function of the normal, and that is a
+   * correction to version two.** Its meniscus was `1 - smoothstep(shoreTop, ...)`
+   * over the world normal's Y, which works on a tube because a tube's normal is a
+   * proxy for how far round the surface you are. It does not work on a POOL: a
+   * flat disc has normal Y 1.0 across its whole area, so a normal-driven meniscus
+   * is either absent everywhere or present everywhere, and there is no pair of
+   * numbers that puts it at the rim. Distance-to-bank is the quantity actually
+   * wanted, it is known exactly at authoring time, and it costs four bytes a
+   * vertex.
+   */
+  shore: number
+}
+
+/**
+ * The section resolved into world-ready points, with analytic normals.
+ *
+ * Normals are computed here rather than by `computeVertexNormals` for one
+ * reason: they are the input to the shoreline, and the shoreline is the thing
+ * that decides whether the water's edge is a soft meniscus or a hard silhouette
+ * line. `hubLayout.test.ts` asserts the resolved values land inside the windows
+ * `INLAY_PROFILE.visibleTop`, `INLAY_PROFILE.tuckBottom` and `INLAY_PROFILE.edgeBand` open, so the
+ * geometry and the shader cannot drift apart without a test failing.
+ *
+ * `half` mirrors the section about the axis and returns only the outward half,
+ * which is what a lathe and a radial disc need; the full form is what a swept
+ * ribbon needs.
+ */
+export function inlaySection(half = false, verticalScale = 1): WaterSectionPoint[] {
+  const raw = INLAY_SECTION.map((p) => ({ ...p, up: p.up * verticalScale }))
+  /*
+    Normals are always derived on the FULL mirrored section and only then halved,
+    which matters for exactly one point and matters a lot there. The crown is the
+    section's apex; on the full form it has a neighbour on each side and averages
+    to a dead vertical `(0, 1)`, and on a half form taken first it would have one
+    neighbour and come out tilted 5.7 degrees outward. That tilt would then be the
+    normal of a POOL's entire flat interior - two thousand square centimetres of
+    still water lit as though it were a shallow cone, on the piece that sits dead
+    centre of frame under the Core.
+  */
+  const points = [
+    ...raw.slice(1).reverse().map((p) => ({ ...p, across: -p.across })),
+    ...raw,
+  ]
+
+  const resolved = points.map((p, i) => {
+    /*
+      The normal is the average of the adjoining segment normals, exactly as a
+      lathe derives its own, so a run of samples across a fillet comes out smooth
+      and a break in the section comes out as a crease. A segment running
+      (dAcross, dUp) has outward normal (-dUp, dAcross), which is the +90 degree
+      rotation: at the crown the direction is roughly (+1, 0) and the normal comes
+      out (0, +1), pointing at the sky.
+    */
+    let nx = 0
+    let ny = 0
+    for (const [a, b] of [
+      [points[i - 1], p],
+      [p, points[i + 1]],
+    ] as Array<[typeof p | undefined, typeof p | undefined]>) {
+      if (!a || !b) continue
+      const dx = b.across - a.across
+      const dy = b.up - a.up
+      const length = Math.hypot(dx, dy)
+      if (length < 1e-12) continue
+      nx += -dy / length
+      ny += dx / length
+    }
+    const length = Math.hypot(nx, ny)
+    if (length < 1e-12) {
+      throw new Error(
+        `hubLayout: water section point ${i} at (${p.across}, ${p.up}) has no resolvable ` +
+          `normal, which renders as a black or unshaded band down the whole watercourse`,
+      )
+    }
+    return { ...p, normalAcross: nx / length, normalUp: ny / length }
+  })
+
+  // The outward half runs from the crown, which is the mirror's midpoint.
+  return half ? resolved.slice(INLAY_SECTION.length - 1) : resolved
+}
+
+/**
+ * The junction pool at the Core: a real milled recess in Puck C's top face.
+ *
+ * ## What was there before
+ *
+ * `pad(1.05)` at `[0, 1.2, 0]`. `pad` is `roundedCylinder({ height: 0.1 })`
+ * standing on its own base, so what the frame actually contained was **a 2.10 m
+ * wide, 0.10 m TALL cylinder of water standing on top of the deck** - a cake of
+ * water, with a rim, in the middle of the walking route, dead centre of frame
+ * beneath the Core node. It had no collider, so the character walked through it.
+ * That is the object the user is describing when they ask for the pool to be
+ * inset, and inverting it is most of the fix.
+ *
+ * ## Why this one has to be real geometry when the channels do not
+ *
+ * The channels get their inset read from value and a meniscus, and that is
+ * enough because nothing has to interact with them. **The pool cannot, because
+ * the character has to step down into it.** Rapier will not follow a displaced
+ * mesh - `Terrain.tsx` carries the note - so a value-only pool gives water the
+ * character floats above, which is the exact defect the request is about. The
+ * step-down requirement is what forces the carve, and it forces it here and
+ * nowhere else.
+ *
+ * ## Every number, and what constrains it
+ *
+ * **`depth` 0.05.** The step the character takes. At the gameplay camera - fov
+ * 40, `CAMERA.distance` 10.7, `height` 4.3, default pitch 0.25 rad - one world
+ * metre at the player is 103 px on the 934-tall capture buffer and a world
+ * VERTICAL metre is `103 * cos(33.8) = 85` px, so 0.05 m is **4.3 px**. The user
+ * asked for "just a few pixels" and that is the arithmetic that says 0.05 is it.
+ * It is also 1/8 of `STEP`, deliberately off the 0.40 grid: this is a surface
+ * detail, not a level height, and putting it on the grid would make it a stair.
+ *
+ * **`bank` 0.10, and it is a constraint rather than a taste.** Two independent
+ * things both need the bank shallower than 45 degrees and would each have been
+ * satisfied by a vertical wall in the wrong way.
+ *
+ * The lightmap atlas is the first. `packLightmapAtlas` files a triangle under
+ * whichever of six axes its normal is closest to, and parameterises a +X chart by
+ * `(z, y)`. A VERTICAL pool wall is radial-facing, so it lands in the same four
+ * side charts as Puck C's outer wall and overlaps it in `(z, y)` - two different
+ * surfaces claiming the same texels, which bakes as a band of the recess's
+ * occlusion painted around the outside of Puck C's rim. At 38 degrees every
+ * triangle in the recess has `|normalUp| > |normalRadial|`, so the whole pool
+ * files under +Y, where the ring, the bank and the floor are radially disjoint
+ * and single-valued. **The overlap is not mitigated, it is made impossible.**
+ *
+ * The second is `BODY.minSlopeSlideAngle`, which is 35 degrees: Rapier slides the
+ * character down anything steeper. That is not a problem for the collider below,
+ * which is a set of boxes and presents a vertical step rather than a slope - but
+ * it is the reason a heightfield collider was rejected, since a heightfield WOULD
+ * present the real 38-degree face and the player would be pushed toward the
+ * middle of the pool every time they stood on its edge.
+ *
+ * The floor is `bank * PI / 2 = 0.0785` at its steepest for a cosine ease, so
+ * 0.10 leaves the maximum face at 38.1 degrees with margin on both counts.
+ *
+ * **`radius` 1.05** is version two's `junctionRadius` unchanged, so the pool is
+ * the same circle the four spurs already ran into and the trunk already left
+ * from. Confirmed as the circle the user means: the only other pad in the level
+ * is `pad(0.9)` at `[0, 2.8, -14.1]`, which is the threshold pad in front of the
+ * arch at the far end of the portal stack, not "the center of that layered
+ * platform".
+ *
+ * **`colliderSides` 12.** See `poolRingColliders`.
+ */
+export const POOL = {
+  /** Where the deck's flat top ends and the bank begins. */
+  radius: 1.05,
+  /** Floor below the deck top. The step the character takes. */
+  depth: 0.05,
+  /** Horizontal run of the bank. Never below `depth * PI / 2`. */
+  bank: 0.1,
+  /** Samples across the bank. Six is smooth at 2.27 cm per lightmap texel. */
+  bankSegments: 6,
+  /**
+   * The water surface's edge band, in metres.
+   *
+   * Equal to `TRACE.trunkHalfWidth` on purpose, so the pool's rim carries exactly
+   * the same run of normals - and therefore the same meniscus and the same
+   * grazing highlight - as the trunk that feeds it. It is the one number that
+   * makes a 2.10 m pool and a 0.22 m channel read as the same liquid.
+   */
+  rimWidth: 0.11,
+  /**
+   * How much of the section's vertical relief a DISC's rim keeps. Channels use 1.
+   *
+   * A pool's surface is flat and a channel's brims, and the section is authored for
+   * the channel. 0.345 of a half width is a plausible surface-tension dome across
+   * 0.11 m of trunk and it is 0.36 m of mound across a 1.05 m pool, so the relief
+   * has to come down for the discs. What sets the exact figure is not taste but
+   * whether the meniscus survives: the rim rolls DOWNWARD, the bank rises
+   * INWARD, and where they cross is where the water's visible edge is. At full
+   * relief they cross at radius 1.008 with `shore` still at 0.75, burying the
+   * bright part of the band; at 0.35 they cross at 1.028 where `shore` has reached
+   * 1, so the whole meniscus is above water.
+   *
+   * The grazing highlight survives the flattening, which is not obvious and was
+   * checked rather than hoped: flattening the tuck along with the rim keeps the rim
+   * vertex's normal near horizontal - its up component goes from 0.092 to 0.047,
+   * i.e. slightly MORE grazing - so the sky reflection at the bank is untouched.
+   *
+   * The visible consequence, stated so it is not mistaken for a bug in a render:
+   * the pool's water reads about 2 cm narrower than its recess, with a ring of
+   * damp bank above the waterline. That is what a puddle does. It is not brim-full.
+   */
+  rimDrop: 0.35,
+  /**
+   * Concentric ripple rings across the pool's radius, as a fraction of
+   * `WATER.crests`.
+   *
+   * The pool's `uv.x` runs RADIALLY and decreases outward, so the shader's
+   * existing "crests travel toward decreasing uv.x" advects rings from the centre
+   * to the rim - which is what a basin fed from above looks like, and the Core
+   * node hangs 4.8 m directly over this one. 0.175 of 40 crests is 7 rings over
+   * 1.05 m, a 0.15 m wavelength, which is the spurs' wavelength to the
+   * centimetre so the pool and its four outfalls ripple at one scale.
+   */
+  ringFraction: 0.175,
+  /** Sides of the collider polygon that stands in for the annular deck. */
+  colliderSides: 12,
+} as const
+
+/**
+ * The annular deck around the pool, as boxes, because Rapier has no annulus.
+ *
+ * ## The problem, stated exactly
+ *
+ * Puck C's collider is one `CylinderCollider(STEP / 2, 2.1)` topping out at 1.20.
+ * A cylinder is solid, so it fills the recess: carve the visual and leave this
+ * alone and the character walks over the pool at deck height, which is precisely
+ * the "water the character floats above" failure. The support the pool needs is
+ * an ANNULUS - deck height from the pool's rim out to 2.10, nothing inside it -
+ * and Rapier ships no annulus primitive.
+ *
+ * ## What was rejected
+ *
+ * **A trimesh.** `HubIsland.tsx` states the house rule in as many words: "never a
+ * trimesh, because a trimesh over decorative bevels turns every fillet into
+ * something the capsule can catch on". Puck C has a 0.10 m fillet all the way
+ * round and the pool would add two more.
+ *
+ * **A heightfield.** One collider instead of thirteen and it follows the visual
+ * exactly, which is genuinely attractive. Two things kill it. A heightfield is a
+ * rectangular grid, so it cannot be clipped to Puck C's circle: the corners
+ * outside radius 2.10 would be walkable ground floating over Puck B, and pulling
+ * them down instead replaces a clean cylindrical rim with a 0.19 m staircase the
+ * player feels every time they walk round the Core. And it presents the bank's
+ * real 38-degree face, which is past `BODY.minSlopeSlideAngle` of 35, so the
+ * character would slide off the pool's edge toward its middle.
+ *
+ * **Convex hulls.** Correct, and exactly as many colliders as this for strictly
+ * more machinery, since a wedge of an annulus needs eight authored vertices where
+ * a box needs three half-extents and a yaw.
+ *
+ * ## Why the polygon's error cannot be seen, which is the whole argument
+ *
+ * Twelve boxes, each with its inner face a chord tangent to a circle of radius
+ * `radius - bank / 2` = 1.00, so the hole they leave is a 12-gon with inradius
+ * 1.00 and circumradius `1.00 / cos(15 deg)` = **1.0353**.
+ *
+ * The visual bank runs from 0.95 to 1.05. **Both of those bounds are inside it**,
+ * so every point where the collider steps down lies somewhere on the sloping bank
+ * and there is no vantage from which the character can be seen stepping down onto
+ * flat deck, or standing on the slope without having stepped. The worst
+ * horizontal error is 0.035 m at twelve azimuths, which at the ground's
+ * foreshortened 57 px/m is 2 px, and it is swallowed long before that by the
+ * capsule: a 0.35 m sphere resting in a 0.05 m recess only reaches the floor once
+ * its centre is `sqrt(0.35^2 - 0.30^2)` = **0.18 m inside the rim**, so the
+ * character is a fifth of a metre past the boundary before the step-down completes
+ * at all.
+ *
+ * That last number is also why the channels get no collider treatment and want
+ * none. A 0.22 m wide groove has a half width of 0.11, well under 0.18, so a
+ * capsule bridges it and touches the bottom nowhere: carving the trunk into the
+ * deck for real would produce a channel the character walks over without ever
+ * entering. The pool works only because it is 2.10 m across.
+ *
+ * The outer half extent reaches `hypot(2.1, 0.56)` = 2.173 at each box's corners,
+ * still inside Puck C's 2.20 visual radius, so the ring cannot poke out of the
+ * deck it is standing in.
+ */
+export function poolRingColliders(): Array<{
+  position: Point3
+  rotation: Point3
+  halfExtents: Point3
+}> {
+  const inner = POOL.radius - POOL.bank / 2
+  const outer = CORE_PUCKS[2].radius - 0.1
+  const half = Math.PI / POOL.colliderSides
+  /*
+    The lateral half length has to cover the OUTER arc, not the inner one, or the
+    ring is a twelve-pointed star with twelve wedges of air between its arms - and
+    air in a fixed collider set is a hole the player falls through, on the main
+    route to the portal. Rounded up by a centimetre so neighbours overlap rather
+    than meet exactly, since two boxes that share a face plane to the last float
+    bit is not a coverage guarantee.
+  */
+  const halfLength = outer * Math.sin(half) + 0.01
+  const depth = outer - inner
+  const centre = (outer + inner) / 2
+  const top = CORE_PUCKS[2].base + STEP
+
+  return Array.from({ length: POOL.colliderSides }, (_, i) => {
+    const yaw = i * 2 * half
+    return {
+      position: [Math.cos(yaw) * centre, top - STEP / 2, Math.sin(yaw) * centre] as Point3,
+      /*
+        The box is authored with its length along local X and its radial depth
+        along local Z, and a rotation of `theta` about Y sends local +Z to
+        `(sin theta, 0, cos theta)`. The outward bearing here is
+        `(cos yaw, 0, sin yaw)`, so the rotation that puts the depth axis on it is
+        `PI / 2 - yaw` and NOT `-yaw`.
+
+        This was written as `-yaw` first, which is the transposition somebody makes
+        every time: it turns all twelve boxes 90 degrees so their long axes point
+        outward and their depth runs tangentially. That still tiles a closed ring
+        with no holes, so nothing falls through and nothing errors - it simply
+        leaves a ring of boxes sitting across the pool with the recess filled in.
+        The symptom is "the step down does not work" and there is nothing in the
+        frame to point at, which is why `poolRingColliders` is covered by a test
+        that samples inside the pool and outside it rather than by this comment.
+      */
+      rotation: [0, Math.PI / 2 - yaw, 0] as Point3,
+      halfExtents: [halfLength, STEP / 2, depth / 2] as Point3,
+    }
+  })
+}
+
+/** Radius of the cylinder that floors the pool, covering the ring polygon's corners. */
+export function poolFloorRadius(): number {
+  return (POOL.radius - POOL.bank / 2) / Math.cos(Math.PI / POOL.colliderSides)
+}
 
 /** Squared length of a segment, in three dimensions. */
 function distance(a: Point3, b: Point3): number {
@@ -244,6 +834,406 @@ export function pathVerticalRuns(points: Point3[]): { up: number; down: number }
 export function traceSegments(length: number, tierSegments: number): number {
   const step = 3 / Math.max(1, tierSegments)
   return Math.max(16, Math.round(length / step))
+}
+
+// ---------------------------------------------------------------------------
+// The water geometry: a swept channel, a radial disc, a carved basin
+// ---------------------------------------------------------------------------
+
+/**
+ * The distance-to-bank attribute, named once so the geometry and the shader
+ * cannot disagree about it.
+ *
+ * A misspelling here is the canonical silent shader failure in this project: three
+ * finds no such attribute, GLSL leaves it at zero, `aShore` reads 0 everywhere,
+ * the meniscus disappears from the entire watercourse, and the frame renders
+ * cleanly. `waterMaterial.test.ts` asserts the shader's `attribute` line quotes
+ * this exact constant.
+ */
+export const INLAY_SHORE_ATTRIBUTE = 'aShore'
+
+const WORLD_UP = new Vector3(0, 1, 0)
+
+/**
+ * Sweep `INLAY_SECTION` along a route, with the section's "up" held to the
+ * surface the route is running on.
+ *
+ * ## Why not `tubeFromCurve`, which already exists and already works
+ *
+ * `TubeGeometry` sweeps a CIRCLE on a parallel-transport frame. Two things about
+ * that are wrong for a channel and neither can be fixed by choosing a radius.
+ *
+ * The section is not a circle - that is the whole point of this pass, see
+ * `INLAY_SECTION` - and a non-circular section swept on a Frenet-derived frame
+ * ROLLS. Three's `computeFrenetFrames` picks its initial normal off the smallest
+ * tangent component and then transports it, which is exactly right for a tube
+ * because a tube is rotationally symmetric and cannot show the roll. A flat
+ * ribbon shows it immediately: the trunk climbs four risers, and a frame that
+ * rolled by even ten degrees over that would present the channel's flat top
+ * tilted to the deck, differently on each of the five levels.
+ *
+ * So the frame here is built from the world instead of transported:
+ * `across = tangent x worldUp` and `up = across x tangent`. On a horizontal run
+ * that puts the section's up on world up and its flat top parallel to the deck,
+ * exactly, at every sample and forever. On a VERTICAL run - the twelve riser
+ * climbs - `tangent x worldUp` degenerates, so `across` is carried from the last
+ * sample that had one and `up` comes out horizontal, pointing away from the riser
+ * face: the same section, stood on its edge, which reads as a sheet of water
+ * falling down the step. That is the behaviour version two got by accident from a
+ * tube's rotational symmetry and this gets on purpose.
+ *
+ * Both of this level's routes are planar - the trunk lies in x = 0 and each spur
+ * in its own diagonal vertical plane - so `across` is in fact constant along each
+ * one and the carry only ever fires on the vertical legs. The sign-continuity
+ * guard below is therefore dead code today and is kept anyway, because the first
+ * route with a turn in PLAN would otherwise flip the section over mid-run.
+ *
+ * Sampled by arclength through `getPointAt`/`getTangentAt`, which is what
+ * `TubeGeometry` does, so `uv.x` still runs 0 to 1 from the first authored corner
+ * to the last and the hydrology argument in `pathVerticalRuns` carries over
+ * unchanged.
+ */
+export function sweepChannel(
+  points: Point3[],
+  halfWidth: number,
+  segments: number,
+): BufferGeometry {
+  if (!(halfWidth > 0)) {
+    throw new Error(`hubLayout: sweepChannel needs a positive half width, got ${halfWidth}`)
+  }
+  const rings = Math.max(2, Math.round(segments)) + 1
+
+  const curve = new CatmullRomCurve3(
+    points.map(([x, y, z]) => new Vector3(x, y, z)),
+    false,
+    'catmullrom',
+    0.5,
+  )
+
+  const centres: Vector3[] = []
+  const tangents: Vector3[] = []
+  for (let i = 0; i < rings; i++) {
+    const t = i / (rings - 1)
+    centres.push(curve.getPointAt(t))
+    tangents.push(curve.getTangentAt(t).normalize())
+  }
+
+  /*
+    The relief at each ring, eased to `TRACE.endRelief` over `TRACE.mouthTaper` at
+    both ends so a run can meet standing water without a lip. See `TRACE.mouthTaper`.
+
+    The section is re-resolved per ring rather than scaled after the fact, because
+    scaling a vertex's height without recomputing its normal is exactly the class of
+    quiet lie this file is written to avoid: the shoreline and the meniscus both read
+    those normals, and a flattened section whose normals still describe the tall one
+    would fade its alpha in the wrong place. Nine points and two cross products a
+    ring, three hundred rings, once at mount.
+  */
+  const length = Math.max(curve.getLength(), 1e-6)
+  /*
+    Capped at 0.45 so the two eases cannot overlap and cancel each other on a run
+    shorter than twice the taper, and floored above zero because `mouthTaper` of 0
+    would make the first ring's `0 / 0` a NaN - which would propagate through every
+    position on that ring and, on most drivers, draw one frame of full-screen garbage.
+  */
+  const fraction = Math.max(1e-6, Math.min(0.45, TRACE.mouthTaper / length))
+  const ease = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x))
+  const sections = Array.from({ length: rings }, (_, i) => {
+    const t = i / (rings - 1)
+    const taper = ease(t / fraction) * ease((1 - t) / fraction)
+    return inlaySection(false, TRACE.endRelief + (1 - TRACE.endRelief) * taper)
+  })
+  /*
+    Read off the resolved section rather than recomputed from `INLAY_SECTION.length`,
+    so re-authoring the section - or changing how it mirrors - cannot leave the buffer
+    stride and the point count disagreeing. They would disagree by reading past the end
+    of an array, which in JS is `undefined` and then NaN rather than a throw.
+  */
+  const across = sections[0].length
+
+  /*
+    Resolve `across` for every ring, seeded from the first sample that has a
+    horizontal tangent and then carried in both directions. Seeding rather than
+    starting at ring zero matters for a route that begins on a vertical leg, which
+    neither of this level's two do and a cave waterfall would.
+  */
+  const raw = tangents.map((t) => new Vector3().crossVectors(t, WORLD_UP))
+  const seed = raw.findIndex((v) => v.length() > 1e-3)
+  if (seed < 0) {
+    throw new Error(
+      'hubLayout: sweepChannel was given an entirely vertical route, which has no ' +
+        'horizontal across-flow direction and would sweep a degenerate ribbon',
+    )
+  }
+  const sides: Vector3[] = new Array(rings)
+  sides[seed] = raw[seed].clone().normalize()
+  const resolve = (i: number, from: number) => {
+    const side = raw[i].length() > 1e-3 ? raw[i].clone().normalize() : sides[from].clone()
+    // Keep the section from flipping over where a route turns back on itself.
+    if (side.dot(sides[from]) < 0) side.negate()
+    sides[i] = side
+  }
+  for (let i = seed + 1; i < rings; i++) resolve(i, i - 1)
+  for (let i = seed - 1; i >= 0; i--) resolve(i, i + 1)
+
+  const position = new Float32Array(rings * across * 3)
+  const normal = new Float32Array(rings * across * 3)
+  const uv = new Float32Array(rings * across * 2)
+  const shore = new Float32Array(rings * across)
+
+  const up = new Vector3()
+  for (let i = 0; i < rings; i++) {
+    const side = sides[i]
+    up.crossVectors(side, tangents[i]).normalize()
+    const centre = centres[i]
+    const section = sections[i]
+    for (let k = 0; k < across; k++) {
+      const s = section[k]
+      const v = (i * across + k) * 3
+      position[v] = centre.x + side.x * s.across * halfWidth + up.x * s.up * halfWidth
+      position[v + 1] = centre.y + side.y * s.across * halfWidth + up.y * s.up * halfWidth
+      position[v + 2] = centre.z + side.z * s.across * halfWidth + up.z * s.up * halfWidth
+      /*
+        `side` and `up` are orthonormal and the section normal is unit, so the
+        combination is already unit and needs no renormalising. Stated rather than
+        assumed because `paintByFacing` and `mergeProp` both read this attribute
+        directly and a normal of length 1.4 renders as a surface that is simply
+        brighter than the one beside it.
+      */
+      normal[v] = side.x * s.normalAcross + up.x * s.normalUp
+      normal[v + 1] = side.y * s.normalAcross + up.y * s.normalUp
+      normal[v + 2] = side.z * s.normalAcross + up.z * s.normalUp
+      const t = (i * across + k) * 2
+      uv[t] = i / (rings - 1)
+      uv[t + 1] = k / (across - 1)
+      shore[i * across + k] = s.shore
+    }
+  }
+
+  const index: number[] = []
+  for (let i = 0; i < rings - 1; i++) {
+    for (let k = 0; k < across - 1; k++) {
+      const a = i * across + k
+      const b = a + 1
+      const c = a + across
+      const d = c + 1
+      index.push(a, b, c, b, d, c)
+    }
+  }
+
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new BufferAttribute(position, 3))
+  geometry.setAttribute('normal', new BufferAttribute(normal, 3))
+  geometry.setAttribute('uv', new BufferAttribute(uv, 2))
+  geometry.setAttribute(INLAY_SHORE_ATTRIBUTE, new BufferAttribute(shore, 1))
+  geometry.setIndex(index)
+  return geometry
+}
+
+/**
+ * A still disc of water: the junction pool and the threshold pad.
+ *
+ * Flat across its interior with the section's outward half wrapped round its rim,
+ * so a 2.10 m pool and a 0.22 m channel carry the same meniscus and the same
+ * grazing highlight at their banks. The interior is genuinely flat rather than
+ * domed, because 0.345 of a half width is a plausible surface-tension dome on a
+ * 0.11 m channel and an absurd 0.36 m mound on a 1.05 m pool.
+ *
+ * `uv.x` runs RADIALLY and DECREASES outward, which is the whole reason the pool
+ * looks fed rather than static: the shader advects crests toward decreasing
+ * `uv.x`, so rings travel from the centre out to the rim. See `POOL.ringFraction`.
+ * `uv.y` is the azimuth, which is periodic in the shader's `sin(vUv.y * TAU)`
+ * cross-flow term and therefore leaves no seam at the wrap.
+ *
+ * The interior needs no tessellation beyond a fan. Everything that varies across
+ * it - `uv.x`, and therefore the whole wave field - is linear in radius, and a
+ * linear function is interpolated exactly across a triangle however large it is.
+ */
+export function inlayDisc(
+  radius: number,
+  rimWidth: number,
+  ringFraction: number,
+  radialSegments = 32,
+): BufferGeometry {
+  if (!(radius > rimWidth)) {
+    throw new Error(
+      `hubLayout: inlayDisc needs a radius wider than its rim, got ${radius} and ${rimWidth}`,
+    )
+  }
+  const section = inlaySection(true, POOL.rimDrop)
+  const rings = section.length
+  const crown = section[0].up
+
+  const positions: number[] = []
+  const normals: number[] = []
+  const uvs: number[] = []
+  const shores: number[] = []
+  const index: number[] = []
+
+  const push = (r: number, y: number, nr: number, ny: number, azimuth: number, shore: number) => {
+    const cos = Math.cos(azimuth)
+    const sin = Math.sin(azimuth)
+    positions.push(cos * r, y, sin * r)
+    normals.push(cos * nr, ny, sin * nr)
+    uvs.push(ringFraction * (1 - r / radius), azimuth / (Math.PI * 2))
+    shores.push(shore)
+  }
+
+  /*
+    `radialSegments + 1` columns, with the last one duplicating the first at a
+    different uv, which is what `TubeGeometry` does and for the same reason.
+
+    A shared seam vertex - closing the ring with `(j + 1) % radialSegments` - would be
+    cheaper by one column and would put a uv DISCONTINUITY on the closing quad, where
+    `uv.y` interpolates from 0.97 back down to 0. The shader's cross-flow term is
+    `sin(vUv.y * TAU)`, and periodicity does not save it: the function is continuous
+    in its argument, but across that one quad the argument sweeps the entire range
+    backwards, so the wave modulation runs in reverse down one radial spoke of the
+    pool. One fixed seam, forever, on the piece at the centre of frame.
+
+    The existing note in `waterMaterial.test.ts` says periodicity is what removes this
+    seam. That is true of a tube only because three duplicates the seam column; it is
+    the duplication doing the work, and the periodicity is what makes the duplication
+    free of a value jump.
+  */
+  const columns = radialSegments + 1
+  const azimuthOf = (j: number) => (j / radialSegments) * Math.PI * 2
+
+  // The centre, as one vertex per column so the fan's uv and normal stay simple.
+  for (let j = 0; j < columns; j++) {
+    push(0, 0, 0, 1, azimuthOf(j), section[0].shore)
+  }
+  for (let k = 0; k < rings; k++) {
+    const s = section[k]
+    for (let j = 0; j < columns; j++) {
+      push(
+        radius - rimWidth + s.across * rimWidth,
+        (s.up - crown) * rimWidth,
+        s.normalAcross,
+        s.normalUp,
+        azimuthOf(j),
+        s.shore,
+      )
+    }
+  }
+
+  /*
+    Winding. Looking down from +Y with x to the right, increasing azimuth runs
+    CLOCKWISE on screen, so an up-facing triangle has to be wound against it. The
+    two orders below give a geometric normal whose Y component is
+    `r_inner * (r_outer - r_inner) * sin(dAzimuth)`, positive while the radius
+    grows - which means the tuck ring, where the radius shrinks again, comes out
+    facing DOWNWARD by construction. That is correct rather than a bug to patch:
+    the tuck IS the underside, and its analytic normal says so too.
+  */
+  for (let k = 0; k < rings; k++) {
+    for (let j = 0; j < radialSegments; j++) {
+      const next = j + 1
+      const inner = k * columns
+      const outer = (k + 1) * columns
+      /*
+        The innermost strip is a FAN, so it gets one triangle rather than two: its
+        inner ring is `radialSegments` copies of the centre point, and the quad's
+        first triangle would be (centre, centre, rim) with zero area. Harmless to
+        render and not harmless to leave - a degenerate triangle is the thing that
+        turns a later `computeVertexNormals` or a merge into a NaN hunt.
+      */
+      if (k > 0) index.push(inner + j, inner + next, outer + j)
+      index.push(inner + next, outer + next, outer + j)
+    }
+  }
+
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3))
+  geometry.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3))
+  geometry.setAttribute('uv', new BufferAttribute(new Float32Array(uvs), 2))
+  geometry.setAttribute(INLAY_SHORE_ATTRIBUTE, new BufferAttribute(new Float32Array(shores), 1))
+  geometry.setIndex(index)
+  return geometry
+}
+
+/**
+ * Puck C, with the pool milled into its top face.
+ *
+ * ## One part, not two, and the atlas is why
+ *
+ * The obvious decomposition is a full-height annulus plus a shorter disc to floor
+ * the pool. It is wrong, and the reason is the lightmap rather than the render: an
+ * annulus has an inward-facing cylindrical hole wall as well as an outward-facing
+ * outer wall, both radial, so both land in the same four side charts and overlap
+ * there across most of the chart's area. A single lathe whose recess is shallower
+ * than 45 degrees has no radial surface in the recess at all - see `POOL.bank` -
+ * so all of it files under +Y where the ring, the bank and the floor occupy
+ * disjoint annuli of `(x, z)` and the parameterisation stays single-valued.
+ *
+ * ## The outer shell is `puck(2.2, STEP)` to the last float, and that is tested
+ *
+ * The bottom fillet, the side, the 0.10 m top fillet and the 3-degree draft are
+ * reproduced here rather than referenced, because `roundedCylinder` builds its
+ * profile internally and offers no hook to interrupt it. Duplicating a generator
+ * is a real cost and it is paid deliberately: the alternative is a `recess` option
+ * on `roundedCylinder` in `src/art/geometry.ts`, which belongs to nobody this pass
+ * and is the right home for this the moment a second scene wants a basin.
+ *
+ * What makes the duplication safe is that it is checked rather than reviewed.
+ * `hubLayout.test.ts` asserts every vertex of this lathe outside the pool's
+ * influence has an exact counterpart in `puck(2.2, STEP)` and vice versa, which
+ * pins the fillet radii, the fillet segment counts, the radial segment count and
+ * the draft in one assertion. A transcription error anywhere in the outer profile
+ * fails it.
+ *
+ * The draft is applied to the whole profile including the recess, which shrinks
+ * the pool by 1% and - as a side effect that happens to be right - narrows it
+ * toward the floor, which is the direction a moulded cavity has to draft to
+ * release from its core pin.
+ */
+export function basinLathe(): BufferGeometry {
+  const radius = CORE_PUCKS[2].radius
+  const height = STEP
+  const half = height / 2
+  // `puck` passes rim 0.1, so bottomFillet is min(0.05, rim) and filletSegments is 5.
+  const top = Math.min(0.1, half, radius * 0.98)
+  const bottom = Math.min(0.05, half, radius * 0.98)
+  const filletSegments = 5
+  const radialSegments = 32
+
+  const points: Vector2[] = []
+  const push = (x: number, y: number) => {
+    const last = points[points.length - 1]
+    if (last && Math.abs(last.x - x) < 1e-7 && Math.abs(last.y - y) < 1e-7) return
+    points.push(new Vector2(x, y))
+  }
+
+  push(0, 0)
+  for (let i = 0; i <= filletSegments; i++) {
+    const angle = -Math.PI / 2 + (i / filletSegments) * (Math.PI / 2)
+    push(radius - bottom + Math.cos(angle) * bottom, bottom + Math.sin(angle) * bottom)
+  }
+  for (let i = 0; i <= filletSegments; i++) {
+    const angle = (i / filletSegments) * (Math.PI / 2)
+    push(radius - top + Math.cos(angle) * top, height - top + Math.sin(angle) * top)
+  }
+
+  // In across the deck to the pool's rim, then down the bank and across the floor.
+  push(POOL.radius, height)
+  for (let j = 1; j <= POOL.bankSegments; j++) {
+    const s = j / POOL.bankSegments
+    /*
+      A cosine ease rather than a straight chamfer with fillets at both ends. It
+      is one expression instead of two arcs and a line, its tangent is horizontal
+      at both ends so it meets the deck and the floor with no crease at all, and
+      its steepest point is analytic: `depth * PI / (2 * bank)`, which is what
+      lets `POOL.bank` be argued from the 45-degree ceiling rather than measured
+      off a drawing.
+    */
+    push(POOL.radius - POOL.bank * s, height - POOL.depth * (0.5 - 0.5 * Math.cos(Math.PI * s)))
+  }
+  push(0, height - POOL.depth)
+
+  const shrink = 1 - Math.min(0.9, (height * Math.tan((3 * Math.PI) / 180)) / radius)
+  for (const p of points) p.x *= 1 + (shrink - 1) * (p.y / height)
+
+  return latheProfile({ points, radialSegments })
 }
 
 /**
@@ -816,9 +1806,21 @@ export const TOTEM_SPURS: Record<string, [number, number, number]> = {
 export function hubDeckParts(plinth: BufferGeometry): PropPart[] {
   const parts: PropPart[] = []
 
-  for (const { radius, base } of CORE_PUCKS) {
-    parts.push({ geometry: puck(radius, STEP), position: [0, base, 0] })
-  }
+  /*
+    The three Core pucks, and the TOP one is a basin rather than a puck.
+
+    Puck C carries the junction pool, so its top face is milled rather than flat.
+    It stays in this exact slot in the list - part index 2 - because
+    `packLightmapAtlas` attributes triangles back to parts by their position in the
+    merge, so moving it would silently permute every later part's charts. The part
+    count is unchanged, so the atlas still holds 34 parts and 204 charts; only the
+    triangle counts inside Puck C's six charts move, which is what the manifest
+    hash catches and the reason this change needs a re-bake. See `basinLathe`.
+  */
+  CORE_PUCKS.forEach(({ radius, base }, i) => {
+    const isCore = i === CORE_PUCKS.length - 1
+    parts.push({ geometry: isCore ? basinLathe() : puck(radius, STEP), position: [0, base, 0] })
+  })
   for (const spur of SPURS) {
     parts.push({ geometry: puck(SPUR_RADIUS, STEP), position: [spur.x, 0, spur.z] })
   }

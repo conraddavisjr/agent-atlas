@@ -89,8 +89,21 @@ export const PROPORTIONS = {
   totalHeight: 1.36,
   headHeight: 0.54,
   headWidth: 0.72,
-  /** The widest band below the neck, which is the diaper rather than the torso. */
-  torsoWidthMax: 0.62,
+  /**
+   * The widest band below the neck, which is now the TORSO rather than the diaper.
+   *
+   * It was 0.62, and that number was the diaper's: the torso measured 0.578 built,
+   * and `DIAPER.a` was tuned to hit 0.62 exactly so this constant would hold. With
+   * the taper inverted the torso is the widest band at 0.580 and the diaper narrows
+   * to 0.496 below it, so the character's widest point moved from the nappy to the
+   * shoulders. That is the whole intent of the change and this is the one number
+   * that records it.
+   *
+   * `robotPose.test.ts` requires `headWidth / torsoWidthMax >= 1.1`, which is what
+   * keeps the head reading as an infant's rather than a short adult's. The ratio
+   * improves from 1.161 to 1.241.
+   */
+  torsoWidthMax: 0.58,
   /** The sole plane sits at the model's own origin. */
   soleY: 0,
 } as const
@@ -121,16 +134,72 @@ export const REST = {
   shoulderR: { x: 0.31, y: 0.13, z: 0 },
   handSocketL: { x: 0, y: -0.34, z: 0 },
   handSocketR: { x: 0, y: -0.34, z: 0 },
-  /** Local to hips, so world 0.380, which is the top of the leg band. */
-  legL: { x: -0.19, y: -0.14, z: 0 },
-  legR: { x: 0.19, y: -0.14, z: 0 },
+  /**
+   * Local to hips, so world 0.380, which is the top of the leg band.
+   *
+   * ## x came in from +-0.19 to +-0.145, and it is half of a waist note
+   *
+   * "Make sure his legs come in more to his narrowed waist." It is not a separate
+   * stance decision: `DIAPER.taperBot` takes 25% off the bottom of the garment, and
+   * the garment IS the pelvis - there is no thigh mesh, so it is the only thing
+   * covering the top of the leg. At 0.19 against the narrowed bottom the top 7.6 mm of
+   * each shin sits OUTSIDE the garment, which is the exact defect, to within a
+   * millimetre, that the previous pass found and fixed. `DIAPER` carries the measured
+   * table; 0.145 is the value that restores the burial the last pass shipped, 0.0115,
+   * to four places.
+   *
+   * The knock-on the note did not ask about is the stance, so it is stated rather than
+   * absorbed. The boots got 20.3% wider in the same pass, so the silhouette span only
+   * falls 0.520 to 0.458, down 11.8% - but ground contact is the sole's flat alone, and
+   * that support half-width falls 0.230 to 0.194, down 15.9%. `Foot`'s comment carries
+   * both, because the "wide planted stance under a heavy head" read is a stated design
+   * goal and this is the pass that spent some of it.
+   *
+   * Two floors are NOT binding and were checked rather than assumed. The shins are
+   * 0.085 in radius, so at 0.145 their inner faces are 0.120 apart and cannot touch.
+   * And `REST_ROTATION.legL.ry` is a rotation about the leg node's own Y, which leaves
+   * the foot's centre on this x and only swings its extents, so the toe-out costs the
+   * gap between the boots 0.0006 rather than anything structural.
+   */
+  legL: { x: -0.145, y: -0.14, z: 0 },
+  legR: { x: 0.145, y: -0.14, z: 0 },
   kneeL: { x: 0, y: -0.13, z: 0 },
   kneeR: { x: 0, y: -0.13, z: 0 },
-  /** World 0.085, and the foot is 0.17 tall, so the sole lands exactly on y = 0. */
-  footL: { x: 0, y: -0.165, z: 0.06 },
-  footR: { x: 0, y: -0.165, z: 0.06 },
-  earPodL: { x: -0.38, y: 0, z: -0.02 },
-  earPodR: { x: 0.38, y: 0, z: -0.02 },
+  /**
+   * World 0.065, and the boot is `FOOT.height` 0.13 tall, so the sole lands exactly
+   * on y = 0. Was -0.165 against a boot 0.17 tall, which put the node at world 0.085.
+   *
+   * The y is NOT free once `FOOT.height` changes: `PROPORTIONS.soleY` is 0 and
+   * `totalHeight` 1.36 is measured from it, so a shorter boot at the old node would
+   * have lifted the character 0.020 off the ground with no test failing except the
+   * one that recomputes this sum.
+   *
+   * ## z was 0.06 and the boot was not centred on the leg
+   *
+   * The note is "ensure it's centered on the legs", and it was a real instruction
+   * rather than a no-op. At z 0.06 the box sat 0.06 forward of the shin's axis, so the
+   * old 0.44-deep boot ran from z -0.16 to +0.28: a toe. Worse, and this is the part
+   * nobody had measured, `REST_ROTATION.legL.ry` splays the leg by -0.1 rad, and that
+   * rotation carries the z offset into x - the left boot's centre measured world
+   * x -0.1960 against a shin axis at -0.1900. So the offset was throwing the boot
+   * 0.0060 sideways off its own leg as well as forward of it. At z 0 both go.
+   */
+  footL: { x: 0, y: -0.185, z: 0 },
+  footR: { x: 0, y: -0.185, z: 0 },
+  /**
+   * Pulled inboard from +-0.38, which is 0.04 of the ear pods' 66% extrusion cut.
+   *
+   * The cut cannot come from `EAR_POD_SHAPE.halfThickness` alone. The clearance is
+   * measured from the cheek at `superellipsoidX(0, -0.02, HEAD_SHELL)` = 0.3599, so
+   * hitting 0.0421 of proudness with the socket left at 0.38 needs a half-thickness of
+   * 0.0225, and the head curves away under the pod's rim - the shell is at 0.3487
+   * where the rim reaches y +-0.105. A pod that thin would have had its rim standing
+   * clear of the cheek with a crescent of daylight behind it, which is the artefact
+   * both critique reviewers read as a hole in the character's face. Moving the socket
+   * in and keeping 0.062 of thickness holds the same clearance with 0.0707 of burial.
+   */
+  earPodL: { x: -0.34, y: 0, z: -0.02 },
+  earPodR: { x: 0.34, y: 0, z: -0.02 },
   /**
    * Off-centre on purpose, and it is the one asymmetric feature on the
    * character. A perfectly mirror-symmetric toy reads as a product shot; one
@@ -832,9 +901,17 @@ export function stepAnim(
   */
   const stride = Math.max(speedNorm, Math.abs(t) * TURN_ANIM.stepScale)
 
-  // The walk cycle advances with actual speed, so the waddle stays in step with
-  // movement instead of drifting out of sync at different speeds.
-  rt.phase += step * WADDLE.bobFrequency * stride
+  /*
+    The walk cycle advances with actual speed, so the waddle stays in step with
+    movement instead of drifting out of sync at different speeds.
+
+    `GAIT.cadenceScale` is the "20% faster" note, and it is applied HERE - to the one
+    phase - rather than separately to the legs and the arms below. Both read `swing`,
+    which reads `p`, so one multiplier moves the feet and the arms together and keeps
+    them in the opposition that makes it a walk. That block carries the arithmetic,
+    including the frequency at which the waddle would stop reading.
+  */
+  rt.phase += step * WADDLE.bobFrequency * GAIT.cadenceScale * stride
 
   const walking = grounded ? stride : 0
   const p = rt.phase

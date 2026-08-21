@@ -214,6 +214,51 @@ export function coatLobeRatioUnderMap(
 }
 
 /**
+ * The lobe ratio a `roughnessMap` actually produces, and a defect it is hiding.
+ *
+ * **Every shipped binding of these maps breaks the two-lobe rule at its smoothest
+ * texel, and nothing checks it**, because the rule is asserted on the PRESETS in
+ * `materials.test.ts` while the maps are bound at the call site in `HubIsland.tsx`.
+ * The preset passes; the material the player sees does not.
+ *
+ * The mechanism is that `roughnessMap` multiplies `roughness` and `clearcoatRoughness`
+ * has a separate slot, as `coatLobeRatioUnderMap` above already establishes. What
+ * that note treats as an OPPORTUNITY - the coat is unmodulated, so binding the
+ * green channel to it would break up a highlight - is simultaneously a RULE
+ * VIOLATION, and that half was missed. A map that takes the base lobe from 0.72
+ * down to 0.579 while the coat stays pinned at 0.26 does not just fail to break
+ * the coat's highlight, it walks the two lobes back on top of each other:
+ *
+ *   binding                            effective base   coat    lobe ratio
+ *   deck, roughnessMap only            0.579 to 0.861   0.26    4.96 to 10.97
+ *   deck, plus clearcoatRoughnessMap   0.579 to 0.861   mapped  11.98, constant
+ *   trim, roughnessMap only            0.621 to 0.819   0.26    5.71 to 9.92
+ *   trim, plus clearcoatRoughnessMap   0.621 to 0.819   mapped  11.98, constant
+ *
+ * 4.96 and 5.71 are both under `TWO_LOBE_MIN_RATIO`, so on the smooth half of
+ * every panel the deck and the kerbs currently resolve as one specular wash - the
+ * exact defect `plastic()` was rebuilt to remove, reintroduced by a texture.
+ *
+ * **Binding `clearcoatRoughnessMap` fixes it rather than merely experimenting.**
+ * Both roughnesses then scale by the same texel, the ratio becomes invariant, and
+ * it lands at 11.98 - ABOVE the 8.3 the unmapped preset has. `createDecalMaps`
+ * has returned the image for this slot since it was written and no call site uses
+ * it. That upgrades the offer in `DecalMaps.clearcoatRoughnessMap` from a free A/B
+ * to a correction.
+ *
+ * Pass `coatMapped` true to model both slots taking the same green byte.
+ */
+export function lobeRatioUnderRoughnessMap(
+  baseRoughness: number,
+  clearcoatRoughness: number,
+  greenByte: number,
+  coatMapped = false,
+): number {
+  const scale = greenByte / 255
+  return lobeRatio(baseRoughness * scale, coatMapped ? clearcoatRoughness * scale : clearcoatRoughness)
+}
+
+/**
  * Below this linear luminance, an emissive colour must not be normalised.
  *
  * See `emissive()` for what that means and why. The number is the art bible's,
@@ -293,6 +338,259 @@ export function linearise(hex: string): [number, number, number] {
 export function linearLuma(hex: string): number {
   const [r, g, b] = linearise(hex)
   return luma709(r, g, b)
+}
+
+// ---------------------------------------------------------------------------
+// Band arithmetic for CURVED surfaces
+//
+// **The band rule has been applied to the wrong kind of object, and every
+// cylinder in the hub fails it today.** MEASURED on
+// `.critique/astro/maps-on--hub-establishing.png`, which is the frame the
+// existing band notes were written against:
+//
+//   surface                  box              mean    p5     p95    width  band?
+//   Core strut, near         817,505,16,20    0.383   0.190  0.472  0.282  NO
+//   pylon 300 deg shaft      1168,355,22,40   0.294   0.134  0.411  0.278  NO
+//   pylon 0 deg shaft        1491,500,34,40   0.241   0.120  0.394  0.274  NO
+//   pylon 180 deg shaft      255,400,24,40    0.360   0.224  0.411  0.187  NO
+//
+// `frame.mjs spread` reports `inOneBand: false` on all four, in a midground band
+// 0.18 wide. Two of them dip into the anchor band. This is not a tuning miss of a
+// few hundredths, it is a surface class that the value system has no mechanism
+// for, and it includes the four Core struts, all eight pylon masts and every
+// overhead arc - the entire dress batch, which is the level's primary framing
+// device and the frame of its focal point.
+//
+// **`paintByFacing` cannot fix it, and that is the finding.** That pass gives a
+// mesh one albedo for up-facing triangles and another for side-facing ones, to
+// compensate for the fact that an overhead key delivers 0.81 of an albedo's
+// linear luminance to a horizontal face and 0.54 to a vertical one. It is defined
+// on the face normal, and it works: the pylons' MEAN moved to the predicted 0.27,
+// measured 0.294. But a cylinder presents every normal in a hemisphere within one
+// part, simultaneously, in every frame. Its spread is not a function of its paint,
+// and section 8.1 of the art bible - amended after round 3 - judges band
+// membership on the spread.
+//
+// So round 3's fix was measured on the statistic round 3's amendment then
+// retired.
+// ---------------------------------------------------------------------------
+
+/**
+ * How much of an albedo's LINEAR luminance a surface actually renders, by facing.
+ *
+ * MEASURED off the establishing frame and previously recorded only as prose in
+ * `HubIsland.tsx`. Promoted to code because every band argument in the project has
+ * been doing this multiplication by hand in a comment, and because `renderedLuma`
+ * below reproduces four independently recorded numbers from it to within 0.006 -
+ * which makes it a model rather than a note.
+ *
+ * `up`, `litVertical` and `shadedVertical` are the three the dress batch's paint
+ * pass was built on. The two cylinder entries are new and are the reason this
+ * block exists.
+ */
+export const FACING_RATIO = {
+  /** A horizontal face under the key, which is 42.7 degrees up. Decks, caps. */
+  up: 0.81,
+  /** A vertical face turned toward the key. */
+  litVertical: 0.54,
+  /** A vertical face turned away from it, lit by ambient alone. */
+  shadedVertical: 0.11,
+  /**
+   * The p95 of a CYLINDER, and the number that breaks the scheme.
+   *
+   * 0.915, which is HIGHER than a horizontal deck's 0.81, and it has to be: a
+   * cylinder's surface contains the normal that points exactly at the key, so
+   * `N.L` reaches 1 somewhere on every cylinder whatever its orientation, where a
+   * flat deck under a key 42.7 degrees up is capped at `sin(42.7) = 0.678`. A
+   * cylinder is therefore brighter at its brightest than any flat face can be,
+   * regardless of which way it is turned, and no albedo assigned by facing can
+   * know that.
+   *
+   * Derived from the measured strut: p95 display 0.4724 decodes to linear 0.18938
+   * against `#6e7e9e`'s albedo luminance of 0.20705.
+   */
+  cylinderPeak: 0.915,
+  /** The p5 of the same cylinder: display 0.190, linear 0.03007, over 0.20705. */
+  cylinderShade: 0.145,
+} as const
+
+/**
+ * What a diffuse surface of colour `hex` renders at in DISPLAY luma, at a facing.
+ *
+ * Checked against every rendered value the project has recorded:
+ *
+ *   call                                    this   recorded
+ *   renderedLuma('#3c465a', up)             0.246  0.24   (frameTop, HubIsland)
+ *   renderedLuma('#6e7e9e', litVertical)    0.368  0.37   (frameSide, HubIsland)
+ *   renderedLuma('#6e7e9e', shadedVertical) 0.163  0.16   (frameSide, HubIsland)
+ *   renderedLuma('#bfbbb4', up)             0.668  0.687  (DECK_LIT_LUMA, measured)
+ *
+ * The deck is the loosest at 0.019, and it is loose in the safe direction. The
+ * three that were themselves predicted from these ratios land within 0.006, which
+ * is the point: this is the arithmetic those predictions were made with, now
+ * executable instead of retyped.
+ */
+export function renderedLuma(hex: string, facing: number): number {
+  return linearToSrgb(Math.min(1, linearLuma(hex) * facing))
+}
+
+/**
+ * The p95-to-p5 LINEAR ratio a diffuse cylinder shows under this key.
+ *
+ * 6.297, straight off the frame: `srgbToLinear(0.4724) / srgbToLinear(0.190)`.
+ *
+ * **The albedo cancels.** Both ends are the same albedo times a different facing
+ * ratio, so the ratio is a property of the LIGHTING and the SHAPE and nothing
+ * else. That is what makes the impossibility proof below a proof rather than an
+ * observation about one hex.
+ */
+export const DIFFUSE_CYLINDER_LINEAR_RATIO = 6.297
+
+/**
+ * The LINEAR ratio a display-space band permits between its floor and ceiling.
+ *
+ * This is the number the band rule really is, once it is written in the space the
+ * renderer multiplies in. Midground 0.20-0.38 permits 3.603; gameplay 0.56-0.74
+ * permits only 1.852, because the transfer curve is far flatter up there.
+ *
+ * And it settles the dress batch immediately. A diffuse cylinder's own ratio is
+ * `DIFFUSE_CYLINDER_LINEAR_RATIO`, 6.297, against midground's 3.603. **6.297 does
+ * not fit in 3.603 at any albedo**, because the albedo cancels out of both. The
+ * struts and pylons are not mispainted; a diffuse cylinder cannot be in band 2
+ * under this key, and repainting them is the one fix guaranteed not to work.
+ *
+ * For completeness, the same statement from the other end: to bring the width to
+ * 0.18 at a ratio of 6.297 the p5 has to fall to 0.100, which is half the
+ * midground floor and inside the anchor band.
+ */
+export function bandLinearRatio(lo: number, hi: number): number {
+  return srgbToLinear(hi) / srgbToLinear(lo)
+}
+
+/** The DISPLAY width a linear ratio produces above a given p5. */
+export function displayWidthForLinearRatio(p5: number, ratio: number): number {
+  return linearToSrgb(Math.min(1, srgbToLinear(p5) * ratio)) - p5
+}
+
+/**
+ * Schlick's Fresnel term. `f0` is the reflectance at normal incidence.
+ *
+ * Written out because the whole argument for putting metal on the frame turns on
+ * the fifth power, and specifically on how LATE it does anything: at 30 degrees
+ * off the normal `(1 - cos)^5` is 0.000043, and it does not reach a tenth until
+ * 66 degrees. A quantity that flat for two thirds of its domain behaves very
+ * differently on a curved surface than the linear intuition suggests, which is
+ * exactly where `anodised()`'s own finding went wrong.
+ */
+export function schlickF(f0: number, cosTheta: number): number {
+  return f0 + (1 - f0) * Math.pow(1 - cosTheta, 5)
+}
+
+/**
+ * Normal-incidence reflectance of a hex albedo at a given metalness.
+ *
+ * three's rule, verbatim: `F0 = mix(vec3(0.04), diffuseColor.rgb, metalness)`, so
+ * a metal's albedo IS its specular colour and a dielectric's is 4% regardless.
+ * Taken on the luminance rather than per channel, which is the same approximation
+ * `albedoByte` makes and is what keeps this comparable to a band number.
+ *
+ * Worth having as a function because the 0.95 in `anodised()` is not 1: five per
+ * cent of the surface stays dielectric, which lifts `f0` off the albedo by 0.002
+ * and is the difference between an inverse that round-trips and one that is nearly
+ * right.
+ */
+export function metalF0(hex: string, metalness: number): number {
+  return 0.04 * (1 - metalness) + metalness * linearLuma(hex)
+}
+
+/**
+ * The p95-to-p5 LINEAR ratio a METAL cylinder shows, from Schlick alone.
+ *
+ * **This is the correction to `anodised()`'s finding, and it inverts its
+ * conclusion for one whole class of surface.** That note computes the Fresnel
+ * sweep of a FLAT kerb face - 0.20 head-on to 0.68 at 85 degrees, a spread near
+ * 0.5 in a band 0.18 wide - and concludes that no broad surface can be metal. The
+ * arithmetic is right and the conclusion is right for a flat face, where the view
+ * angle is one number that the camera moves.
+ *
+ * A cylinder is the opposite case in two ways at once, and both help.
+ *
+ * **The sweep is fixed to the object rather than to the camera.** Every view angle
+ * from 0 to 90 degrees is present across a cylinder's width in every frame, so
+ * turning the camera does not move the distribution. A flat metal face's value is
+ * a function of camera yaw; a metal cylinder's is not.
+ *
+ * **And the distribution is crushed against the low end.** Screen-x across a
+ * cylinder of radius R is `R sin(phi)`, so a pixel column is uniform in
+ * `sin(phi)`, not in `phi`. The screen-space quantile `q` therefore sits at
+ * `phi = asin(q)`, and combining that with the fifth power puts the entire Fresnel
+ * rise in the outer tenth of the width:
+ *
+ *   q      phi      F        F/F0
+ *   0.05   2.9deg   0.1987   1.000
+ *   0.50   30deg    0.1987   1.000
+ *   0.75   48.6deg  0.2023   1.018
+ *   0.95   71.8deg  0.3220   1.621
+ *   0.99   81.9deg  0.5733   2.885
+ *   1.00   90deg    1.0000   5.033
+ *
+ * So p5 to p95 is a ratio of **1.621**, against the 6.297 the same cylinder shows
+ * as a diffuse surface and the 3.603 midground allows. Going metal does not merely
+ * survive the band rule on a cylinder - it is the only mechanism available that
+ * FIXES a measured failure, because it deletes the diffuse term and with it the
+ * 6.297.
+ *
+ * What is left over is the budget for everything Schlick does not model:
+ * `3.603 / 1.621 = 2.22x` for the variation in what the cylinder actually
+ * reflects across its width. At roughness 0.30 the lobe is broad and three samples
+ * a prefiltered mip, and a near-vertical member's reflection sweeps the horizon
+ * azimuthally rather than from sky to ground, so 2.22x is the right shape of
+ * budget - but it is NOT MEASURED, and it is the one number that decides this.
+ *
+ * The 5% above p95 runs to `F = 1` and lands out of band. It is a rim: at
+ * `q > 0.95` on a strut 20.4 px wide it is 1.0 px, so it antialiases into the
+ * silhouette rather than reading as a surface, which is precisely why section 8.1
+ * tests p5-p95 and not the extremes. It cannot bloom either - the brightest
+ * radiance this material can see is `1.5543 x 0.7 x 1.0 = 1.088` against a
+ * threshold of 1.45.
+ */
+export function cylinderFresnelRatio(f0: number, qLo = 0.05, qHi = 0.95): number {
+  const at = (q: number) => schlickF(f0, Math.cos(Math.asin(Math.min(1, q))))
+  return at(qHi) / at(qLo)
+}
+
+/**
+ * The smallest `f0` whose cylinder Fresnel ratio is at or under `ratio`.
+ *
+ * **A metal cylinder needs a LIGHT albedo to hold a DARK band, which reads as a
+ * contradiction and is the most useful thing in this block.** For a metal the
+ * albedo IS `f0`, and `f0` is the FLOOR of the rendered value while the
+ * environment sets the scale. Dividing through, the ratio is
+ * `1 + (1/f0 - 1) * (1 - cos(asin(qHi)))^5`, which grows without bound as the
+ * colour darkens:
+ *
+ *   albedo          display luma   f0       cylinder ratio
+ *   #202020         0.126          0.0119   10.63
+ *   #3c465a         0.272          0.0597   3.42
+ *   #6e7e9e         0.490          0.1987   1.62
+ *   #ffffff         1.000          0.9520   1.01
+ *
+ * So the dress batch's own paint pass points the wrong way for a metal. Its
+ * `frameSide` at `#6e7e9e` leaves 2.22x for the environment; its `frameTop` at
+ * `#3c465a` spends 3.42 of the 3.603 available and leaves 1.05x, which is nothing.
+ * Going metal therefore means abandoning the light-flanks-dark-crowns ramp, not
+ * keeping it: the ramp exists to compensate for a diffuse facing response that a
+ * metal does not have, and the darker of its two values is the one that breaks
+ * the band.
+ *
+ * At the working threshold of 1.80 - half of midground's 3.603, leaving the other
+ * half for the environment - the floor is `f0 = 0.161`, which is an albedo of
+ * display luma 0.446. `#6e7e9e` at 0.490 clears it; nothing darker does.
+ */
+export function metalF0ForCylinderRatio(ratio: number, qHi = 0.95): number {
+  const k = Math.pow(1 - Math.cos(Math.asin(Math.min(1, qHi))), 5)
+  if (ratio <= 1) return 1
+  return k / (ratio - 1 + k)
 }
 
 /**
@@ -877,6 +1175,45 @@ export function chrome(overrides: MeshPhysicalMaterialProps = {}): MeshPhysicalM
  * ring or a visor bezel on the robot, a pylon cap disc, or a narrow reveal
  * inset into a deck edge. All of those are geometry in another stream's files.
  *
+ * ## AMENDED: the finding holds for a FLAT face and inverts for a CURVED one
+ *
+ * Everything above is correct about a flat kerb and wrong as a general rule, and
+ * the error is in the last paragraph rather than in the arithmetic. It concludes
+ * that the legitimate call sites are elements "too small to be measured as a
+ * surface at all" - a size argument, offered on taste. The size is not what
+ * matters. `cylinderFresnelRatio` works out what does:
+ *
+ *   surface                      p95/p5 linear ratio   midground allows 3.603
+ *   metal FLAT face, as above     12.7                 no
+ *   DIFFUSE cylinder, measured     6.297               no
+ *   METAL cylinder, Schlick        1.621               yes, 2.22x to spare
+ *
+ * The 12.7 is this note's own table read in linear light: display 0.20 head-on to
+ * 0.68 at 85 degrees is a factor of 12.7, which is what "a spread near 0.5" means
+ * once it is stated in the space the renderer multiplies in.
+ *
+ * A metal cylinder is more band-compliant than a diffuse one, by a factor of
+ * 3.9. Screen-x across a cylinder is uniform in `sin(phi)` while Schlick is flat
+ * until 66 degrees, so the whole Fresnel rise is squeezed into the outer tenth of
+ * the width; and deleting the diffuse term deletes the 6.297, which no albedo can
+ * reduce because the albedo cancels.
+ *
+ * **So the first legitimate call site is the hub's dress batch**, whose members
+ * are four Core struts, eight pylon masts and the overhead arcs - every one a
+ * capsule or a tube, not one broad flat face among them, all four measured at
+ * `inOneBand: false` today. That is not a small surface. It is the largest
+ * cylindrical surface in the game, and it is the case this preset was written for
+ * without knowing it.
+ *
+ * Two conditions come with it, both computed and neither optional. The albedo must
+ * have display luma at or above 0.446 or `f0` is too dark to hold the ratio - see
+ * `metalF0ForCylinderRatio`, and note this means abandoning the batch's
+ * dark-crowns ramp rather than keeping it. And the up-facing pucks in the batch,
+ * the pylon caps and the Core collar top, ARE flat faces and keep the original
+ * finding: they are the residual risk, they are roughly 12 px deep at the
+ * establishing framing, and if they read wrong the fix is to paint them LIGHTER,
+ * which is the opposite of what the batch does now.
+ *
  * `anisotropy` is off by default and gated, per section 10: it adds
  * `USE_ANISOTROPY` and a real block of fragment work for an effect only visible
  * on parts smaller than the robot's antenna, and `quality.anisotropy` is false
@@ -1003,5 +1340,186 @@ export function glowStrip(color: string, glow: number = GLOW.source): MeshBasicM
     transparent: true,
     blending: AdditiveBlending,
     depthWrite: false,
+  }
+}
+
+/**
+ * The inlay's metalness, and the one number in this file that is knowingly not
+ * physical.
+ *
+ * ## What was measured, and why metalness 1 did not deliver the brief
+ *
+ * The brief is a highly reflective steel. Shipped at `metalness: 1` it rendered
+ * at display **0.423**, `rgb(83, 112, 137)`, on the junction pool at
+ * `hub-establishing` - a dark navy sheet, and 0.264 DARKER than the deck it is
+ * set into rather than brighter as the table below predicts.
+ *
+ * The table is not wrong, the geometry of the reflection is. A metal has no
+ * diffuse term, so its value is entirely what it reflects, and what an UP-FACING
+ * sheet reflects toward a camera at this depression angle is the environment at
+ * roughly the same elevation on the opposite bearing. This rig's environment
+ * there is the ambient floor card at `#243a52` and the negative fill at
+ * `#0b0f1a`. The bright cards - the key softbox and the highlight strip - are
+ * overhead, which is where a mirror sends a camera looking from LOW down, and
+ * this camera looks from high up.
+ *
+ * A roughness sweep does not fix it: raising roughness widens the lobe toward
+ * the environment's average, and this environment's average is dark. It is the
+ * same finding `anodised()` records from the other side, restated for a
+ * horizontal surface instead of a vertical one, and its conclusion applies
+ * unchanged: **making a pure metal read here is a light-rig change and not a
+ * material one.**
+ *
+ * ## Why the light rig is not what moved
+ *
+ * The physical fix is one more Lightformer, at the elevation band a horizontal
+ * surface reflects toward this camera, bright enough to put the inlay above the
+ * deck. That is the right fix and it is not this commit's to make. It would
+ * raise ambient on every surface in the hub, it lands in the middle of the
+ * de-axialising change round 4 is explicitly holding `Lighting.tsx` still for
+ * (handoff item 3), and it would arrive inside a change about materials where
+ * nobody would attribute it. It is written down here so the next round can make
+ * it deliberately.
+ *
+ * ## What moved instead, stated plainly
+ *
+ * 0.68 rather than 1. Below 1 the material regains a diffuse lobe from its own
+ * albedo, lit by the key rather than by the reflection, and that term is what
+ * puts the value where the brief wants it while the remaining 68% of metal keeps
+ * the sharp mirror streak that makes it read as polished rather than painted.
+ *
+ * A mixed metalness is not physical: a surface is a conductor or it is not. What
+ * makes it defensible here rather than merely convenient is `00-art-bible.md`'s
+ * own rule about where stylisation is allowed to live - "the stylisation lives
+ * entirely in the INPUTS, never in the BRDF". `metalness` is an input to an
+ * unmodified GGX; nothing about the shading model changes. It is the same class
+ * of decision as an albedo chosen for a value band rather than for a real
+ * material, which this project makes everywhere.
+ *
+ * The honest cost, so it is not discovered later: at 0.68 the inlay's reflection
+ * of a bright card is 32% weaker than a mirror's, so the streak is dimmer than
+ * true steel, and the surface picks up a shading gradient from the key that a
+ * real mirror would not have. Both are visible on close inspection and neither
+ * is visible at the distance this surface is played at.
+ */
+export const STEEL_METALNESS = 0.68
+
+/**
+ * Polished steel, for the inlay that replaced the water.
+ *
+ * ## Why a metal here is legal when `anodised()`'s finding rules it out elsewhere
+ *
+ * The finding above is that a metal cannot carry a value band, because a metal
+ * has no diffuse term and its rendered value is `F(theta) x environment`, which
+ * sweeps as the camera turns. That argument is about a surface whose normal
+ * varies across the frame or across the camera's orbit - a flat kerb face, a
+ * vertical cylinder.
+ *
+ * The inlay is neither. Every piece of it - four spur channels, the trunk, the
+ * junction pool, the threshold pad - is an essentially UP-FACING sheet lying in
+ * a recess in the deck, so what it reflects is the overhead half of the rig and
+ * almost nothing else, at a view angle set by the fixed camera pitch rather than
+ * by yaw. The whole batch presents one narrow run of normals. That is the case
+ * the anodised finding does not cover, and it is the reason chrome and steel
+ * have always been permitted on "elements too small to be measured as a surface"
+ * and on reveals inset into a deck edge, which is what this is.
+ *
+ * ## The numbers, and the two ceilings they clear
+ *
+ * `envMapIntensity` is written here for documentation only and DOES NOT RUN in
+ * the hub. `WebGLRenderer` overwrites it from `scene.environmentIntensity` for
+ * any material with a null `envMap`, and nothing in this project sets one - see
+ * `HUB_ENV.intensity` in `Lighting.tsx`, which is 0.70. So the environment this
+ * steel sees is the hub's Lightformer rig scaled by 0.70, and the two cards it
+ * can actually see from an up-facing sheet are the key softbox at a radiance of
+ * `1.36 x 0.70 = 0.952` and the highlight strip at `1.5543 x 0.70 = 1.088`.
+ *
+ *   what it reflects             F       linear luminance   display luma
+ *   key softbox, head on         0.6015  0.5726             0.7813
+ *   key softbox, grazing         1.0000  0.9520             0.9786
+ *   highlight strip, head on     0.6015  0.6544             0.8292
+ *   highlight strip, grazing     1.0000  1.0880             1.0000, clipped
+ *
+ * So the bloom ceiling is clear with room: 1.088 against a measured threshold of
+ * 1.45, the same 1.33x margin the strip itself carries, and no reachable
+ * configuration blooms. What it does NOT clear is the deck, which renders at
+ * 0.687 - the inlay is brighter than the surface it is set into, everywhere.
+ * That is deliberate here and it is the point of the brief, but it is the exact
+ * shape of handoff item 5 ("decoration still out-values the ground") and it has
+ * to be judged on a frame rather than argued in a comment.
+ *
+ * `roughness` 0.15 rather than `chrome()`'s 0.06, and it is the one lever that
+ * changes the above. A mirror hands back the Lightformer's own edges as a hard
+ * rectangle lying in the floor; 0.15 spreads the same energy over a lobe wide
+ * enough to read as a sheet of metal with a highlight on it. Raise it toward
+ * 0.25 if the inlay reads as a cut-out of the sky, lower it toward 0.10 if it
+ * reads as grey paint.
+ *
+ * No clearcoat, for `chrome()`'s reason: a clear coat over a mirror is a second
+ * Fresnel term over a surface that is already entirely Fresnel.
+ */
+export function steel(overrides: MeshPhysicalMaterialProps = {}): MeshPhysicalMaterialProps {
+  return {
+    /*
+      A cool steel rather than a neutral one. `#c6ccd8` linearises to a luminance
+      of 0.6015, which is the `F0` the reflectance table above is computed from,
+      and its slight blue puts it inside the blues-silvers-greys the design
+      direction asks for instead of on the warm side of neutral. At `metalness`
+      below 1 it is also the DIFFUSE albedo, which is the term that carries the
+      value - see `STEEL_METALNESS`.
+    */
+    color: '#c6ccd8',
+    roughness: 0.15,
+    metalness: STEEL_METALNESS,
+    clearcoat: 0,
+    envMapIntensity: 1,
+    ...overrides,
+  }
+}
+
+/**
+ * Moulded masonry: the brick the deck and the pylons are made of.
+ *
+ * Distinct from `stone()`, which it is intended to replace at every hub call
+ * site, on three counts and each of them was asked for by name.
+ *
+ * **No clearcoat at all.** `stone()` keeps 0.15 so that stone "sits in the same
+ * lighting response as its neighbours instead of going conspicuously dead", and
+ * that is the opposite of the brief here: the platform is to be highly matte and
+ * to reflect nothing of the environment. A coat is a mirror lobe, and 15% of a
+ * mirror lobe on a twelve-metre floor is precisely the sheet of shine being
+ * removed. Dropping it also takes this preset out of the two-lobe rule entirely,
+ * which is why it is not on the exemption list: it has no second lobe to
+ * separate.
+ *
+ * **`specularIntensity` rather than `envMapIntensity`, and that distinction is
+ * the whole reason this preset can do what was asked.** The obvious way to stop
+ * a surface reflecting its environment is to turn `envMapIntensity` down, and in
+ * this project that lever DOES NOT EXIST - the renderer overwrites it from
+ * `scene.environmentIntensity`, see `steel()` above. It would also be the wrong
+ * lever if it worked, because the environment map delivers this material's
+ * diffuse irradiance as well as its specular reflection, and cutting both would
+ * simply make the deck darker rather than matte. `specularIntensity` scales the
+ * dielectric specular lobe ONLY, leaving diffuse untouched: the deck keeps its
+ * measured 0.687 and loses the sheen. 0.25 rather than 0 because a stone with
+ * literally no specular response reads as printed paper, and because grazing
+ * Fresnel is what tells the eye a floor is a solid rather than a hole.
+ *
+ * **Roughness 0.95 and normals at 1.8.** Relief is the only channel a stone has
+ * once its gloss is gone, and the measurement on record says relief does almost
+ * nothing on an up-facing surface under a key 42.7 degrees overhead - a deck's
+ * p5-p95 moved 0.0387 to 0.039 when the generated maps were switched on. That is
+ * why `brickTexture.ts` carries an ALBEDO map as well, and why this preset is
+ * only half of the answer. Bind both.
+ */
+export function masonry(overrides: MeshPhysicalMaterialProps = {}): MeshPhysicalMaterialProps {
+  return {
+    roughness: 0.95,
+    metalness: 0,
+    clearcoat: 0,
+    specularIntensity: 0.25,
+    normalScale: new Vector2(1.8, 1.8),
+    aoMapIntensity: 1.35,
+    ...overrides,
   }
 }

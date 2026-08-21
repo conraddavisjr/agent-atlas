@@ -24,7 +24,15 @@ import {
   type RobotAnimState,
 } from './robotAnim'
 import { BODY, WADDLE } from './tuning'
-import { CAPE, IDLE, SHADOW, TURN_ANIM } from './animTuning'
+import { CAPE, GAIT, IDLE, SHADOW, SPRINGS, TURN_ANIM } from './animTuning'
+// The boot's dimensions, so the sole-plane and feet-gap assertions read them rather
+// than copying them. Both had the old literals inline and both would have gone on
+// passing while describing a boot the game no longer draws.
+//
+// `footMaxHalfWidth()` rather than any field of `FOOT`, because the boot is a filleted
+// cone now and the fillet cuts the authored corner off: `FOOT.topRadius` overstates the
+// silhouette by 3.6 mm.
+import { FOOT, footMaxHalfWidth } from './robotGeometry'
 
 const DT = 1 / 60
 
@@ -107,9 +115,36 @@ describe('proportions', () => {
     // The contact shadow, the foot IK and the VFX emitters all assume this, and
     // it is the reason they can share one coordinate convention.
     expect(PROPORTIONS.soleY).toBe(0)
-    // Foot centre plus half the foot's 0.17 height lands on it.
+    /*
+      Boot centre minus half `FOOT.height` lands on it.
+
+      That half-height was the literal 0.085 and is now read from `FOOT`. It is the
+      binding constraint between the boot's SIZE and `REST.footL.y`: the boot shrank
+      from 0.17 tall to 0.13 in this pass, and without moving the node from -0.165 to
+      -0.185 the character would have stood 0.020 off the ground with every other
+      assertion in this file still passing. Two numbers that have to move together
+      should not be typed out separately.
+    */
     const footWorldY = REST.hips.y + REST.legL.y + REST.kneeL.y + REST.footL.y
-    expect(footWorldY - 0.085).toBeCloseTo(PROPORTIONS.soleY, 9)
+    expect(footWorldY - FOOT.height / 2).toBeCloseTo(PROPORTIONS.soleY, 9)
+  })
+
+  /*
+    And the boot is CENTRED on the leg it hangs from, which is the third clause of the
+    foot note and was not true.
+
+    `REST.footL.z` was 0.06, so the box sat 0.06 forward of the shin's axis. Worse,
+    `REST_ROTATION.legL.ry` splays the leg by -0.1 rad and that rotation carries a z
+    offset into x, so the left boot's centre measured world x -0.1960 against a shin
+    axis at -0.1900: the offset was throwing the boot sideways off its own leg as well
+    as forward of it. Both vanish at z 0, and this asserts the z directly because the
+    sideways error is a consequence of it rather than an independent value.
+  */
+  it('centres each boot on the leg it hangs from', () => {
+    expect(REST.footL.z).toBe(0)
+    expect(REST.footR.z).toBe(0)
+    expect(REST.footL.x).toBe(0)
+    expect(REST.footR.x).toBe(0)
   })
 
   it('stays symmetric left to right', () => {
@@ -151,10 +186,45 @@ describe('proportions', () => {
   })
 
   it('keeps a gap between the feet at rest', () => {
-    // Feet are 0.32 wide, so a 0.19 half-separation leaves 0.06 of daylight.
-    // Feet that touch read as a pedestal rather than as legs.
-    const gap = (REST.legR.x - REST.legL.x) - 0.32
+    /*
+      Feet that touch read as a pedestal rather than as legs.
+
+      This was `- 0.32` with the boot width written out, and it sat EXACTLY on its own
+      floor: 0.38 of separation minus 0.32 of boot is 0.060 against a minimum of 0.060.
+      A test at its boundary tells you nothing about which way the margin is going.
+
+      Both terms have since moved, in opposite directions and for the same note. The
+      boots became a cone and `REST.legL/R.x` came in to +-0.145 so the legs meet the
+      narrowed waist, which took the gap to 0.1212 from 0.240.
+
+      **AND THE ART DIRECTION HAS SINCE NARROWED THE BOOT 30%, which widens this gap
+      without anything moving.** `footMaxHalfWidth().x` fell from 0.0844 to 0.0599, so
+      the gap is now **0.1702** - wider than it has been since the boot was a box, and
+      1.42 times the boot's own width where it used to be 0.72 of it.
+
+      That is the number this change spent and it is asserted rather than left implicit,
+      because it is the most likely thing to read wrong in a frame: two narrow boots far
+      apart under two wide legs is a different silhouette from the one the stance was
+      tuned for. The stance was deliberately NOT pulled in to compensate - `REST.legL.x`
+      is where the hips put the legs, and moving it to flatter a boot change would be a
+      pose edit arriving inside a geometry commit, with nothing attributing it.
+
+      `footMaxHalfWidth()` and not `FOOT.topRadius`: the fillet cuts the cone's corner
+      off, so the authored radius overstates the boot by 3.6 mm - which here would
+      UNDERSTATE the gap, so it is the conservative direction, but it would still be the
+      wrong number.
+    */
+    const gap = REST.legR.x - REST.legL.x - 2 * footMaxHalfWidth().x
     expect(gap).toBeGreaterThanOrEqual(0.06)
+    // And it is nowhere near scraping that floor: 0.1702 against a 0.060 minimum.
+    expect(gap).toBeGreaterThan(0.16)
+    /*
+      The ceiling is the half that now does the work. Feet that touch read as a
+      pedestal; feet too far apart read as a straddle, and there is no floor test for
+      that. 0.18 is a hair above what ships, so a further narrowing of the boot fails
+      here and has to be argued with the stance rather than absorbed silently.
+    */
+    expect(gap).toBeLessThan(0.18)
   })
 
   it('keeps the antenna off centre', () => {
@@ -279,7 +349,10 @@ describe('the gait, ported from the component', () => {
     const before = rt.phase
     for (let i = 0; i < 60; i++) stepAnim(rt, s, g, DT, pose)
     const rate = (rt.phase - before) / (60 * DT)
-    expect(rate).toBeCloseTo(WADDLE.bobFrequency * TURN_ANIM.stepScale, 3)
+    // `GAIT.cadenceScale` is the "20% faster" note and it multiplies the ONE phase, so
+    // it shows up here too - a pivot on the spot steps 20% faster as well, which is
+    // correct: it is the same walk cycle driven by rotation instead of by travel.
+    expect(rate).toBeCloseTo(WADDLE.bobFrequency * GAIT.cadenceScale * TURN_ANIM.stepScale, 3)
   })
 
   /*
@@ -347,8 +420,15 @@ describe('the gait, ported from the component', () => {
     const pose = createPose()
     const g = createGroundSample()
     const s = state({ speedNorm: 1, grounded: true, throttle: 1 })
-    // One cycle is 2*pi radians of phase at bobFrequency * stride rad/s.
-    const cycleSeconds = (2 * Math.PI) / WADDLE.bobFrequency
+    /*
+      One cycle is 2*pi radians of phase, and the phase rate is
+      `bobFrequency * cadenceScale * stride`. The `cadenceScale` term is load bearing
+      here rather than incidental: without it this integrates over 1.2 cycles instead of
+      1, and the roll's integral comes out at 0.0090 rather than 0. That failure looks
+      exactly like a limp, which is what this test is for - so the cadence note had to be
+      threaded through the window as well as through the code.
+    */
+    const cycleSeconds = (2 * Math.PI) / (WADDLE.bobFrequency * GAIT.cadenceScale)
     const steps = 4000
     const dt = cycleSeconds / steps
     let rollSum = 0
@@ -360,6 +440,154 @@ describe('the gait, ported from the component', () => {
     }
     expect(Math.abs(rollSum)).toBeLessThan(1e-3)
     expect(Math.abs(bobSum)).toBeLessThan(1e-3)
+  })
+})
+
+/*
+  THE CADENCE NOTE: "make the feet animation move about 20% faster. Do the same for the
+  arms."
+
+  Read as two instructions it invites two dials, and two dials here would be a bug. This
+  block asserts the three things that make it one change: the feet and the arms come off
+  one phase, the rate moves by exactly 1.2, and the SHAPE of the waddle - which the note
+  says it likes - is bit-for-bit what it was.
+*/
+describe('the step cycle runs 20% faster, on one shared phase', () => {
+  const walk = () => state({ speedNorm: 1, grounded: true, throttle: 1 })
+
+  /*
+    THE FACT THAT MAKES "DO THE SAME FOR THE ARMS" AUTOMATIC.
+
+    `swing = sin(p) * WADDLE.limbSwing * walking` is written once and read by four
+    joints, so the legs and the shoulders cannot drift apart. Asserted as an exact
+    algebraic relation between the built pose values rather than by reading the source:
+    the shoulders carry 0.7 of the legs' swing and the opposite sign, at every frame.
+
+    If this ever fails, someone has given the arms their own phase. At a ratio of 1.2
+    that is a 6:5 beat - the arm that swings forward with the opposite leg, which is what
+    a walk IS, would drift into swinging forward with the same leg and back again every
+    fifth step.
+  */
+  it('drives the legs and the arms from the same swing, at every frame', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    for (let i = 0; i < 240; i++) {
+      stepAnim(rt, walk(), g, DT, pose)
+      // Airborne tuck is zero here, so `legL.rx` is the raw swing.
+      const swing = pose.legL.rx
+      expect(pose.legR.rx).toBeCloseTo(-swing, 12)
+      expect(pose.shoulderL.rx).toBeCloseTo(-swing * 0.7, 12)
+      expect(pose.shoulderR.rx).toBeCloseTo(swing * 0.7, 12)
+    }
+  })
+
+  /*
+    And the whole waddle is on that same phase, so "20% faster" is one number. The bob,
+    the lateral weight shift and the hip yaw are all pure functions of `p` too, which is
+    why the shape survives a change of rate.
+  */
+  it('drives the bob, the shift and the hip yaw from the same phase', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    for (let i = 0; i < 120; i++) stepAnim(rt, walk(), g, DT, pose)
+    const p = rt.phase
+    expect(pose.hips.px).toBeCloseTo(Math.sin(p) * GAIT.hipShiftAmplitude, 12)
+    expect(pose.hips.ry).toBeCloseTo(-Math.sin(p) * GAIT.hipYawAmplitude, 12)
+    expect(pose.hips.rz).toBeCloseTo(Math.sin(p) * WADDLE.rollAmplitude, 12)
+    // The bob is at DOUBLE the step frequency, because both feet contribute, and lagged.
+    expect(pose.hips.py).toBeCloseTo(
+      Math.sin(p * 2 + GAIT.bobPhaseLag) * WADDLE.bobAmplitude,
+      12,
+    )
+  })
+
+  it('advances the phase exactly 20% faster than the frozen bobFrequency', () => {
+    const rt = createAnimRuntime(1)
+    const pose = createPose()
+    const g = createGroundSample()
+    for (let i = 0; i < 120; i++) stepAnim(rt, walk(), g, DT, pose)
+    const before = rt.phase
+    for (let i = 0; i < 60; i++) stepAnim(rt, walk(), g, DT, pose)
+    const rate = (rt.phase - before) / (60 * DT)
+    expect(rate).toBeCloseTo(WADDLE.bobFrequency * 1.2, 6)
+    expect(GAIT.cadenceScale).toBe(1.2)
+  })
+
+  /*
+    THE THING THE NOTE ASKED NOT TO LOSE.
+
+    "I like the waddling like the toddler" - so the gait's SHAPE has to be identical and
+    only its tempo may move. Every downstream term is a pure function of `p`, so the
+    proof is that the pose at a given phase is the same pose it always was, whatever rate
+    got it there. Run the same phase target at two different `dt` values against two
+    different cadences and the poses must agree.
+
+    This is also what protects `GAIT.bobPhaseLag`: it is a lag in RADIANS rather than in
+    seconds, so it stays the same fraction of a step and the bob still peaks a third of a
+    step past the roll extreme. A lag stored in seconds would have silently changed the
+    waddle's character here, and that is the failure this test is shaped to catch.
+  */
+  it('replays the identical waddle, only faster', () => {
+    /*
+      The gait pose is a PURE FUNCTION OF PHASE, which is the whole argument. If the pose
+      at a given phase does not depend on how fast or in how many steps that phase was
+      reached, then multiplying the phase rate cannot change the shape of the motion - it
+      can only change its tempo. That is what "20% faster" has to mean for a waddle the
+      note says it likes.
+
+      Tested by reaching the same phase target at two very different timesteps. The
+      cadence itself cannot be varied here because it is a constant, so varying `dt`
+      against a fixed target is the honest form of the same question.
+    */
+    const target = 6 * Math.PI
+    const rate = WADDLE.bobFrequency * GAIT.cadenceScale
+    const poseAtPhase = (frames: number) => {
+      const rt = createAnimRuntime(1)
+      const pose = createPose()
+      const g = createGroundSample()
+      const dt = target / (rate * frames)
+      for (let i = 0; i < frames; i++) stepAnim(rt, walk(), g, dt, pose)
+      return { pose, phase: rt.phase }
+    }
+    const coarse = poseAtPhase(800)
+    const fine = poseAtPhase(4000)
+    expect(coarse.phase).toBeCloseTo(target, 9)
+    expect(fine.phase).toBeCloseTo(target, 9)
+
+    // Every phase-driven term agrees, so the curve is the same curve at any rate.
+    expect(fine.pose.hips.rz).toBeCloseTo(coarse.pose.hips.rz, 9)
+    expect(fine.pose.hips.py).toBeCloseTo(coarse.pose.hips.py, 9)
+    expect(fine.pose.hips.px).toBeCloseTo(coarse.pose.hips.px, 9)
+    expect(fine.pose.hips.ry).toBeCloseTo(coarse.pose.hips.ry, 9)
+    expect(fine.pose.legL.rx).toBeCloseTo(coarse.pose.legL.rx, 9)
+    expect(fine.pose.shoulderL.rx).toBeCloseTo(coarse.pose.shoulderL.rx, 9)
+
+    /*
+      And at a whole number of cycles the roll returns exactly to zero, which pins that
+      the phase target really was reached rather than merely being self-consistent
+      between the two runs.
+    */
+    expect(fine.pose.hips.rz).toBeCloseTo(0, 9)
+  })
+
+  /*
+    Where it would break, so the headroom is a number rather than a hope.
+
+    The roll is a fixed 0.14 rad, so what degrades at higher cadence is the body's
+    ability to visibly settle at either extreme. The hard ceiling is elsewhere and it is
+    arithmetic: `SPRINGS.earPod` has an `omega` of 21 rad/s and the pods counter-swing the
+    hip roll, so a drive frequency approaching 21 makes them resonate WITH the roll rather
+    than oppose it. 1.2 puts the drive at 10.8, which is 0.51 of that.
+  */
+  it('stays well clear of the frequency where the ear pods would resonate', () => {
+    const drive = WADDLE.bobFrequency * GAIT.cadenceScale
+    expect(drive / SPRINGS.earPod.omega).toBeLessThan(0.6)
+    // And of the roughly 1.75 scale at which a 0.14 rad roll stops reading as a weight
+    // shift. Stated as a bound on the dial so a later bump has to argue with it.
+    expect(GAIT.cadenceScale).toBeLessThan(1.75)
+    expect(GAIT.cadenceScale).toBeGreaterThan(1)
   })
 })
 
@@ -401,7 +629,7 @@ describe('the port preserved the original arithmetic', () => {
       turn += (a.turnNorm - turn) * (1 - Math.exp(-TURN_ANIM.damping * dt))
       const t = turn
       const stride = Math.max(a.speedNorm, Math.abs(t) * TURN_ANIM.stepScale)
-      phase += dt * WADDLE.bobFrequency * stride
+      phase += dt * WADDLE.bobFrequency * GAIT.cadenceScale * stride
       const walking = a.grounded ? stride : 0
       const p = phase
       const bodyY = Math.sin(p * 2) * WADDLE.bobAmplitude * walking
@@ -1138,9 +1366,19 @@ describe('footsteps', () => {
         null,
       )
     }
-    // 10 s at bobFrequency 9 rad/s is 90 rad, which is 28 half periods.
-    expect(steps).toBeGreaterThan(24)
-    expect(steps).toBeLessThan(32)
+    /*
+      10 s at bobFrequency 9 rad/s used to be 90 rad, which is 28 half periods. With
+      `GAIT.cadenceScale` at 1.2 it is 108 rad, so 34 half periods, and the observed
+      count is 35.
+
+      This is the note's most measurable consequence and it is an improvement rather
+      than a cost. The cycle is speed locked, so at `MOVEMENT.maxSpeed` the stride
+      length falls from 2.10 m to 1.75 m - on a character 1.36 m tall, from 1.54 body
+      heights per step to 1.29. The feet were covering ground they could only cover by
+      sliding, and 20% faster reduces that rather than adding to it.
+    */
+    expect(steps).toBeGreaterThan(30)
+    expect(steps).toBeLessThan(38)
   })
 
   it('alternates feet', () => {

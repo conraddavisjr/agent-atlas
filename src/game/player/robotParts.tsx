@@ -2,6 +2,7 @@ import { RoundedBox } from '@react-three/drei'
 import { palette } from '@/art/palette'
 import {
   GLOW,
+  anodised,
   emissive,
   mattePlastic,
   metal,
@@ -20,10 +21,15 @@ import {
   DIAPER,
   EAR_POD_SHAPE,
   FACE_PLATE,
+  FINGER,
+  fingerCentreY,
+  FOOT,
+  footBottomRadius,
   HAND,
   HEAD_CAP,
   HEAD_SHELL,
   SOLE_LIGHT,
+  roundedConeProfile,
   roundedDiscProfile,
   superellipsePoints,
   superellipsoidPatch,
@@ -57,7 +63,7 @@ import {
 //
 // Only ONE new hue is needed, which is worth stating because a livery change
 // sounds like it should need a family. The copper on the head and the copper on
-// the arm are `palette.accentDeep`, already the character's hardware colour on
+// the arm are `palette.hardware`, the character's hardware colour on
 // the ear pods and the backpack, and the blue on the limbs is the same blue as
 // the helmet.
 // ---------------------------------------------------------------------------
@@ -191,6 +197,72 @@ const EAR_POD_GEOMETRY = latheProfile({
   radialSegments: EAR_POD_SHAPE.radialSegments,
 })
 EAR_POD_GEOMETRY.rotateZ(Math.PI / 2)
+/*
+  Then squash Z, which is what turns the disc into the narrow fin.
+
+  Order matters and is silent if it is wrong: before the `rotateZ` the lathe's
+  radial plane is X-Z, so scaling Z here would thin the pod on a diameter and then
+  the rotate would carry that thinning into the pod's HEIGHT. After the rotate, Z is
+  the fore-aft axis and this is the fin's depth. `EAR_POD_SHAPE.depthScale` carries
+  which axis is which and why it is Z rather than Y - the short version is that
+  `pose.earPodL.rx` sweeps the Y-Z plane, so a pod round in Y-Z had an invisible
+  flap.
+
+  `BufferGeometry.scale` routes through `applyMatrix4`, which puts the normals
+  through the inverse transpose and renormalises them, so the shading is correct
+  under the non-uniform scale.
+*/
+EAR_POD_GEOMETRY.scale(1, 1, EAR_POD_SHAPE.depthScale)
+
+/**
+ * The boot: a filleted truncated cone, narrow end down, then stretched fore and aft.
+ *
+ * `FOOT` carries the sizing, the reading taken on "30% narrower", and the measurement
+ * that says a cone at the box's old width cannot hold the sole light.
+ *
+ * No `rotateZ` here, unlike the ear pods. The lathe revolves about Y and the boot's
+ * axis IS Y, so the profile comes out already standing on the ground. Giving this one
+ * a rotate would lay the cone on its side, pointing at the other foot - which would
+ * render, cast a shadow and report every triangle present, which is the failure mode
+ * this file keeps a running list of.
+ *
+ * The `scale` is on Z only and comes after nothing, so there is no ordering trap of
+ * the kind the pods have. It routes through `applyMatrix4`, so the normals go through
+ * the inverse transpose and are renormalised: a non-uniformly scaled cone is still
+ * exactly an elliptical cone and its shading stays correct.
+ */
+const FOOT_GEOMETRY = latheProfile({
+  points: roundedConeProfile(
+    footBottomRadius(),
+    FOOT.topRadius,
+    FOOT.height / 2,
+    FOOT.fillet,
+    FOOT.filletSteps,
+  ),
+  radialSegments: FOOT.radialSegments,
+})
+FOOT_GEOMETRY.scale(1, 1, FOOT.depthScale)
+
+/** The mitten's oblong body. See `HAND` for why it is a superellipsoid at `taperTop` 1. */
+const HAND_GEOMETRY = taperedSuperellipsoid(HAND)
+
+/**
+ * One finger, and where along Y it sits.
+ *
+ * `FINGER_CENTRE_Y` is DERIVED rather than authored, and that is the whole defence
+ * against the failure mode this part is shaped like. The hand's lower surface is not
+ * flat: at the finger's own centreline `|x| = 0.052` it sits at y -0.1508, while the
+ * hand's bottom pole is at -0.1600. Authoring the finger against the pole - which is
+ * the number you get by reading `HAND.b` - would place it 0.009 too low and leave a
+ * gap under the palm on both sides. So the root is solved on the surface at the
+ * finger's own x with `superellipsoidY`, and `FINGER.embed` is how far above that
+ * surface the box's top goes.
+ *
+ * The sign: `superellipsoidY` returns the positive `|y|`, and the fingers hang off
+ * the -Y end, so the surface is at its negation.
+ */
+const FINGER_GEOMETRY = taperedSuperellipsoid(FINGER)
+const FINGER_CENTRE_Y = fingerCentreY()
 
 /**
  * The two rings on the upper arm, lathed from the same profile as the ear pods.
@@ -293,7 +365,10 @@ export function HeadShell({ quality }: Q) {
  * and because a painted band on a `RoundedBox` would need a UV layout this head
  * does not have.
  *
- * `palette.accentDeep` rather than `palette.gold`. Gold is `#e8b84b` at display
+ * **`anodised(palette.hardware)` rather than the amber this shipped with**, and
+ * the argument against gold below is unchanged and is why it is not gold either.
+ *
+ * `palette.hardware` rather than `palette.gold`. Gold is `#e8b84b` at display
  * luma 0.731, which sits inside the gameplay band of 0.56 to 0.74 and within
  * 0.004 of `palette.rock`'s 0.735 - so in greyscale a cap on the character's head
  * would read at exactly the value of the deck he walks on, which is the same
@@ -309,7 +384,7 @@ export function HeadShell({ quality }: Q) {
 export function HeadCap() {
   return (
     <mesh geometry={HEAD_CAP_GEOMETRY} castShadow receiveShadow>
-      <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+      <meshPhysicalMaterial {...anodised(palette.hardware)} />
     </mesh>
   )
 }
@@ -352,7 +427,7 @@ export function FacePlate() {
  * profile they read by shading, which is why the fillet went 0.030 to 0.055.
  *
  * One material and not two. This used to pick `chrome()` on a tier with
- * `sheenHero` and `plastic(palette.accentDeep)` otherwise, and describe itself
+ * `sheenHero` and `anodised(palette.hardware)` otherwise, and describe itself
  * as "the one chrome element on the character".
  *
  * **The claim that justified deleting the chrome branch has gone stale and is
@@ -384,7 +459,7 @@ export function FacePlate() {
 export function EarPod() {
   return (
     <mesh geometry={EAR_POD_GEOMETRY} castShadow receiveShadow>
-      <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+      <meshPhysicalMaterial {...anodised(palette.hardware)} />
     </mesh>
   )
 }
@@ -426,7 +501,7 @@ export function AntennaUpper() {
       */}
       <mesh position={[0, 0.075, 0]}>
         <sphereGeometry args={[0.05, 14, 12]} />
-        <meshPhysicalMaterial {...emissive(palette.accent, GLOW.bloom)} />
+        <meshPhysicalMaterial {...emissive(palette.visor, GLOW.bloom)} />
       </mesh>
     </>
   )
@@ -459,7 +534,7 @@ export function Torso({ quality }: Q) {
 export function ChestPanel() {
   return (
     <RoundedBox args={[0.3, 0.2, 0.05]} radius={0.02} smoothness={3} position={[0, 0.02, 0.245]} castShadow>
-      <meshPhysicalMaterial {...plastic(palette.accent)} />
+      <meshPhysicalMaterial {...mattePlastic(palette.plate)} />
     </RoundedBox>
   )
 }
@@ -503,7 +578,7 @@ export function Backpack() {
   return (
     <>
       <RoundedBox args={[width, height, depth]} radius={radius} smoothness={3} castShadow receiveShadow>
-        <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+        <meshPhysicalMaterial {...mattePlastic(palette.hull)} />
       </RoundedBox>
 
       {/*
@@ -518,7 +593,7 @@ export function Backpack() {
       */}
       <mesh position={[0, 0, port.bezelZ]} rotation={[Math.PI / 2, 0, 0]} castShadow>
         <cylinderGeometry args={[port.bezelRadius, port.bezelRadius, port.bezelDepth, port.segments]} />
-        <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+        <meshPhysicalMaterial {...anodised(palette.hardware)} />
       </mesh>
 
       {/*
@@ -562,9 +637,14 @@ export function Backpack() {
  *
  * `heroShell` rather than `plastic(palette.shell)`, so the arm shades as the same
  * moulded material as the torso it hangs off rather than as a separate white
- * object. That does cost the character its only amber limb, and the amber is not
- * lost: `ChestPanel` is unchanged and is still the single accent panel, which was
- * always where the spec's part table put the focal point.
+ * object.
+ *
+ * **The sentence that used to end this paragraph is now false and is worth
+ * keeping as a marker.** It read: "that does cost the character its only amber
+ * limb, and the amber is not lost: `ChestPanel` is unchanged and is still the
+ * single accent panel". There is no amber anywhere on this character now. The
+ * chest panel is `palette.plate`, the character's dark, and the cuff below is
+ * `palette.hardware`. See `palette.accent` for the search that settled it.
  *
  * Both rings sit inside y -0.175 to -0.085, which is the only band where the
  * capsule is at its full 0.075 radius. See `ARM_BAND`: outside it the capsule is
@@ -588,18 +668,23 @@ export function UpperArm({ quality }: Q) {
       {/* The cuff bevel, in the hardware copper. Narrower and less proud, so it
           reads as a moulded step rather than as a second band. */}
       <mesh geometry={ARM_BEVEL_GEOMETRY} position={[0, ARM_BEVEL.y + 0.13, 0]} castShadow>
-        <meshPhysicalMaterial {...plastic(palette.accentDeep)} />
+        <meshPhysicalMaterial {...anodised(palette.hardware)} />
       </mesh>
     </group>
   )
 }
 
 /**
- * A mitten hand, at the hand socket's origin.
+ * A mitten hand with two fingers, at the hand socket's origin.
  *
- * 0.28 across against a 0.72 head is 0.39 head-widths, inside the reference's
- * 0.35 to 0.45. Hidden when a prop is socketed, so a held object replaces the
- * mitten rather than growing out of it.
+ * The oblong body is 0.23 x 0.32 x 0.20 where it was a 0.28 sphere, and the two
+ * fingers stand 0.090 clear of its palm end. `HAND` and `FINGER` in
+ * `robotGeometry.ts` carry the sizing, the reason the hand narrowed rather than
+ * widened, and the measurement of the sphere hand's interpenetration with the hips
+ * that paid for it.
+ *
+ * Hidden when a prop is socketed, so a held object replaces the mitten rather than
+ * growing out of it.
  *
  * `shellShadow` rather than `shell`, so the hand is a different colour from the
  * arm, which is one of the reference marks. It was already different when the arm
@@ -609,15 +694,33 @@ export function UpperArm({ quality }: Q) {
  * a glove moulded in a second shot of the same plastic, which is what the
  * reference's hands look like. Still `shell()` and not `mattePlastic`, so it keeps
  * the hero clearcoat and sheen.
+ *
+ * One material across body and fingers, deliberately. A finger in a second colour
+ * would read as a glove over a hand, and the whole part is one moulding.
  */
 export function Hand({ quality }: Q) {
+  const material = shell(palette.shellShadow, quality.sheenHero ? {} : { sheen: 0 })
   return (
-    <mesh castShadow receiveShadow>
-      <sphereGeometry args={[HAND.radius, 16, 12]} />
-      <meshPhysicalMaterial
-        {...shell(palette.shellShadow, quality.sheenHero ? {} : { sheen: 0 })}
-      />
-    </mesh>
+    <>
+      <mesh geometry={HAND_GEOMETRY} castShadow receiveShadow>
+        <meshPhysicalMaterial {...material} />
+      </mesh>
+      {/*
+        Two fingers, mirrored. Both use the same geometry instance, which is safe
+        because neither is ever mutated - the mirror is a position, not a scale.
+      */}
+      {[-1, 1].map((side) => (
+        <mesh
+          key={side}
+          geometry={FINGER_GEOMETRY}
+          position={[side * FINGER.x, FINGER_CENTRE_Y, 0]}
+          castShadow
+          receiveShadow
+        >
+          <meshPhysicalMaterial {...material} />
+        </mesh>
+      ))}
+    </>
   )
 }
 
@@ -632,28 +735,67 @@ export function Shin() {
 }
 
 /**
- * A foot, at the foot node's origin.
+ * A boot, at the foot node's origin.
  *
- * 0.44 long against a 1.36 body is 32% of body height, and the pair span 0.70
- * against a 0.72 head. A wide planted stance under a heavy head is what says
- * "low centre of gravity, stable, controllable", and it is the half of the read
- * that the previous model already had right.
+ * A truncated cone with the narrow end DOWN, measured on the built mesh: a bounding box
+ * of 0.1685 x 0.1300 x 0.2190, a top face 0.1369 x 0.1779, and a sole 0.0971 x 0.1262.
+ * It was a `RoundedBox` 0.140 x 0.130 x 0.200, and before that 0.320 x 0.170 x 0.440.
+ * `FOOT` carries the sizing, the three different ratios "30% narrower" can mean once
+ * the rims are filleted, and the measurement that says the boot had to get WIDER for
+ * the sole light to survive the taper at all.
+ *
+ * Height is still fixed by the shin rather than by taste - the capsule's bottom tip is
+ * at world 0.115 and the boot's top plane has to reach past it - and the cone is
+ * strictly better at it than the box was. The box's top face was inset by its corner
+ * radius to 0.040 of half-width, so the shin's 0.04822 poked out of it; the cone's top
+ * FLAT is 0.0684, so the leg emerges through the flat face with 0.0202 to spare.
+ *
+ * ## The stance narrows, and that half of it was asked for
+ *
+ * "A wide planted stance under a heavy head is what says low centre of gravity" was
+ * written about the 0.70 span the boots had two passes ago. `REST.legL/R.x` has now
+ * come inboard from +-0.19 to +-0.145, which is the second half of the waist note, and
+ * the two changes pull opposite ways: legs in 23.7%, boots wider 20.3%. Net silhouette
+ * span 0.520 to 0.458, down 11.8%, against a head of 0.72.
+ *
+ * What narrows more than the silhouette does is the GROUND CONTACT, because only the
+ * sole's flat touches the floor: support half-width 0.230 to 0.194, down 15.9%. The
+ * gap between the two boots at their widest goes 0.240 to 0.1215. Both are on the
+ * record in `FOOT` because a cone standing on its narrow end under a heavy head is the
+ * one place this shape note works against the design's own stability read.
+ *
+ * The boot is CENTRED on the leg, which it was not two passes ago. `REST.footL.z` was
+ * 0.06, and because `REST_ROTATION.legL.ry` splays the leg by -0.1 rad that forward
+ * offset also threw the boot 0.0060 sideways off its own axis.
  */
 export function Foot() {
   return (
     <>
-      <RoundedBox args={[0.32, 0.17, 0.44]} radius={0.065} smoothness={3} castShadow receiveShadow>
+      <mesh geometry={FOOT_GEOMETRY} castShadow receiveShadow>
         <meshPhysicalMaterial {...rubber(palette.lockedDeep)} />
-      </RoundedBox>
+      </mesh>
       {/*
         The blue oval on the sole.
 
         It PROTRUDES below the sole plane rather than sitting flush with it or
-        recessed above it, and that is not a preference. The foot is a solid
-        `RoundedBox` spanning y -0.085 to 0.085, so the first version of this pad -
-        placed a millimetre "above the sole plane" to avoid z-fighting with the
-        ground - sat entirely inside opaque rubber and could not be seen at any
-        time from any angle. See `SOLE_LIGHT`.
+        recessed above it, and that is not a preference. The boot is a SOLID spanning
+        y -FOOT.height/2 to +FOOT.height/2 - a cone now, a `RoundedBox` when this
+        happened - so the first version of this pad, placed a millimetre "above the
+        sole plane" to avoid z-fighting with the ground, sat entirely inside opaque
+        rubber and could not be seen at any time from any angle. See `SOLE_LIGHT`.
+
+        The y below is derived from `FOOT.height` and not the literal -0.085 it was.
+        That literal was half the old height, so shrinking the boot without touching
+        this line would have left the pad floating 0.020 under the sole: the same
+        defect as the original, arrived at from the opposite direction.
+
+        What the cone changed is the sideways fit rather than this y. A cone's sole is
+        narrower than a box's twice over - the 30% taper, then a fillet on a slanted
+        rim - so the region this pad must stay inside is `footSoleFlat()` rather than
+        any dimension of `FOOT` directly. Nothing here recomputes it: the geometry
+        above and the test both go through that one function, which is what stops the
+        two drifting apart. This pad has shipped fully buried once and come within
+        2.3 mm of overhanging the rim twice.
 
         GLOW.source and not GLOW.bloom, and this is the one place on the character
         where the choice is genuinely arguable. The reference's sole lights do
@@ -670,7 +812,7 @@ export function Foot() {
         matrix.
       */}
       <mesh
-        position={[0, -0.085 - SOLE_LIGHT.proud + SOLE_LIGHT.thickness / 2, 0]}
+        position={[0, -FOOT.height / 2 - SOLE_LIGHT.proud + SOLE_LIGHT.thickness / 2, 0]}
         scale={[1, 1, SOLE_LIGHT.stretchZ]}
       >
         <cylinderGeometry
@@ -743,18 +885,37 @@ export function Foot() {
  * `robotGeometry.ts` carries the construction and the reason it is skinned on the
  * CPU rather than in a vertex shader.
  *
- * ## Why it is still `accentDeep`
+ * ## Why it is `hull` now, and why the COLOUR moved while the geometry did not
  *
  * `palette.token` is a semantic hue and it is spoken for. `Flowers.tsx` uses it
  * for the pink dome flowers and `HubIsland.tsx` for the token crystal, so it means
  * "collectible" everywhere else in the world, and the bible's rule is that
- * semantic hues are globally constant. It is also the same hue as the pink cones
- * F6 is about, at a display luma of about 0.57, which puts the hero's cape squarely
- * inside the walkable gameplay band.
+ * semantic hues are globally constant.
  *
- * `accentDeep` at 0.4775 is the character's own hardware family - the pods, the
- * head cap, the arm bevels, and the backpack the cape literally hangs off - and it
- * sits in the empty gap between bands where the hero belongs.
+ * `accentDeep` was chosen because it was "the character's own hardware family -
+ * the pods, the head cap, the arm bevels, and the backpack the cape literally
+ * hangs off". Every one of those parts has since become `palette.hardware` or
+ * `palette.hull`, so that argument now points at a different colour rather than
+ * failing: the cape follows the family it was always meant to match.
+ *
+ * **This was directed to be held and it is being taken anyway, for a stated
+ * reason.** `91-design-critique.md` says to colour the cape in the commit that
+ * gives it thickness, because it is still round 1's F4 flat quad. That is right
+ * about the geometry and it does not bind the colour: leaving one warm element on
+ * an otherwise entirely neutral character makes the cape the loudest thing on the
+ * hero, which is strictly worse than either end state and worse than what shipped
+ * before this pass, where at least the chest matched it. Colour and thickness are
+ * separable and only one of them was asked for.
+ *
+ * **NOT `hero.blueDeep`**, which the critique also rules out and for arithmetic
+ * this file should carry: at chroma 0.797 and display luma 0.2806 it is over the
+ * ceiling at debt 1.79, capping it at 2.24% of frame, and a cape is not a 2%
+ * feature.
+ *
+ * `hull` at display luma 0.4029 keeps the cape in the empty gap between bands
+ * where the hero belongs, one rung off `plate` so it separates from the chest
+ * panel in greyscale, and matches the backpack it hangs from - which is the read
+ * that a cape and a pack are one fitting rather than two.
  *
  * `vinyl()` unpatched, which is the whole payoff of skinning on the CPU: the cape
  * keeps its clearcoat, its sheen, its shadow casting and its shadow receiving,
@@ -771,7 +932,7 @@ export function Foot() {
 export function CapeSurface({ ribbon }: { ribbon: CapeRibbon }) {
   return (
     <mesh geometry={ribbon.geometry} castShadow receiveShadow>
-      <meshPhysicalMaterial {...vinyl(palette.accentDeep)} />
+      <meshPhysicalMaterial {...vinyl(palette.hull)} />
     </mesh>
   )
 }

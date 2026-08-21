@@ -133,6 +133,68 @@ export type SpringName = keyof typeof SPRINGS
  */
 export const GAIT = {
   /**
+   * Multiplier on the step-cycle rate. 1.2 is the "20% faster" note.
+   *
+   * ## The feet and the arms are ONE phase, so this is one change and not two
+   *
+   * "Make the feet animation move about 20% faster. Do the same for the arms." Read as
+   * two instructions it invites two dials, and two dials here would be a bug. There is
+   * a single `rt.phase` in `stepAnim` and everything in the gait is a pure function of
+   * it: `swing = sin(p) * WADDLE.limbSwing` drives `legL/R.rx` AND `shoulderL/R.rx`
+   * off the same value, and the bob, the lateral hip shift, the roll and the hip yaw
+   * all read the same `p`. So the arms come with the feet automatically, and the note's
+   * second sentence is already satisfied by satisfying the first.
+   *
+   * Giving the arms their own multiplier would DECOUPLE them from the legs, and at 1.2
+   * that decoupling is a 6:5 ratio - the two would re-align only every fifth step, so
+   * the arm that swings forward with the opposite leg (which is what a walk is) would
+   * drift into swinging forward with the SAME leg and back again on a slow beat. That
+   * is not a faster walk, it is a broken one.
+   *
+   * ## Why a rate multiplier and not any of the other three ways to go faster
+   *
+   * Everything downstream of `p` is a pure function of it, so scaling the rate at
+   * which `p` advances replays the identical motion curve 20% faster and changes
+   * nothing about its shape. In particular `GAIT.bobPhaseLag` is a lag in RADIANS
+   * rather than in seconds, so it stays the same fraction of a step and the bob keeps
+   * peaking a third of a step past the roll extreme. That is what protects the waddle
+   * the note says it likes.
+   *
+   * The three alternatives all change the feel rather than the rate, which is the
+   * distinction the note is actually drawing when it says "waddling like the toddler"
+   * and "20% faster" in the same breath:
+   *
+   *   - raising `WADDLE.limbSwing` makes the steps BIGGER, not quicker
+   *   - raising the spring `omega`s changes how the body settles, so it reads as
+   *     stiffer rubber rather than as a brisker walk
+   *   - raising `TURN_ANIM.stepScale` speeds the cycle only during a turn
+   *
+   * ## Where it would break, since 1.2 is not obviously safe
+   *
+   * `WADDLE.bobFrequency` is 9 rad/s at full stride, so a step cycle is 1.43 Hz and
+   * this takes it to 1.72 Hz. A toddler's waddle sits around 1.5 to 2 Hz, so 1.2 lands
+   * inside the reference rather than past it. Two things say where the edge is. The
+   * roll is 0.14 rad at a fixed amplitude, and past roughly 2.5 Hz - a scale of 1.75 -
+   * the body stops visibly settling at either extreme and the waddle reads as a shiver
+   * instead of a weight shift. Harder than that: `SPRINGS.earPod` has an `omega` of 21
+   * rad/s and the pods counter-swing the hip roll, so at a scale near 2.3 the drive
+   * frequency reaches the pods' own natural frequency and they resonate against the
+   * roll rather than opposing it. 1.2 is at 0.51 of that ratio.
+   *
+   * ## The cadence was already too SLOW for the feet, which supports the note
+   *
+   * The cycle is speed-locked, so at `MOVEMENT.maxSpeed` 6.0 the old rate gives 2.86
+   * steps per second and therefore 2.10 m of travel per step - on a character 1.36 m
+   * tall, a stride of 1.54 body heights, which the feet can only cover by sliding.
+   * 1.2 brings it to 1.75 m, or 1.29 body heights. So the change reduces foot slip
+   * rather than adding it, and the user's read that the walk wants to be busier is
+   * measurably right rather than only a preference.
+   *
+   * This lives here rather than in `WADDLE.bobFrequency` because `tuning.ts` is frozen
+   * for the art overhaul, which is also the reason this block exists at all.
+   */
+  cadenceScale: 1.2,
+  /**
    * Hip yaw sway, deliberately opposing the roll.
    *
    * This is what separates a waddle from a metronome. The hip that rises also

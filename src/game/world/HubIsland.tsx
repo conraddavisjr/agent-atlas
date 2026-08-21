@@ -9,13 +9,12 @@ import {
   type Group,
 } from 'three'
 import { band, palette } from '@/art/palette'
-import { GLOW, emissive, mattePlastic, plastic } from '@/art/materials'
+import { GLOW, emissive, masonry, mattePlastic, plastic, steel } from '@/art/materials'
 import {
   applyLightmapUV,
   boxProjectUV,
   mergeProp,
   nodeCore,
-  pad,
   paintByFacing,
   pill,
   puck,
@@ -23,12 +22,18 @@ import {
   slab,
   packLightmapAtlas,
   propPartVertexCounts,
-  trace,
   tubeFromCurve,
   type LightmapMesh,
   type PropPart,
 } from '@/art/geometry'
-import { DECAL_KINDS, createDecalMaps, createPanelFillMap, panelFillSize } from '@/art/decalTextures'
+import { DECAL_KINDS, createDecalMaps } from '@/art/decalTextures'
+import {
+  BRICK,
+  DECK_DROP_SCALE,
+  FRAME_DROP_SCALE,
+  FRAME_LIT_LUMA,
+  createBrickMaps,
+} from '@/art/brickTexture'
 import {
   HUB_LIGHTMAP_INTENSITY,
   assertLightmapBound,
@@ -38,7 +43,6 @@ import {
 import { mulberry32, type Exclusion } from '@/art/placement'
 import { useQuality } from '@/art/useQuality'
 import { Grass } from '@/art/Grass'
-import { WaterTrace } from '@/art/WaterTrace'
 import { glassShard } from '@/art/glassShard'
 import { Flowers } from '@/art/Flowers'
 import { BOULDER, Scatter, boulderPlacements } from '@/art/Scatter'
@@ -65,6 +69,7 @@ import {
   KERBS,
   KERB_DEPTH,
   KERB_HEIGHT,
+  POOL,
   SPURS,
   SPUR_RADIUS,
   STEP,
@@ -78,9 +83,13 @@ import {
   monolithArc,
   orthoTrace,
   pathLength,
+  poolFloorRadius,
+  poolRingColliders,
   spurTraceCorners,
+  sweepChannel,
   traceSegments,
   trunkTraceCorners,
+  inlayDisc,
 } from './hubLayout'
 
 /**
@@ -679,76 +688,72 @@ export function HubIsland() {
   const visiblePylons = useMemo(() => PYLONS.slice(0, gates.pylons), [gates.pylons])
 
   /*
-    Generated surface detail. **On now**, at 512 on medium and 1024 on high,
-    which is the ladder that was specified from the start.
+    Generated surface detail.
 
-    It sat at zero on all three tiers for two rounds behind a note in
-    `quality.ts` reading "zero everywhere until `surfaceTexture.ts` exists" -
-    while the module it was waiting for had already shipped under a different
-    name, as `decalTextures.ts`, with thirty tests and four tuned kinds. So the
-    largest continuous surface in the game was box-projected with world-scale
-    UVs, handed a material with three map slots, and given null in all of them,
-    and the deck looked like blank plastic because it was.
+    **The deck no longer takes `createDecalMaps('deck', ...)`, and the kind is
+    now unused.** That map set is a panel-line vocabulary: a 0.5 m grid of 20 mm
+    grooves with fasteners, which describes a moulded floor panel. The platform
+    is masonry now, and a bond of cast blocks with a panel grid cut across it is
+    two part languages on one surface - the reading is neither, and at the deck's
+    2 m tile against the bond's 2.34 m the two grids beat against each other with
+    a period of 23.4 m, which is most of the island.
 
-    It can be applied to a merged batch at all only because the batches are box
-    projected. A merge holds a 12 m deck, a 6 m puck and a 0.7 m plinth, each
-    with its own UV convention, so a tiled material across the raw merge would
-    put the same stone at three different sizes on three pieces of one
-    structure - which is the wallpaper failure this file has documented since
-    its first pass, arrived at from the other direction.
+    `DECAL_KINDS.deck` and `createPanelFillMap` are both left in place and both
+    now have no call site. They are kept rather than deleted because they are
+    tested, measured and reversible: the panel fill in particular carries the
+    ~900-panel tone ladder and the warm-cool tilt solve, and the art direction
+    that retired it is one round old. If masonry survives the next critique
+    round, delete them then.
   */
-  const deckMaps = useMemo(
-    () => (quality.surfaceMapSize ? createDecalMaps('deck', quality.surfaceMapSize) : null),
+  const brickMaps = useMemo(
+    () =>
+      quality.surfaceMapSize
+        ? createBrickMaps(quality.surfaceMapSize, { dropScale: DECK_DROP_SCALE })
+        : null,
+    [quality.surfaceMapSize],
+  )
+  /*
+    The same bond on the pylons, printed against the frame's own value.
+
+    A second call rather than a second module: `createBrickMaps` caches the
+    normal map and the ORM pack on the BOND and only the albedo on the value it
+    is printed against, so this costs one 1024 texture rather than three. See
+    `FRAME_LIT_LUMA` and `FRAME_DROP_SCALE` for why the ladder has to be
+    compressed rather than reused.
+  */
+  const frameBrickMaps = useMemo(
+    () =>
+      quality.surfaceMapSize
+        ? createBrickMaps(quality.surfaceMapSize, {
+            renderedLuma: FRAME_LIT_LUMA,
+            dropScale: FRAME_DROP_SCALE,
+          })
+        : null,
     [quality.surfaceMapSize],
   )
   const trimMaps = useMemo(
     () => (quality.surfaceMapSize ? createDecalMaps('trim', quality.surfaceMapSize) : null),
     [quality.surfaceMapSize],
   )
+  /*
+    The frame members get their own kind, and it is the same 1.6 m tile as `trim`.
 
-  /**
-   * The deck's PRINTED value, which is a second texture at a second scale and is
-   * the change the null result above asks for.
-   *
-   * The maps switched on in `deckMaps` measure a p5-p95 of 0.039 against 0.0387
-   * with them off: relief does nothing on an up-facing surface under a key 42.7
-   * degrees overhead, because perturbing a normal that already points at the
-   * light barely moves `N.L`. Printed value has no such dependence - an albedo
-   * multiplier is a multiply, and it lands whatever the geometry is doing - so
-   * this is the one channel that can put structure on a floor here.
-   *
-   * It is a separate texture from `deckMaps` because it is a separate SCALE, and
-   * that is the whole reason it exists as its own function. `deckMaps` tiles
-   * every 2 m; the reference's platforms are large flat panels several metres
-   * across, each a slightly different tone, so a 2 m tile would show the same
-   * three panels six times across T1's twelve metres. This one covers 40 m in a
-   * single copy, centred on the origin, and carries its own `repeat` and
-   * `offset`. See `createPanelFillMap`.
-   *
-   * Sized against a MEASURED deck, not against `palette.bandDeckTop`: a lit deck
-   * renders at 0.687 of display luma, so the ladder spends 0.06 downward and
-   * lands the darkest panel at 0.627, with the whole distribution inside the
-   * 0.56-0.74 gameplay band and off the ceiling it had been resting on.
-   */
-  const deckAlbedo = useMemo(() => {
-    /*
-      The panel map's resolution is decoupled from `surfaceMapSize`, at 2048 on
-      high, and that decoupling is the whole reason the marks are visible at all.
+    Deliberately the same tile, so the dress batch's existing box projection at
+    `DECAL_KINDS.trim.metresPerTile` is reused with its UVs untouched - this costs
+    no repack and no geometry change. What differs is everything sized against the
+    screen rather than against the tile: a 70 mm groove instead of 2.5 mm, no
+    fasteners, and a roughness target of 0.30 to match `anodised()`.
 
-      MEASURED: the deck covers about 470 px for 12 m in `hub-establishing`, so one
-      screen pixel is 26 mm of deck - while a 1024 map spread over the island's
-      40 m span has 39 mm texels. **The texture was the limit rather than the
-      display**, and every mark in the vocabulary was being authored below what the
-      player can resolve. That is the same Nyquist failure as the 2.5 mm panel
-      groove, one level up: it is not enough for a mark to be printed rather than
-      cut, it also has to be bigger than a texel and bigger than a pixel.
-
-      16 MB of VRAM and almost no CPU, because unlike `createDecalMaps` this
-      function never calls `getImageData`.
-    */
-    const size = panelFillSize(quality.surfaceMapSize)
-    return size ? createPanelFillMap({ size }) : null
-  }, [quality.surfaceMapSize])
+    MEASURED: the near Core strut is 20 px wide at the establishing framing, or
+    21.6 mm of surface per screen pixel, and four cross-sections of it 40 px apart
+    are the same curve to within 0.01 of luma. The `trim` maps bound here were
+    real and entirely sub-pixel - a 2.5 mm groove is 0.12 px. See
+    `DECAL_KINDS.strut`.
+  */
+  const strutMaps = useMemo(
+    () => (quality.surfaceMapSize ? createDecalMaps('strut', quality.surfaceMapSize) : null),
+    [quality.surfaceMapSize],
+  )
 
   /**
    * Every walkable piece in the level, merged into one geometry.
@@ -800,8 +805,16 @@ export function HubIsland() {
     const atlas = packLightmapAtlas(meshes, HUB_LIGHTMAP_ATLAS)
     applyLightmapUV(meshes, atlas)
 
-    // UV set 0: the tiling, world-scale projection every detail map depends on.
-    boxProjectUV(deck, DECAL_KINDS.deck.metresPerTile)
+    /*
+      UV set 0: the tiling, world-scale projection every detail map depends on.
+
+      `BRICK.metresPerTile` rather than `DECAL_KINDS.deck.metresPerTile`, 2.34 m
+      against 2 m, and it has to move with the map. A bond generated on a 2.34 m
+      square tile and projected at 2 m is a bond stretched by 17% - the joints
+      stay parallel and the brick stops being 720 mm, which is the one dimension
+      every legibility number in `brickTexture.ts` is computed from.
+    */
+    boxProjectUV(deck, BRICK.metresPerTile)
     boxProjectUV(trim, DECAL_KINDS.trim.metresPerTile)
 
     /*
@@ -831,6 +844,42 @@ export function HubIsland() {
     assertLightmapBound(walkable.deck, lightmap, 'the deck batch')
     assertLightmapBound(walkable.trim, lightmap, 'the trim batch')
   }, [walkable, lightmap])
+
+  /**
+   * The perimeter pylons' masts, alone in their own draw, because they are the
+   * only vertical masonry in the level.
+   *
+   * **This is one extra draw call and it is the whole cost of the split.** The
+   * masts used to ride in `dressBatch` with the struts, the collar, the caps and
+   * the overhead arcs, all box projected at `DECAL_KINDS.trim.metresPerTile` and
+   * all wearing one material. Masonry cannot join that: it needs a different
+   * projection scale - 2.34 m against 1.6 m - and a material with no clearcoat,
+   * and a merged batch has exactly one of each. The frame was 114 draw calls at
+   * high; this makes it 115.
+   *
+   * The struts, the collar and the arcs deliberately do NOT become masonry. They
+   * are machine parts spanning between posts, and a catenary cable made of brick
+   * is not a style choice, it is a category error.
+   *
+   * `paintByFacing` with the frame's bands is kept exactly as it was, and the
+   * brick albedo multiplies it. That ordering is what holds the round-3
+   * prohibition: the band values are decided by facing, and the texture may only
+   * darken within the headroom `FRAME_DROP_SCALE` reserves.
+   */
+  const pylonBatch = useMemo(() => {
+    const parts: PropPart[] = []
+    for (const pylon of visiblePylons) {
+      const [x, z] = pylonPosition(pylon.degrees)
+      parts.push({ geometry: pill(0.34, pylon.height - 0.34), position: [x, -0.34, z] })
+    }
+    return assertDrawable(
+      paintByFacing(boxProjectUV(mergeProp(parts), BRICK.metresPerTile), {
+        up: BAND.frameTop,
+        side: BAND.frameSide,
+      }),
+      'the pylon batch',
+    )
+  }, [visiblePylons])
 
   /**
    * Band 2 furniture: the Core's struts and collar, the pylon masts and caps,
@@ -872,8 +921,17 @@ export function HubIsland() {
     parts.push({ geometry: puck(collarRadius, 0.3, 0.08), position: [0, collarY - 0.15, 0] })
 
     /*
-      The pylons, sunk by exactly their own radius, which is a contact fix rather
-      than a layout change.
+      The pylon CAPS only. The masts moved to `pylonBatch` when they became
+      masonry, and the cap stayed here on purpose: a cast stone shaft with a
+      machined disc on top of it is the world rule this project has had since its
+      first pass - everything is a manufactured object, and hardware is what says
+      so. A brick cap would read as the shaft simply stopping.
+
+      The note the masts left behind, because it is about geometry that is still
+      in the level and is the reason `pylonBatch` sinks them by 0.34:
+
+      The pylons are sunk by exactly their own radius, which is a contact fix
+      rather than a layout change.
 
       `pill(r, l)` is a `CapsuleGeometry` translated so the bottom of its LOWER
       HEMISPHERE sits at local y = 0. Placed at y = 0 on a lawn that
@@ -896,10 +954,9 @@ export function HubIsland() {
       the cap disc above it does not have to move. The collider is a 0.4 m
       cylinder against a 0.34 m mesh, so collision is untouched.
     */
-    for (const pylon of visiblePylons) {
-      const [x, z] = pylonPosition(pylon.degrees)
-      parts.push({ geometry: pill(0.34, pylon.height - 0.34), position: [x, -0.34, z] })
-      if (gates.pylonDetail) {
+    if (gates.pylonDetail) {
+      for (const pylon of visiblePylons) {
+        const [x, z] = pylonPosition(pylon.degrees)
         parts.push({ geometry: puck(0.62, 0.3, 0.08), position: [x, pylon.height, z] })
       }
     }
@@ -949,10 +1006,15 @@ export function HubIsland() {
   }, [visiblePylons, gates.pylonDetail, gates.traceSegments])
 
   /**
-   * Spur traces, the trunk and every terminating pad, in one emissive batch.
+   * The four spur channels, the trunk, the junction pool and the threshold pad,
+   * in one water batch.
    *
-   * The pads share the traces' material, so folding them in costs nothing and
-   * saves the separate draw the spec budgeted for them.
+   * The discs share the channels' material and their section, so folding them in
+   * costs nothing and saves the separate draw the spec budgeted for them. It also
+   * requires every part here to carry the `aShore` attribute, because `mergeProp`
+   * reduces to the attributes every part HAS - so a part built without it would
+   * silently drop the meniscus from the whole batch rather than from itself. Both
+   * builders write it; `hubLayout.test.ts` asserts both do.
    */
   const traceBatch = useMemo(() => {
     const parts: PropPart[] = []
@@ -962,15 +1024,29 @@ export function HubIsland() {
       because the trunk runs 13.8 m against the spur's 6.6 and a shared count
       gave the trunk a ring every 0.14 m - which rounds a 0.12 m mitre straight
       back into the curve the mitre was put there to remove. Sampled by distance
-      it is 294 rings on the trunk and 140 on each spur at high, and the whole
-      batch comes to about eleven thousand triangles: less than one percent of
-      the grass field, for the detail the whole finding is about.
+      it is 294 rings on the trunk and 140 on each spur at high.
+
+      **The batch got DEARER, and the first draft of this comment claimed the
+      opposite.** It reasoned that an 8-quad section must beat a 6-segment tube and
+      did not count: a tube CLOSES, so 6 radial segments are 6 quads, where an open
+      9-point section is 8. Measured at high tier:
+
+        piece            was      now
+        trunk          3,528    4,704
+        spur (x4)      1,680    2,240   each
+        disc (x2)        432      288   each
+        --------------------------------
+        batch         11,112   14,240
+
+      +28%, which is 0.06% of the 4.85M triangle budget and the right trade for the
+      read. It is written down because an unchecked "this is cheaper" is exactly the
+      class of claim this project has been wrong about before.
     */
     for (let i = 0; i < 4; i++) {
       parts.push({
-        geometry: trace(
+        geometry: sweepChannel(
           SPUR_TRACE,
-          TRACE.spurRadius,
+          TRACE.spurHalfWidth,
           traceSegments(pathLength(SPUR_TRACE), gates.traceSegments),
         ),
         rotation: [0, (Math.PI / 2) * i, 0],
@@ -978,25 +1054,58 @@ export function HubIsland() {
     }
 
     /*
-      One via pad at the Core instead of four, which is both better grammar and
-      one fewer thing to line up. Four separate pads at radius 1.2 said "four
-      wires that happen to stop near each other"; a single pad every spur runs
-      into and the trunk leaves from says "four inputs feed one node", which is
-      the sentence the whole layout is built around.
+      The junction pool, and it is now the SURFACE of water sitting in a recess
+      rather than a disc of water sitting on the deck.
+
+      What was here was `pad(1.05)`, which is `roundedCylinder({ height: 0.1 })`
+      standing on its own base - a 2.10 m wide, 0.10 m TALL cylinder of water
+      standing proud on Puck C, with no collider, in the middle of the walking
+      route, directly beneath the Core node. The recess it now sits in is cut into
+      Puck C by `basinLathe`, its collider is `poolRingColliders`, and this is only
+      the water's top surface.
+
+      Placed at Puck C's deck plane exactly, so the pool is brim-full to the
+      surrounding floor and there is no step in the waterline between the pool and
+      the five channels that meet it.
+
+      One via pool at the Core rather than four pads is kept from version two, and
+      the grammar argument is unchanged: four separate pads said "four wires that
+      happen to stop near each other", where one basin every spur runs out of and
+      the trunk runs into says "four inputs feed one node".
     */
-    parts.push({ geometry: pad(TRACE.junctionRadius), position: [0, 3 * STEP, 0] })
+    parts.push({
+      geometry: inlayDisc(POOL.radius, POOL.rimWidth, POOL.ringFraction),
+      position: [0, 3 * STEP, 0],
+    })
 
     parts.push({
-      geometry: trace(
+      geometry: sweepChannel(
         TRUNK_TRACE,
-        TRACE.trunkRadius,
+        TRACE.trunkHalfWidth,
         traceSegments(pathLength(TRUNK_TRACE), gates.traceSegments),
       ),
     })
-    // The threshold pad in front of the arch, where the trunk stops.
-    parts.push({ geometry: pad(0.9), position: [0, 7 * STEP, -14.1] })
 
-    return assertDrawable(mergeProp(parts), 'the trace batch')
+    /*
+      The threshold pad in front of the arch, where the trunk springs.
+
+      Flush rather than recessed, and that is the one place this pass knowingly
+      leaves a disc of water lying on a deck rather than in it. T3 is a `slab` -
+      a chamfered box - and there is no cheap recess in a box: splitting it into
+      two half-slabs plus a floor slab would carve a real channel with real bevelled
+      lips, but it turns one part into three and moves every later part's charts in
+      the lightmap atlas. It also buys nothing, because nothing steps into this one:
+      it is 0.9 m wide against the 0.18 m the capsule needs to travel inside a rim
+      before it touches bottom, so a recess here would be a step-down the player
+      could feel and never see the point of. Brim-full is the correct read for a
+      spring anyway.
+    */
+    parts.push({
+      geometry: inlayDisc(0.9, POOL.rimWidth, POOL.ringFraction),
+      position: [0, 7 * STEP, -14.1],
+    })
+
+    return assertDrawable(mergeProp(parts), 'the water batch')
   }, [gates.traceSegments])
 
   /**
@@ -1193,35 +1302,61 @@ export function HubIsland() {
       */}
       <mesh geometry={walkable.deck} castShadow receiveShadow>
         <meshPhysicalMaterial
-          {...mattePlastic('#ffffff', { vertexColors: true })}
-          {...(deckMaps
+          {...masonry({ color: '#ffffff', vertexColors: true })}
+          {...(brickMaps
             ? {
-                normalMap: deckMaps.normalMap,
-                roughnessMap: deckMaps.roughnessMap,
-                roughness: deckMaps.roughness,
+                normalMap: brickMaps.normalMap,
+                roughnessMap: brickMaps.roughnessMap,
+                roughness: brickMaps.roughness,
+                /*
+                  `map` multiplies the vertex colour, which is what carries the
+                  two band values here, so the brick albedo is centred on WHITE
+                  with its whole ladder below it. A map centred on mid grey would
+                  halve the albedo of every walkable surface in the game and take
+                  band 1 with it. `brickAlbedoBytes` only ever darkens, and
+                  `BRICK_TONE_DROPS` carries the budget that keeps the result
+                  inside 0.56 to 0.74.
+
+                  There is no `clearcoatRoughnessMap` here and no need for one.
+                  Every other binding in this file carries it because a
+                  `roughnessMap` multiplies `roughness` and never
+                  `clearcoatRoughness`, so a mapped base lobe drifts away from an
+                  unmapped coat and the two-lobe ratio collapses on the smooth
+                  half of every panel. `masonry()` has no coat at all, so there is
+                  no second lobe to keep separated - which is the two-lobe problem
+                  solved by deletion rather than by a fourth map slot.
+                */
+                /*
+                  `?nobrickmap` unbinds the printed albedo and leaves the relief,
+                  and it is a measurement lever rather than debug scaffolding -
+                  the same kind of thing as `?gfx=ao`, kept for the same reason.
+
+                  Every drop in `brickTexture.ts` is solved against the display
+                  luma the surface renders at WITHOUT this map, and there is no
+                  way to measure that with the map bound. Shipping without this
+                  flag is how `FRAME_LIT_LUMA` sat at a stale 0.30 for a whole
+                  pass while a green test agreed with it. See
+                  `MEASURED_UNMAPPED_P5`, whose two numbers came from a capture
+                  with this flag on and are what the band tests are written
+                  against.
+                */
+                map: new URLSearchParams(location.search).has('nobrickmap') ? null : brickMaps.map,
               }
             : {})}
           {...(/*
-            The baked sky occlusion, on UV set 1, in the slot the generated ORM pack
-            used to hold.
+            The baked sky occlusion, on UV set 1, in the slot the generated ORM
+            pack would otherwise hold.
 
-            **It replaces that pack's occlusion channel rather than joining it, and
-            it has to.** `createDecalMaps` returns `roughnessMap: orm, aoMap: orm` -
-            one `Texture` in two slots - and `channel` is a property of the texture,
-            so there is no way to sample the ORM on UV 0 and this on UV 1 in one
-            material. What is given up is measured and it is nothing: the note on
-            `deckAlbedo` above records that switching the generated maps on moved a
-            lit deck's p5-p95 from 0.0387 to 0.039. Roughness and metalness are
-            untouched, because they are the same texture still bound at `roughnessMap`.
+            **It replaces that pack's occlusion channel rather than joining it,
+            and it has to.** `createBrickMaps` returns `roughnessMap` and `aoMap`
+            as ONE `Texture`, and `channel` is a property of the texture, so there
+            is no way to sample the ORM on UV 0 and this on UV 1 in one material.
+            The bond's joints therefore get no occlusion on the deck, which is
+            exactly why `BRICK_MORTAR_DROP` exists and is the reason the mortar is
+            printed dark rather than merely cut deep. On the pylons below the
+            trade goes the other way and the ORM's occlusion is bound.
           */
           lightmap ? { aoMap: lightmap, aoMapIntensity: HUB_LIGHTMAP_INTENSITY } : {})}
-          {...(/*
-            `map` multiplies the vertex colour, which is what carries the two band
-            values here, so the panel map has to be centred on WHITE with its
-            pattern below it. A map centred on mid grey would halve the albedo of
-            every walkable surface in the game and take band 1 with it.
-          */
-          deckAlbedo ? { map: deckAlbedo } : {})}
         />
       </mesh>
 
@@ -1234,6 +1369,8 @@ export function HubIsland() {
             ? {
                 normalMap: trimMaps.normalMap,
                 roughnessMap: trimMaps.roughnessMap,
+                // 5.71 at the smoothest texel, against a minimum of 8. See the deck.
+                clearcoatRoughnessMap: trimMaps.clearcoatRoughnessMap,
                 roughness: trimMaps.roughness,
               }
             : {})}
@@ -1244,20 +1381,143 @@ export function HubIsland() {
       {/*
         The frame: pylons, struts, the collar and the overhead arcs.
 
-        Takes the `trim` maps, and it had been box projected against exactly that
-        kind at the top of this file and then handed a bare material. Eight pylons
-        are the strongest framing element in the scene and the only surfaces in it
-        with a 0.4 m panel pitch already solved for them.
+        **Anodised metal rather than matte plastic, and it is the correction of a
+        measured band failure rather than a look change.**
+
+        MEASURED on `.critique/astro/maps-on--hub-establishing.png`, which is the
+        frame the paint pass above was itself written against:
+
+          member                box              mean   p5     p95    width  band?
+          Core strut, near      817,505,16,20    0.383  0.190  0.472  0.282  NO
+          pylon 300 deg shaft   1168,355,22,40   0.294  0.134  0.411  0.278  NO
+          pylon 0 deg shaft     1491,500,34,40   0.241  0.120  0.394  0.274  NO
+          pylon 180 deg shaft   255,400,24,40    0.360  0.224  0.411  0.187  NO
+
+        `frame.mjs spread` returns `inOneBand: false` on all four, in a midground
+        band 0.18 wide, and two of them dip into the anchor band. `paintByFacing`
+        fixed the MEAN exactly as predicted - 0.294 against a predicted 0.27 - and
+        cannot touch the spread, because it assigns an albedo from a face normal
+        and a cylinder presents every normal in a hemisphere at once. Round 3's fix
+        was measured on the statistic round 3's own amendment then retired.
+
+        No albedo can fix it. A diffuse cylinder's p95-to-p5 LINEAR ratio under this
+        key is 6.297 and the albedo cancels out of both ends; midground permits
+        3.603. Deleting the diffuse term is the only mechanism that removes the
+        6.297, and Schlick on a cylinder replaces it with 1.621 - because screen-x
+        is uniform in `sin(phi)` while `(1 - cos)^5` stays flat past 60 degrees, so
+        the whole Fresnel rise is squeezed into the outer tenth of the width. That
+        leaves 2.22x for the variation in what the members reflect across their
+        width, which is the one term this cannot predict and the number to check a
+        frame against. `cylinderFresnelRatio` in `materials.ts` carries the whole
+        argument, and it is a correction to `anodised()`'s own finding: that note
+        rules metal out for a FLAT face and the conclusion inverts on a curve.
+
+        `FRAME_SIDE` rather than the vertex ramp, and the ramp is dropped rather
+        than kept. For a metal the albedo IS `f0`, and `f0` is the FLOOR of the
+        value while the environment sets the scale, so a DARKER colour makes the
+        spread WIDER: `#6e7e9e` gives a ratio of 1.62 and `frameTop`'s `#3c465a`
+        gives 3.42, which spends the entire band. The floor is display luma 0.446.
+        The light-flanks-dark-crowns ramp exists to compensate for a diffuse facing
+        response this material no longer has, and its darker half is the half that
+        breaks the band. Dropping `vertexColors` also lightens the up-facing pucks -
+        the pylon caps and the collar top - which are the one part of this batch
+        that stays a flat face and keeps the original flat-face finding. They are
+        about 12 px deep here; if they read wrong the fix is lighter still, not
+        darker. `paintByFacing` in `dressBatch` is now writing an attribute nothing
+        reads and wants removing once this is confirmed in a frame.
+
+        It cannot bloom. `F` reaches 1 at the silhouette, and the brightest radiance
+        this material can see is `1.5543 x 0.7 x 1.0 = 1.088` against a measured
+        threshold of 1.45. The rim above p95 is 1.0 px on a 20 px strut, so it
+        antialiases into the silhouette rather than reading as a surface.
+
+        `strutMaps` rather than `trimMaps`, and on a metal the roughness map finally
+        has a lobe to break: a metal has no diffuse term, so the channel modulates
+        the whole surface instead of a near-Lambertian body under an unreachable
+        coat. `clearcoatRoughnessMap` is mandatory here rather than optional - at
+        green 156 the base reaches 0.229 against an unmapped coat at 0.10, a ratio
+        of 5.26 where 8 is needed. Mapped, it pins at 14.06.
       */}
+      {/*
+        REVERTED TO DIFFUSE, and the measurement is the reason.
+
+        `anodised()` was bound here on arithmetic that is correct as far as it
+        goes: a diffuse cylinder's p95/p5 linear ratio under this key is 6.297
+        against 3.603 permitted, the albedo cancels out of both ends, and Schlick
+        on a cylinder crushes the whole Fresnel rise into the outer tenth of the
+        width for a spread of 1.621. All true. The stream that computed it also
+        named the one term it could not compute - "what the members reflect across
+        their width" - and said to check a frame against it.
+
+        The frame says no. Measured on `hub-establishing` at high, a pylon mast
+        went from a mean near 0.33 to **0.0959 and 0.0905**, and a strut to 0.1785.
+        A metal has no diffuse term, so its value is entirely what it reflects, and
+        what these members face is this rig's dark side: a negative-fill card at
+        `#0b0f1a` and a background at `#243a52`. The spread narrowed exactly as
+        predicted and the LEVEL collapsed.
+
+        That breaks a written decision rather than a preference.
+        `97-decision-shadow-end.md` says: "No repeated vertical object may be the
+        darkest thing in the frame. Pylons, struts, catenary arcs and backdrop
+        monoliths are the frame, and the frame stays in the midground band, 0.20 to
+        0.38." Eight pylons at 0.09 are in the anchor band, which is the cage the
+        whole round-3 decision exists to prevent, and the frame's share below 0.20
+        more than doubled from 3.19% to 6.87%.
+
+        What survives from that work, because it is separable and good: the `strut`
+        decal kind with a 70 mm groove instead of `trim`'s sub-pixel 2.5 mm, the
+        cylinder and facing arithmetic in `materials.ts`, and the
+        `clearcoatRoughnessMap` binding that fixes a real two-lobe violation. Only
+        the metal is reverted, and it is one line.
+
+        Making metal work here needs the environment to give these members
+        something bright to reflect at a grazing angle, which is a light-rig change
+        and not a material one.
+      */}
+      {/*
+        The pylon masts, as masonry.
+
+        `aoMap` IS bound here, where it is not on the deck, and that asymmetry is
+        the one thing to understand about how the bond reads on each surface. The
+        deck's `aoMap` slot carries the baked hub lightmap on UV set 1, so its
+        joints have to be printed dark - see `BRICK_MORTAR_DROP`. Nothing bakes
+        the pylons, so the ORM pack's occlusion channel is free and the joints are
+        genuine depth: `ormFromHeight` floors occlusion at 0.55 and the 0.30 joint
+        reaches it, which is the deepest line the pack can carry.
+
+        The normals are also worth more here than on the deck for a reason the
+        deck's own measurement gives: relief does almost nothing on a surface
+        already facing the key, and everything on one that does not. A mast is a
+        vertical cylinder under a key 42.7 degrees overhead, so a bond cut into it
+        is being lit across the grain, which is the condition normal mapping is
+        for.
+      */}
+      <mesh geometry={pylonBatch} castShadow receiveShadow>
+        <meshPhysicalMaterial
+          {...masonry({ color: '#ffffff', vertexColors: true })}
+          {...(frameBrickMaps
+            ? {
+                normalMap: frameBrickMaps.normalMap,
+                roughnessMap: frameBrickMaps.roughnessMap,
+                aoMap: frameBrickMaps.aoMap,
+                roughness: frameBrickMaps.roughness,
+                // See the deck's binding above for what this flag is for.
+                map: new URLSearchParams(location.search).has('nobrickmap') ? null : frameBrickMaps.map,
+              }
+            : {})}
+        />
+      </mesh>
+
       <mesh geometry={dressBatch} castShadow receiveShadow>
         <meshPhysicalMaterial
           {...mattePlastic('#ffffff', { vertexColors: true })}
-          {...(trimMaps
+          {...(strutMaps
             ? {
-                normalMap: trimMaps.normalMap,
-                roughnessMap: trimMaps.roughnessMap,
-                aoMap: trimMaps.aoMap,
-                roughness: trimMaps.roughness,
+                normalMap: strutMaps.normalMap,
+                roughnessMap: strutMaps.roughnessMap,
+                aoMap: strutMaps.aoMap,
+                clearcoatRoughnessMap: strutMaps.clearcoatRoughnessMap,
+                roughness: strutMaps.roughness,
               }
             : {})}
         />
@@ -1291,22 +1551,44 @@ export function HubIsland() {
       )}
 
       {/*
-        The traces, now water, and still the hub's second reading of progress.
+        The traces, now polished steel inlaid in the deck.
 
-        **This reverses the decision recorded in the block it replaces**, which
-        cut the trace's clearcoat to 0.15 and raised its roughness specifically
-        to kill a specular streak, because "a trace inlaid in a board is not
-        wet." That was correct about a circuit trace. The object is reclassified,
-        so the streak is now the point rather than the defect - see
-        `waterMaterial.ts`, which carries the whole argument, every tunable, and
-        the arithmetic that keeps the effect under the bloom threshold.
+        **What was removed, and what went with it.** This was a custom water
+        shader - a wave field, a Blinn glint, a meniscus band and a Fresnel sky
+        mix - plus a pooled splash effect that fired when the character entered
+        the junction basin. The art direction replaces the liquid with metal, so
+        both are gone rather than disabled: `waterMaterial.ts`, `WaterTrace.tsx`,
+        `splash.ts` and `PoolSplash.tsx` are deleted, and the section profile they
+        were authored around is now `INLAY_SECTION` in `hubLayout.ts`.
 
-        Progress moves from an emissive ramp to the body's sky mix, so the trace
-        still brightens across the whole progression - display 0.212 empty to
-        0.358 complete - and both ends stay inside the midground band, which the
-        emissive ramp never managed.
+        **The geometry is unchanged and that is deliberate.** It is a flat-topped
+        section with a shallow crown, a shoulder and a rim that tucks under the
+        deck plane, swept along five paths and lathed into two discs, and every
+        one of those decisions survives the reclassification: an inlaid metal
+        strip wants exactly the same slightly domed top - it is what sweeps the
+        Fresnel across the width and stops the strip reading as a painted line -
+        and exactly the same buried rim, so the inlay meets its recess without a
+        visible edge. What is dropped is the `aShore` attribute's CONSUMER, not
+        the attribute: it is still written, still asserted in `hubLayout.test.ts`,
+        and nothing samples it. That is one float per vertex on a 14,240-triangle
+        batch, and removing it means touching every builder and every test in a
+        commit about materials.
+
+        **Progress is no longer read here.** The water carried the hub's second
+        progression read as a body sky-mix from display 0.212 to 0.358. Steel has
+        no equivalent lever that is not an emissive, and an emissive metal is a
+        contradiction. The totems and the Core node still carry progress, so this
+        is a reading lost rather than the only one; if it is wanted back, the
+        place to put it is the inlay's own emissive REVEAL - a thin strip beside
+        the metal rather than the metal itself - and not this material.
+
+        See `steel()` for the reflectance arithmetic, including the finding that
+        this batch is brighter than the deck it is set into everywhere, which is
+        the shape of handoff item 5 and has to be judged on a frame.
       */}
-      <WaterTrace geometry={traceBatch} completed={completedCount} total={hubLessons.length} />
+      <mesh geometry={traceBatch} castShadow receiveShadow>
+        <meshPhysicalMaterial {...steel()} />
+      </mesh>
 
       {/*
         The groves, as pale glass rather than as bright pink plastic.
@@ -1552,8 +1834,45 @@ function Colliders() {
     <RigidBody type="fixed" colliders={false}>
       {/* The Core. Each radius is 0.10 under its visual one, which is what keeps
           the decorative rim decorative. */}
-      {CORE_PUCKS.map(({ radius, base }) => (
+      {CORE_PUCKS.slice(0, -1).map(({ radius, base }) => (
         <CylinderCollider key={radius} args={[STEP / 2, radius - 0.1]} position={[0, base + STEP / 2, 0]} />
+      ))}
+
+      {/*
+        Puck C, as a floor plus a ring of twelve, because it now has a pool in it.
+
+        **This is the whole reason the pool is real geometry.** Rapier will not
+        follow a displaced mesh - `Terrain.tsx` carries the note and it is the reason
+        the lawn is geometrically flat - so a pool that existed only in the deck's
+        albedo would be water the character walks over at deck height, which is
+        exactly the defect the request is about. The visual recess in `basinLathe`
+        and this collider set are two halves of one change and neither is worth
+        anything alone.
+
+        The floor cylinder is deliberately WIDER than the pool's rim, out to the
+        ring polygon's circumradius, so the twelve lune-shaped gaps between a
+        12-gon and its inscribed circle are floored rather than left as air. See
+        `poolRingColliders` for why twelve sides is enough, why a heightfield and a
+        trimesh were both rejected, and why the polygon's 0.035 m of error cannot be
+        seen.
+
+        Neither piece needs an autostep or snap concession. `BODY.autostepHeight` is
+        0.50 against a 0.05 step, so climbing out is free and smooth, and
+        `BODY.snapToGroundDistance` is 0.50, so walking in is snapped rather than
+        becoming an airborne frame. Those two are why the step-down is felt as a dip
+        rather than as a stumble - they do not swallow it, they make it graceful.
+      */}
+      <CylinderCollider
+        args={[(STEP - POOL.depth) / 2, poolFloorRadius()]}
+        position={[0, CORE_PUCKS[2].base + (STEP - POOL.depth) / 2, 0]}
+      />
+      {poolRingColliders().map((box, i) => (
+        <CuboidCollider
+          key={`pool-${i}`}
+          args={box.halfExtents}
+          position={box.position}
+          rotation={box.rotation}
+        />
       ))}
       {SPURS.map((spur) => (
         <CylinderCollider
