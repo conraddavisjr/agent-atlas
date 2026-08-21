@@ -1,4 +1,4 @@
-import { CAMERA, JUMP, MOVEMENT } from './tuning'
+import { AIR_JUMP, CAMERA, JUMP, MOVEMENT } from './tuning'
 
 /**
  * The parts of the character controller that decide how movement FEELS,
@@ -20,6 +20,23 @@ export type VerticalState = {
   coyote: number
   /** Remaining jump-buffer window in seconds. */
   buffer: number
+  /**
+   * Air jumps still available before touching the ground again.
+   *
+   * Refilled on landing and NEVER in the air, which is the whole of what stops
+   * this from being flight.
+   */
+  airJumps: number
+  /**
+   * Seconds of thruster burn left, counting down. Zero means not burning.
+   *
+   * It is a countdown rather than an elapsed time because everything that reads
+   * it wants "how much is left" - gravity wants to know whether to be reduced,
+   * and the VFX wants a 1-to-0 ramp it can shape without knowing the duration.
+   */
+  thrust: number
+  /** Seconds since leaving the ground, for `AIR_JUMP.lockout`. Zero while grounded. */
+  air: number
 }
 
 export type VerticalInput = {
@@ -32,21 +49,29 @@ export type VerticalInput = {
 }
 
 export function initialVerticalState(): VerticalState {
-  return { vy: 0, coyote: 0, buffer: 0 }
+  return { vy: 0, coyote: 0, buffer: 0, airJumps: AIR_JUMP.count, thrust: 0, air: 0 }
 }
 
 /**
  * Advances vertical movement by one fixed step.
  *
  * Order matters here and is not arbitrary:
- *   timers -> jump -> variable-height cut -> gravity -> clamp
+ *   timers -> ground jump -> air jump -> variable-height cut -> gravity -> clamp
  * Applying gravity before the jump would eat part of the launch velocity on the
  * frame the jump fires, making jump height depend on where in the step it landed.
+ *
+ * ## Where the air jump sits in that order, and why it is after the ground jump
+ *
+ * The ground jump is tried first and consumes the buffer when it fires, so a
+ * single press can never spend both. That ordering is the entire guard: with the
+ * air jump first, a press arriving during coyote time would take an air jump
+ * while a perfectly good ground jump was available, and the player would lose the
+ * double for the rest of the arc without ever seeing why.
  */
 export function stepVertical(
   state: VerticalState,
   input: VerticalInput,
-): VerticalState & { jumped: boolean } {
+): VerticalState & { jumped: boolean; airJumped: boolean } {
   const { grounded, jumpPressed, jumpHeld, dt } = input
 
   // Coyote time: refreshed while grounded, counted down once airborne, so a jump
@@ -57,10 +82,26 @@ export function stepVertical(
   // landing fires on contact rather than being dropped.
   const buffer = jumpPressed ? JUMP.bufferTime : Math.max(0, state.buffer - dt)
 
+  // Time since leaving the ground, which `AIR_JUMP.lockout` is measured against.
+  const air = grounded ? 0 : state.air + dt
+
   let vy = state.vy
   let nextCoyote = coyote
   let nextBuffer = buffer
   let jumped = false
+  let airJumped = false
+
+  /*
+    Refilled on landing and never in the air.
+
+    On `grounded` rather than on `jumped`, so walking off a ledge and falling
+    without ever jumping still leaves the air jump available - which is what a
+    player expects from a move they think of as "the boost" rather than as "the
+    second half of a jump".
+  */
+  let airJumps = grounded ? AIR_JUMP.count : state.airJumps
+
+  let thrust = Math.max(0, state.thrust - dt)
 
   if (buffer > 0 && coyote > 0) {
     vy = JUMP.velocity
@@ -68,19 +109,48 @@ export function stepVertical(
     // Both windows are consumed so a single press cannot produce two jumps.
     nextBuffer = 0
     nextCoyote = 0
+    // A ground jump ends any burn still running from the previous arc, which can
+    // happen when a very short hop lands mid-thrust.
+    thrust = 0
+  } else if (jumpPressed && !grounded && airJumps > 0 && air >= AIR_JUMP.lockout) {
+    /*
+      `jumpPressed` rather than the buffer, and that asymmetry is deliberate.
+
+      Buffering exists so a press slightly BEFORE landing is not dropped, which
+      is a problem the ground jump has and the air jump does not - there is no
+      surface to arrive at. Reading the buffer here would instead make a press
+      fire twice: once as a buffered ground jump on landing and once in the air on
+      the way up, from one keystroke.
+    */
+    vy = JUMP.velocity * AIR_JUMP.velocityFraction
+    airJumped = true
+    airJumps -= 1
+    thrust = AIR_JUMP.thrustTime
+    nextBuffer = 0
   }
 
   const rising = vy > 0
 
   // Variable jump height: releasing early cuts the climb short, turning one jump
   // into a range of heights.
-  if (rising && !jumpHeld && !jumped) {
+  if (rising && !jumpHeld && !jumped && !airJumped) {
     vy *= JUMP.cutMultiplier
   }
 
-  // Falling is heavier than rising. True projectile motion feels sluggish in
-  // games; the asymmetry is what reads as snappy.
-  const gravity = vy > 0 ? JUMP.gravity : JUMP.gravity * JUMP.fallGravityMultiplier
+  /*
+    Falling is heavier than rising. True projectile motion feels sluggish in
+    games; the asymmetry is what reads as snappy.
+
+    The thruster burn scales the RISING gravity only. Leaving the fall alone is
+    what keeps the descent after the burn identical to the first jump's, so the
+    move adds height and hang time without turning the character into a balloon
+    on the way down - and it means a burn that outlives the apex stops mattering
+    the instant the character starts falling, with no discontinuity to tune.
+  */
+  const gravity =
+    vy > 0
+      ? JUMP.gravity * (thrust > 0 ? AIR_JUMP.thrustGravity : 1)
+      : JUMP.gravity * JUMP.fallGravityMultiplier
   vy += gravity * dt
   vy = Math.max(vy, JUMP.maxFallSpeed)
 
@@ -90,7 +160,7 @@ export function stepVertical(
     vy = -1
   }
 
-  return { vy, coyote: nextCoyote, buffer: nextBuffer, jumped }
+  return { vy, coyote: nextCoyote, buffer: nextBuffer, airJumps, thrust, air, jumped, airJumped }
 }
 
 /**

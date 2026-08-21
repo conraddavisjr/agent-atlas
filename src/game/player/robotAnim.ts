@@ -67,6 +67,36 @@ export type RobotAnimState = {
   /** Actual d(facing)/dt, so a turn snap is detectable without differentiating in the solver. */
   turnRate: number
 
+  /**
+   * Thruster burn remaining, in SECONDS, counting down. Zero means not burning.
+   *
+   * Published rather than recomputed because the beams and the physics have to
+   * agree exactly: the burn is what reduces gravity, so a VFX that ran on its own
+   * timer would drift out of step with the lift it is supposed to be causing, and
+   * the two would disagree by a frame or two in a way that reads as the effect
+   * being decorative. There is one clock and this is it.
+   *
+   * Seconds rather than a normalised 0-to-1 ramp, so a consumer can shape its own
+   * curve against `AIR_JUMP.thrustTime` without this field having to guess which
+   * curve. `FootThrusters` wants a fast attack and a slow release; the pose solver
+   * wants something else.
+   */
+  thrust: number
+  /**
+   * Seconds since the burn STARTED, counting up and past its end.
+   *
+   * The VFX channel, where `thrust` is the physics one, and the two exist
+   * separately because the flame deliberately outlives the force: the gravity cut
+   * ends at `AIR_JUMP.thrustTime` and the beam holds for a further 110 ms so it
+   * shuts down rather than vanishing in a frame. See `THRUSTER.decay`.
+   *
+   * Gating a beam on `thrust > 0` makes that impossible to express, which is the
+   * whole reason this field is here rather than the VFX doing arithmetic on the
+   * other one. It is reset by the air jump and left to run afterwards; nothing
+   * stops it, because `thrusterEnvelope` returns zero past the total life and an
+   * ever-growing float is cheaper than a branch that has to know when to stop.
+   */
+  thrustAge: number
   /** Seconds since leaving the ground, 0 while grounded. */
   airTime: number
   /** Seconds since landing, 0 while airborne. */
@@ -110,6 +140,8 @@ export function createRobotAnimState(): RobotAnimState {
     squashSeq: 0,
     facing: 0,
     turnRate: 0,
+    thrust: 0,
+    thrustAge: Infinity,
     airTime: 0,
     groundTime: 0,
     worldX: 0,
@@ -153,6 +185,16 @@ export const EV = {
   TotemFocus: 8,
   Bonk: 9,
   TurnSnap: 10,
+  /**
+   * The second jump fired. Distinct from `Jump` rather than a flag on it.
+   *
+   * A consumer that wants both gets both by listening for two kinds, which is one
+   * extra case in a switch. A consumer that wants only the boost - the thruster
+   * flash, the different launch sound - would otherwise have to read the payload
+   * to find out whether the event was for it, and every such consumer would have
+   * to agree on which payload slot carried the flag.
+   */
+  AirJump: 11,
 } as const
 export type AnimEventKind = (typeof EV)[keyof typeof EV]
 

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import type { VerticalState } from './movement'
 import {
   approach,
   approachAngle,
@@ -10,7 +11,7 @@ import {
   stepVertical,
   wrapAngle,
 } from './movement'
-import { CAMERA, JUMP, MOVEMENT } from './tuning'
+import { AIR_JUMP, CAMERA, JUMP, MOVEMENT } from './tuning'
 
 const DT = 1 / 60
 
@@ -20,7 +21,7 @@ function run(
   steps: number,
   input: { grounded: boolean; jumpPressed?: boolean; jumpHeld?: boolean },
 ) {
-  let s = { ...state, jumped: false }
+  let s = { ...state, jumped: false, airJumped: false }
   for (let i = 0; i < steps; i++) {
     s = stepVertical(s, {
       grounded: input.grounded,
@@ -59,7 +60,7 @@ describe('jumping', () => {
 describe('coyote time', () => {
   it('allows a jump shortly after walking off a ledge', () => {
     // Grounded first so the coyote window is charged.
-    let s = { ...run(initialVerticalState(), 1, { grounded: true }), jumped: false }
+    let s = { ...run(initialVerticalState(), 1, { grounded: true }), jumped: false, airJumped: false }
     expect(s.coyote).toBeCloseTo(JUMP.coyoteTime)
 
     // Airborne for 3 steps (50ms), still inside the 100ms window.
@@ -70,14 +71,22 @@ describe('coyote time', () => {
     expect(jump.jumped).toBe(true)
   })
 
-  it('refuses a jump once the window has expired', () => {
-    let s = { ...run(initialVerticalState(), 1, { grounded: true }), jumped: false }
+  it('refuses a GROUND jump once the window has expired, and gives an air jump instead', () => {
+    let s = { ...run(initialVerticalState(), 1, { grounded: true }), jumped: false, airJumped: false }
     // 10 steps is ~167ms, comfortably past the 100ms window.
     s = run(s, 10, { grounded: false })
     expect(s.coyote).toBe(0)
 
     const jump = stepVertical(s, { grounded: false, jumpPressed: true, jumpHeld: true, dt: DT })
     expect(jump.jumped).toBe(false)
+    /*
+      This assertion is new and it is the point of renaming the test. Before the
+      double jump a press past the coyote window did nothing at all, and "jumped
+      is false" was the whole story. It now does something - it spends the air
+      jump - so a test that only checked `jumped` would keep passing while
+      describing behaviour the game no longer has.
+    */
+    expect(jump.airJumped).toBe(true)
   })
 
   it('does not grant coyote time to a character that was never grounded', () => {
@@ -98,7 +107,7 @@ describe('jump buffering', () => {
     expect(s.buffer).toBeGreaterThan(0)
 
     // Two more airborne steps, then touch down inside the buffer window.
-    s = { ...run(s, 2, { grounded: false, jumpHeld: true }), jumped: false }
+    s = { ...run(s, 2, { grounded: false, jumpHeld: true }), jumped: false, airJumped: false }
     const landing = stepVertical(s, {
       grounded: true, jumpPressed: false, jumpHeld: true, dt: DT,
     })
@@ -110,7 +119,7 @@ describe('jump buffering', () => {
       grounded: false, jumpPressed: true, jumpHeld: true, dt: DT,
     })
     // 10 steps is ~167ms, past the 120ms buffer.
-    s = { ...run(s, 10, { grounded: false, jumpHeld: true }), jumped: false }
+    s = { ...run(s, 10, { grounded: false, jumpHeld: true }), jumped: false, airJumped: false }
     expect(s.buffer).toBe(0)
 
     const landing = stepVertical(s, {
@@ -120,12 +129,25 @@ describe('jump buffering', () => {
   })
 })
 
+/**
+ * A `VerticalState` from the fields a test actually cares about.
+ *
+ * Added when the state grew `airJumps`, `thrust` and `air` for the double jump,
+ * and it is worth having for its own sake: every partial literal in this file was
+ * a place a new field would break a test that had nothing to do with it, which
+ * is friction that discourages adding state rather than encouraging it.
+ */
+const state = (over: Partial<VerticalState> = {}): VerticalState => ({
+  ...initialVerticalState(),
+  ...over,
+})
+
 describe('variable jump height', () => {
   it('reaches a lower apex when the button is released early', () => {
     const apex = (holdSteps: number) => {
       let s = { ...stepVertical(initialVerticalState(), {
         grounded: true, jumpPressed: true, jumpHeld: true, dt: DT,
-      }), jumped: false }
+      }), jumped: false, airJumped: false }
       let height = 0
       for (let i = 0; i < 120; i++) {
         s = stepVertical(s, {
@@ -148,10 +170,10 @@ describe('variable jump height', () => {
 
 describe('gravity', () => {
   it('falls faster than it rises', () => {
-    const rising = stepVertical({ vy: 5, coyote: 0, buffer: 0 }, {
+    const rising = stepVertical(state({ vy: 5 }), {
       grounded: false, jumpPressed: false, jumpHeld: true, dt: DT,
     })
-    const falling = stepVertical({ vy: -5, coyote: 0, buffer: 0 }, {
+    const falling = stepVertical(state({ vy: -5 }), {
       grounded: false, jumpPressed: false, jumpHeld: true, dt: DT,
     })
     const risingDelta = Math.abs(rising.vy - 5)
@@ -518,5 +540,204 @@ describe('manual orbit suppresses realignment for a whole hold, not one frame', 
     */
     const offsetY = CAMERA.height + Math.sin(CAMERA.minPitch) * CAMERA.distance
     expect(offsetY).toBeGreaterThan(0)
+  })
+})
+
+
+describe('the second jump, and the two things the brief asks it for', () => {
+  /**
+   * Runs a whole arc from a standing jump and reports what it did.
+   *
+   * `airJumpAt` is a step index, or null for a single jump. The arc ends when the
+   * character comes back down through its launch height, which is the honest
+   * definition of airtime for a move whose whole point is to extend it.
+   */
+  const arc = (airJumpAt: number | null) => {
+    let s = { ...stepVertical(initialVerticalState(), {
+      grounded: true, jumpPressed: true, jumpHeld: true, dt: DT,
+    }), jumped: false, airJumped: false }
+
+    let height = 0
+    let apex = 0
+    let airtime = DT
+    let burned = 0
+
+    for (let i = 0; i < 400; i++) {
+      s = stepVertical(s, {
+        grounded: false,
+        jumpPressed: i === airJumpAt,
+        jumpHeld: true,
+        dt: DT,
+      })
+      height += s.vy * DT
+      apex = Math.max(apex, height)
+      airtime += DT
+      if (s.thrust > 0) burned += DT
+      if (height <= 0) break
+    }
+    return { apex, airtime, burned }
+  }
+
+  it('goes higher AND stays up longer, which is the whole brief', () => {
+    /*
+      "cause them to move up higher and prolong their air time in their jump."
+      Two claims, and they are separable: an impulse alone raises the apex and a
+      gravity cut alone extends the hang. Asserting both is what stops a future
+      tuning pass from trading one away without noticing.
+
+      The air jump is taken near the apex of the first, which is where a player
+      naturally presses.
+    */
+    const single = arc(null)
+    const doubled = arc(20)
+
+    expect(doubled.apex).toBeGreaterThan(single.apex)
+    expect(doubled.airtime).toBeGreaterThan(single.airtime)
+
+    // And by a margin worth having. A second jump that adds five per cent is a
+    // bug report waiting to happen, not a mechanic.
+    expect(doubled.apex).toBeGreaterThan(single.apex * 1.4)
+    expect(doubled.airtime).toBeGreaterThan(single.airtime * 1.25)
+  })
+
+  it('burns for the authored time and no longer', () => {
+    const doubled = arc(20)
+    // Sampled at DT, so it lands within one step of the authored duration.
+    expect(doubled.burned).toBeGreaterThan(AIR_JUMP.thrustTime - DT * 2)
+    expect(doubled.burned).toBeLessThan(AIR_JUMP.thrustTime + DT * 2)
+  })
+
+  it('gives the same result wherever in the arc it is pressed, by SETTING velocity', () => {
+    /*
+      The failure this prevents is the one players describe as "sometimes it does
+      not work". If the second jump ADDED to the current velocity, a press on the
+      way up would be worth more than a press on the way down from the same
+      button, and the difference would be largest exactly where players actually
+      press - around the apex, where velocity crosses zero.
+
+      Pressed on the rise and pressed well into the fall, the peak velocity
+      reached after the press is identical.
+    */
+    const peakAfter = (at: number) => {
+      let s = { ...stepVertical(initialVerticalState(), {
+        grounded: true, jumpPressed: true, jumpHeld: true, dt: DT,
+      }), jumped: false, airJumped: false }
+      let peak = -Infinity
+      for (let i = 0; i < 120; i++) {
+        s = stepVertical(s, { grounded: false, jumpPressed: i === at, jumpHeld: true, dt: DT })
+        if (i >= at) peak = Math.max(peak, s.vy)
+      }
+      return peak
+    }
+    expect(peakAfter(15)).toBeCloseTo(peakAfter(45), 10)
+  })
+})
+
+describe('the second jump cannot become flight', () => {
+  const airborne = (over: Partial<VerticalState> = {}) =>
+    state({ air: AIR_JUMP.lockout + 1, ...over })
+
+  it('spends exactly the authored number of air jumps before touching down', () => {
+    let s = { ...airborne(), jumped: false, airJumped: false }
+    let taken = 0
+    // Press on every one of sixty airborne steps. A player mashing the key is the
+    // input this has to survive.
+    for (let i = 0; i < 60; i++) {
+      s = stepVertical(s, { grounded: false, jumpPressed: true, jumpHeld: true, dt: DT })
+      if (s.airJumped) taken += 1
+    }
+    expect(taken).toBe(AIR_JUMP.count)
+  })
+
+  it('refills on LANDING rather than on jumping', () => {
+    /*
+      On `grounded`, so walking off a ledge and falling without ever jumping still
+      leaves the air jump available - which is what a player expects from a move
+      they think of as "the boost" rather than as "the second half of a jump".
+    */
+    let s = { ...airborne({ airJumps: 0 }), jumped: false, airJumped: false }
+    expect(stepVertical(s, { grounded: false, jumpPressed: true, jumpHeld: true, dt: DT }).airJumped)
+      .toBe(false)
+
+    s = { ...stepVertical(s, { grounded: true, jumpPressed: false, jumpHeld: false, dt: DT }),
+      jumped: false, airJumped: false }
+    expect(s.airJumps).toBe(AIR_JUMP.count)
+  })
+
+  it('is available after walking off a ledge without jumping at all', () => {
+    let s = { ...run(initialVerticalState(), 1, { grounded: true }), jumped: false, airJumped: false }
+    // Long enough for the coyote window to lapse, so this cannot be a ground jump.
+    s = run(s, 20, { grounded: false })
+    expect(s.coyote).toBe(0)
+    const jump = stepVertical(s, { grounded: false, jumpPressed: true, jumpHeld: true, dt: DT })
+    expect(jump.airJumped).toBe(true)
+  })
+
+  it('refuses a press inside the lockout, so a double tap cannot eat both jumps', () => {
+    /*
+      The mirror of coyote time. That one forgives a press slightly too late; this
+      one forgives a press slightly too early by making it impossible rather than
+      wasteful - a fast double tap would otherwise spend the air jump three frames
+      after takeoff, and the player would get one slightly higher jump instead of
+      two and no indication why.
+    */
+    const s = { ...state({ air: AIR_JUMP.lockout * 0.5 }), jumped: false, airJumped: false }
+    expect(stepVertical(s, { grounded: false, jumpPressed: true, jumpHeld: true, dt: DT }).airJumped)
+      .toBe(false)
+    const past = { ...state({ air: AIR_JUMP.lockout + 0.001 }), jumped: false, airJumped: false }
+    expect(stepVertical(past, { grounded: false, jumpPressed: true, jumpHeld: true, dt: DT }).airJumped)
+      .toBe(true)
+  })
+
+  it('never spends a ground jump and an air jump on one press', () => {
+    /*
+      The ordering guard. A press arriving during coyote time has a perfectly good
+      ground jump available, and if the air branch ran first it would take the air
+      jump instead and the player would lose the double for the rest of the arc.
+    */
+    const s = { ...state({ coyote: JUMP.coyoteTime, air: AIR_JUMP.lockout + 1 }),
+      jumped: false, airJumped: false }
+    const out = stepVertical(s, { grounded: false, jumpPressed: true, jumpHeld: true, dt: DT })
+    expect(out.jumped).toBe(true)
+    expect(out.airJumped).toBe(false)
+    expect(out.airJumps).toBe(AIR_JUMP.count)
+  })
+})
+
+describe('the thruster burn touches the rise and leaves the fall alone', () => {
+  it('reduces gravity while rising and burning', () => {
+    const burning = stepVertical(state({ vy: 5, thrust: 0.2 }), {
+      grounded: false, jumpPressed: false, jumpHeld: true, dt: DT,
+    })
+    const plain = stepVertical(state({ vy: 5, thrust: 0 }), {
+      grounded: false, jumpPressed: false, jumpHeld: true, dt: DT,
+    })
+    expect(burning.vy).toBeGreaterThan(plain.vy)
+  })
+
+  it('leaves the fall exactly as heavy as it was', () => {
+    /*
+      Deliberate, and the reason the burn scales the rising gravity only: the
+      descent after the boost stays the same snappy fall the first jump has, so
+      the move adds height and hang without turning the character into a balloon
+      on the way down. It also means a burn that outlives the apex stops mattering
+      the instant the character starts falling, with no discontinuity to tune.
+    */
+    const burning = stepVertical(state({ vy: -5, thrust: 0.2 }), {
+      grounded: false, jumpPressed: false, jumpHeld: true, dt: DT,
+    })
+    const plain = stepVertical(state({ vy: -5, thrust: 0 }), {
+      grounded: false, jumpPressed: false, jumpHeld: true, dt: DT,
+    })
+    expect(burning.vy).toBeCloseTo(plain.vy, 12)
+  })
+
+  it('does not let the variable-height cut eat the boost on the frame it fires', () => {
+    // A player who taps rather than holds still gets the full second jump on the
+    // frame it fires, exactly as the ground jump does.
+    const s = state({ air: AIR_JUMP.lockout + 1, vy: 1 })
+    const out = stepVertical(s, { grounded: false, jumpPressed: true, jumpHeld: false, dt: DT })
+    expect(out.airJumped).toBe(true)
+    expect(out.vy).toBeGreaterThan(JUMP.velocity * AIR_JUMP.velocityFraction * 0.9)
   })
 })

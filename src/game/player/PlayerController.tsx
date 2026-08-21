@@ -9,7 +9,7 @@ import {
   type RapierRigidBody,
 } from '@react-three/rapier'
 import { Vector3, type Group } from 'three'
-import { BODY, JUMP, MOVEMENT, REVIVAL, SQUASH } from './tuning'
+import { AIR_JUMP, BODY, JUMP, MOVEMENT, REVIVAL, SQUASH } from './tuning'
 import { SHADOW } from './animTuning'
 import { headingVector, stepDrive, stepHorizontal, stepVertical } from './movement'
 import { RobotModel } from './RobotModel'
@@ -94,6 +94,15 @@ export function PlayerController({
   const velocity = useRef(new Vector3(0, 0, 0))
   const coyoteTimer = useRef(0)
   const bufferTimer = useRef(0)
+  /*
+    The double jump's three, kept as refs beside the other two rather than folded
+    into one object, because `stepVertical` is a pure function of a state it is
+    HANDED and this component is the thing that owns the mutable copy. One ref per
+    field is what makes each assignment below traceable to the field it came from.
+  */
+  const airJumps = useRef<number>(AIR_JUMP.count)
+  const thrustTimer = useRef(0)
+  const airTimer = useRef(0)
   const wasGrounded = useRef(true)
   const facing = useRef(0)
 
@@ -269,12 +278,22 @@ export function PlayerController({
     // behaviour is unit tested. Keeping a second copy of the rules inline here
     // would mean the tests verify logic the game does not actually run.
     const vertical = stepVertical(
-      { vy: velocity.current.y, coyote: coyoteTimer.current, buffer: bufferTimer.current },
+      {
+        vy: velocity.current.y,
+        coyote: coyoteTimer.current,
+        buffer: bufferTimer.current,
+        airJumps: airJumps.current,
+        thrust: thrustTimer.current,
+        air: airTimer.current,
+      },
       { grounded, jumpPressed, jumpHeld, dt },
     )
     velocity.current.y = vertical.vy
     coyoteTimer.current = vertical.coyote
     bufferTimer.current = vertical.buffer
+    airJumps.current = vertical.airJumps
+    thrustTimer.current = vertical.thrust
+    airTimer.current = vertical.air
 
     const t0 = body.translation()
 
@@ -297,6 +316,34 @@ export function PlayerController({
         launch, bufferTimer.current > 0 ? 1 : 0,
       )
 
+      if (import.meta.env.DEV) debug.current.jumps += 1
+    }
+
+    /*
+      The second jump, and the thruster burn it lights.
+
+      A separate block from the ground jump above rather than a branch inside it,
+      because almost nothing is shared: there is no takeoff stretch from a surface
+      the character is not touching, the squash profile would be wrong, and the
+      event is a different kind. What IS shared is the payload convention, so the
+      two read the same way at the consumer.
+
+      `EV.AirJump` carries the burn's own duration in the first payload slot,
+      where `EV.Jump` carries a normalised launch. A consumer that wants to run a
+      one-shot flash needs to know how long the sustain after it will last, and
+      reading `AIR_JUMP.thrustTime` at the consumer would be a second copy of a
+      tunable that has to match this one.
+    */
+    if (vertical.airJumped) {
+      pushSquash(anim.current, SQUASH.takeoffStretch, 'takeoff')
+      // The VFX clock, restarted here and nowhere else. See `thrustAge`.
+      anim.current.thrustAge = 0
+      pushEvent(
+        anim.current.events, EV.AirJump, anim.current.groundTime,
+        t0.x, t0.y - 0.7, t0.z,
+        0, 1, 0,
+        AIR_JUMP.thrustTime, vertical.airJumps,
+      )
       if (import.meta.env.DEV) debug.current.jumps += 1
     }
 
@@ -417,6 +464,10 @@ export function PlayerController({
     anim.current.velY = velocity.current.y
     anim.current.velZ = velocity.current.z
     anim.current.reviving = reviving.current
+    // Copied from the solver rather than integrated here, for the reason the
+    // field's own doc gives: one clock drives both the lift and the beams.
+    anim.current.thrust = thrustTimer.current
+    anim.current.thrustAge += dt
     if (grounded) {
       anim.current.airTime = 0
       anim.current.groundTime += dt
