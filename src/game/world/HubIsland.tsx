@@ -196,8 +196,37 @@ import {
  * `frameSide` is a local constant only because `palette.ts` belongs to another
  * hand this pass; it wants to be `palette.bandFrameSide`, and it must not carry
  * a `band()` assertion when it gets there.
+ *
+ * ## `#6e7e9e` to `#6a7998`, and it is a SHIFT rather than a compression
+ *
+ * MEASURED, `hub-character`, high, buffer 1512x823, a clean pylon shaft at
+ * 716,110,28,110 with the brick albedo bound: p5 **0.2194**, p95 **0.3912**,
+ * against a midground band of 0.20 to 0.38. So the bright end was 0.011 over.
+ *
+ * The obvious reading is that a diffuse cylinder is too contrasty to hold a band,
+ * which is what `materials.ts` says about this exact case - "a diffuse cylinder's
+ * p95-to-p5 LINEAR ratio under this key is 6.297 and midground permits 3.603".
+ * **The frame says otherwise and it is worth being precise about why.** That 6.297
+ * is the bare geometric case. What actually ships has ambient fill, a baked-in
+ * albedo ramp from `paintByFacing`, and now an albedo map, and the measured ratio
+ * is `0.12678 / 0.03947 = 3.212` - comfortably INSIDE the 3.603 the band permits.
+ *
+ * So the distribution fits and was simply positioned too high, and the correct
+ * lever is the albedo, which scales both ends together. A linear scale of 0.92
+ * lands p5 at 0.2100 and p95 at 0.3760.
+ *
+ * The margins are deliberately lopsided - 0.010 at the bottom against 0.004 at
+ * the top - because the two ends are not equally dangerous.
+ * `97-decision-shadow-end.md` closes the FLOOR to repeated verticals by name and
+ * says nothing comparable about the ceiling, so the end with a written prohibition
+ * on it gets the larger share of the slack.
+ *
+ * This also moves the Core struts and the arc flanks, which share the constant,
+ * and that is a fix rather than a side effect: the dress-batch note below records
+ * a near strut at a mean of 0.383, which was over the band top for the same reason
+ * and by the same amount.
  */
-const FRAME_SIDE = '#6e7e9e'
+const FRAME_SIDE = '#6a7998'
 
 const BAND = {
   /** Band 1. Deck and puck tops. Luma 0.735. */

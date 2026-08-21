@@ -2991,10 +2991,24 @@ describe('the cape ribbon', () => {
     }
     v /= 6
     expect(v).toBeGreaterThan(0)
-    // Cross-section area 0.0100 m^2 over 0.72 m of length with the flare, so
-    // about 0.0076 m^3. Pinned so a change to the section has to look at it.
-    expect(v).toBeGreaterThan(0.006)
-    expect(v).toBeLessThan(0.009)
+    /*
+      Pinned so a change to the section has to look at it, and it did its job: the
+      cape was thickened from 0.030 to 0.045 to make its edge resolve, and this
+      ceiling is what reported it.
+
+      Re-derived rather than widened. The section is `width * thickness` less four
+      corner triangles of leg `bevel`:
+
+        0.34 * 0.045 - 4 * (0.013^2 / 2) = 0.015300 - 0.000338 = 0.014962 m^2
+
+      over 0.72 m of length at a mean width factor of about 1.05 from the flare,
+      which is 0.01131 m^3. The measured value is 0.011323.
+
+      The same arithmetic on the old section gives 0.0100 m^2 and about 0.0076 m^3,
+      which is what the previous bounds were written against.
+    */
+    expect(v).toBeGreaterThan(0.010)
+    expect(v).toBeLessThan(0.013)
   })
 
   it('faces the outer surface away from the body at rest', () => {

@@ -1133,9 +1133,56 @@ export const BACKPACK_BLOCK = {
  */
 export const CAPE_PANEL = {
   width: 0.34,
-  thickness: 0.03,
-  bevel: 0.01,
-  z: -0.108,
+  /**
+   * 0.045, up from 0.030, and the reason is that the thickness was REAL and did
+   * not READ.
+   *
+   * Both `99-handoff.md` item 4 and `91-design-critique.md` describe this part as
+   * a flat zero-thickness quad still carrying round 1's F4. Neither is true of
+   * what is built: the ribbon is a closed section of eight flats with ten distinct
+   * normals and a measured rest bounding box of 0.374 x 0.720 x 0.030. Both
+   * descriptions were written from a screenshot, and the screenshot was right
+   * about the READ.
+   *
+   * MEASURED on why. At `hub-character` the character spans about 200 px for a
+   * metre, so 0.030 of edge is **6 screen pixels** split across four flats - two
+   * chamfers of 0.010, a 0.010 face between them, and the side. Each strip is
+   * therefore 1 to 2 px and they all sit at similar angles to the key, so they
+   * antialias into one line of almost the face's own value. A moulded edge that
+   * cannot be resolved into more than one tone is a drawn edge.
+   *
+   * 0.045 puts the edge at 9 px and the bevel at 0.013, which leaves 0.019 of flat
+   * between the two chamfers - so the three strips are 2.6, 3.8 and 2.6 px and can
+   * separate. It is 13% of the cape's width, against 8.8% before, which is a
+   * heavier vinyl rather than a different object.
+   *
+   * `z` moves back by exactly half the increase so `capeFront` does not move, and
+   * the backpack port clearance the tests pin is untouched. See `z`.
+   */
+  thickness: 0.045,
+  /**
+   * 0.013, scaled with the thickness so the section keeps its proportions.
+   *
+   * A chamfer is what makes an edge catch the key as a bright line, and the wider
+   * it is the more pixels that line gets. Held at 0.010 on a 0.045 section it
+   * would be 22% of the thickness where it was 33%, so the edge would read as one
+   * broad flat with two hairlines instead of as a moulded lip.
+   */
+  bevel: 0.013,
+  /**
+   * -0.1155, moved back by half the thickness increase.
+   *
+   * `z` is the section's CENTRE, so a thicker cape at a fixed `z` grows toward the
+   * backpack as well as away from it - and the front face is the constrained one.
+   * `robotGeometry.test.ts` pins it against the port's outermost ring with 0.008 of
+   * clearance, and the reason that assertion exists is that at a previous `z` the
+   * cape sat 0.002 INSIDE the bezel, which renders perfectly and casts a clean
+   * shadow while being wrong.
+   *
+   * `-0.108 - 0.0075 = -0.1155` holds `z + thickness / 2` at -0.093 exactly, so
+   * the clearance is bit-for-bit what it was and only the outer face moves.
+   */
+  z: -0.1155,
 } as const
 
 /**
@@ -1230,9 +1277,18 @@ export const CAPE_RIBBON = {
    * cape simply stops casting - the moment it swings outside it. Recomputing per
    * frame instead would cost a pass over every vertex and would make the shadow
    * frustum jitter. So the sphere is sized for the worst pose the chain can
-   * reach: 0.72 of length plus 0.110 of thickness offset is 0.830 of reach in any
-   * direction, and 0.187 of half-width across it, so `hypot(0.830, 0.187)` is
-   * 0.851. 0.90 from the socket carries it with margin.
+   * reach: 0.72 of length plus the section's own offset in any direction, and
+   * 0.187 of half-width across it.
+   *
+   * **Re-derived when the cape was thickened to 0.045.** The offset is
+   * `|z| + thickness / 2`, which went from 0.110 to 0.138, so the reach is 0.858
+   * rather than 0.830 and `hypot(0.858, 0.187)` is **0.878**. Still inside 0.90,
+   * by 0.022 rather than by 0.049.
+   *
+   * That margin is now the thing to watch rather than a formality: this radius is
+   * what keeps the cape inside the SHADOW frustum, and the failure when it stops
+   * is that the cape silently stops casting rather than that anything looks
+   * wrong. Any further thickening has to move this number with it.
    */
   cullRadius: 0.9,
 } as const
