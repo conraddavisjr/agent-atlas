@@ -1,16 +1,33 @@
 import { useMemo, useRef, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
-import { ConeGeometry, TorusGeometry, Vector3, type Group } from 'three'
+import { ShapeGeometry, TorusGeometry, Vector2, Vector3, type Group } from 'three'
 import { GLOW, emissive, mattePlastic, plastic, shell } from '@/art/materials'
 import { palette } from '@/art/palette'
-import { CAPE, createCapeRibbon, skinCapeRibbon } from './capeRibbon'
-import { WIZARD_HAT, hatBends } from './wizardHat'
+import { latheProfile, starShape } from '@/art/geometry'
+import { CAPE, createCapeRibbon, skinCapeRibbon, taperedSuperellipsoid } from './capeRibbon'
+import {
+  HAT_PROFILE,
+  HAT_STARS,
+  WIZARD_HAT,
+  hatBends,
+  hatRadiusAt,
+  hatSlopeAt,
+} from './wizardHat'
+import {
+  EYE,
+  FACE_PLATE,
+  INSTRUCTOR_HEAD,
+  MOUSTACHE,
+  eyeCentre,
+  facePlateZ,
+  moustacheHalf,
+} from './instructorFace'
 import { INSTRUCTOR_ENTER, INSTRUCTOR_EXIT, INSTRUCTOR_HOME } from './stage'
 import { instructorPose } from './instructorPath'
 import type { TrainingState } from './trainingMachine'
 
 /**
- * The instructor: a robot head in a wizard hat, with a moustache.
+ * The instructor: a robot head in a wizard hat, with a large moustache.
  *
  * ## Why it is a head and not a character
  *
@@ -20,25 +37,42 @@ import type { TrainingState } from './trainingMachine'
  * A head that flies is a different KIND of thing, which is what makes it read as
  * an instructor rather than as another player.
  *
+ * ## What the second pass fixed, because it was not cosmetic
+ *
+ * The first version was three defects wearing a hat, and each of them was
+ * invisible in the code and obvious on the screen:
+ *
+ * - **The face was inside the visor.** A 0.245 sphere stood in for a face plate
+ *   and both eye lenses sat 0.1665 from its centre with a radius of 0.045 - fully
+ *   enclosed, on every frame. The moustache was mostly swallowed too. What
+ *   reached the screen was a dark ball with a pale rim.
+ * - **The hat was a cone**, in one flat bright blue, which reads as a party hat.
+ * - **The floppy tip was a detached card.** A 0.34-wide cape panel hung off a
+ *   zero-width apex, with a half turn that pointed it straight UP and no rest
+ *   bend at all, so it stood over the cone as a separate blue rectangle.
+ *
+ * The numbers now live in `instructorFace.ts` and `wizardHat.ts`, solved rather
+ * than authored wherever a clearance is at stake, and measured on the built
+ * geometry by their tests. That is the only reason the first two were found: they
+ * were literals in this file, where no test can reach them.
+ *
  * ## What is reused and what is not
  *
- * The head shell is a `superellipsoid`-style dome from the same vocabulary the
- * player's head uses, but it is built here rather than imported from
- * `robotParts.tsx`. That file's `Head` mounts the visor shader, the ear pods, the
- * antenna and the cosmetic sockets, and pulls `quality` for its sheen ladder -
- * all of which belong to the hero and none of which this needs. Importing it to
- * throw four fifths away would couple the instructor to every future change to
- * the player's face.
+ * The head is a `taperedSuperellipsoid` from the character's own geometry kit,
+ * built here rather than imported from `robotParts.tsx`. That file's `Head`
+ * mounts the visor shader, the ear pods, the antenna and the cosmetic sockets and
+ * pulls `quality` for its sheen ladder - all of which belong to the hero. Taking
+ * it to throw four fifths away would couple the instructor to every future change
+ * to the player's face.
  *
- * The HAT is the reuse that matters, and it is real: `capeRibbon.ts` re-exports
- * the cape's skinned ribbon, and the tip is driven by `hatBends` from the head's
- * own velocity. The cape was already a strip of cloth hanging from a point,
- * bending under inertia, skinned on the CPU from four angles. A hat tip is the
- * same object.
+ * The HAT TIP is the reuse that matters: `capeRibbon.ts` re-exports the cape's
+ * skinned ribbon and the tip is driven by `hatBends` from the head's own
+ * velocity. The cape was already a strip of cloth hanging from a point, bending
+ * under inertia, skinned on the CPU from four angles. A hat tip is that object.
  */
 export function Instructor({ run }: { run: RefObject<TrainingState> }) {
   const group = useRef<Group>(null)
-  const hatTip = useRef<Group>(null)
+  const hat = useRef<Group>(null)
   const previous = useRef(new Vector3(...INSTRUCTOR_ENTER))
   const clock = useRef(0)
 
@@ -50,19 +84,37 @@ export function Instructor({ run }: { run: RefObject<TrainingState> }) {
   */
   const ribbon = useMemo(() => createCapeRibbon(CAPE.segmentLength * 0.42), [])
 
-  const cone = useMemo(
-    () =>
-      /*
-        Radial 20, height 1. A cone keeps its sharp apex, which is the one place
-        in this project a 90-degree corner is allowed: the world rule is about
-        moulded plastic, and a wizard hat with a rounded tip is a garden gnome.
-      */
-      new ConeGeometry(WIZARD_HAT.radius, WIZARD_HAT.height, 20, 1, true),
+  const head = useMemo(() => taperedSuperellipsoid(INSTRUCTOR_HEAD), [])
+  const plate = useMemo(() => taperedSuperellipsoid(FACE_PLATE), [])
+
+  /* The crown, as a surface of revolution over the wizard-hat profile. */
+  const crown = useMemo(
+    () => latheProfile({ points: HAT_PROFILE.map(([r, y]) => new Vector2(r, y)), radialSegments: 24 }),
     [],
   )
 
-  /* The moustache: two half-tori, which is a moustache in one primitive each. */
-  const whisker = useMemo(() => new TorusGeometry(0.15, 0.042, 8, 16, Math.PI * 0.85), [])
+  /*
+    One star geometry for all five, scaled per instance. Five `ShapeGeometry`
+    builds of the same ten-point outline would be five buffers to upload for one
+    silhouette.
+  */
+  const star = useMemo(() => new ShapeGeometry(starShape(5, 1, 0.44)), [])
+
+  /*
+    One half of the moustache. The other is the same buffer mirrored by a scale,
+    which is safe because neither is ever mutated.
+  */
+  const whisker = useMemo(
+    () =>
+      new TorusGeometry(
+        MOUSTACHE.radius,
+        MOUSTACHE.tube,
+        MOUSTACHE.radialSegments,
+        MOUSTACHE.tubularSegments,
+        MOUSTACHE.arc,
+      ),
+    [],
+  )
 
   useFrame((_, delta) => {
     const g = group.current
@@ -101,36 +153,36 @@ export function Instructor({ run }: { run: RefObject<TrainingState> }) {
     // Face the player, who is back down the -Z axis from the stage.
     g.rotation.y = Math.atan2(-pose[0], -pose[2])
 
-    if (hatTip.current) {
-      skinCapeRibbon(ribbon, hatBends(vx, vz, clock.current))
-      hatTip.current.rotation.z = WIZARD_HAT.lean
-    }
+    if (hat.current) skinCapeRibbon(ribbon, hatBends(vx, vz, clock.current))
   })
 
   return (
     <group ref={group}>
       {/* The head. `shell()` is the hero's own preset, so the instructor is made
           of the same plastic as the player rather than of a different white. */}
-      <mesh castShadow>
-        <sphereGeometry args={[0.34, 24, 18]} />
+      <mesh geometry={head} castShadow>
         <meshPhysicalMaterial {...shell(palette.shell)} />
       </mesh>
 
-      {/* The visor, as a plain dark plate. Not `visorPlate()` and not the face
-          shader: the instructor never blinks or emotes, and mounting the hero's
-          face material here would make every future expression change touch it. */}
-      <mesh position={[0, 0.02, 0.3]} castShadow>
-        <sphereGeometry args={[0.245, 20, 14]} />
+      {/*
+        The face plate: a wide shallow band across the eyes, sunk into the head.
+
+        Not `visorPlate()` and not the face shader - the instructor never blinks
+        or emotes, and mounting the hero's face material here would make every
+        future expression change touch it.
+      */}
+      <mesh geometry={plate} position={[0, FACE_PLATE.y, facePlateZ()]} castShadow>
         <meshPhysicalMaterial {...plastic(palette.plate)} />
       </mesh>
-      {/*
-        `meshPhysicalMaterial`, and the material TYPE here is a bug fix rather
-        than a preference.
 
-        These two were `<meshBasicMaterial {...emissive(...)} />`, and
-        `emissive()` returns MeshPhysicalMaterial props - `emissive`,
-        `emissiveIntensity`, `roughness`, `metalness`. Spreading those onto a
-        basic material threw inside three's own `refreshUniformsCommon` on every
+      {/*
+        The eyes, whose centres are SOLVED against the plate's own front surface
+        rather than authored - see `eyeCentre`. Authored, they were inside it.
+
+        `meshPhysicalMaterial`, and the material TYPE here is a bug fix rather
+        than a preference. These were `<meshBasicMaterial {...emissive(...)} />`,
+        and `emissive()` returns MeshPhysicalMaterial props. Spreading those onto
+        a basic material threw inside three's own `refreshUniformsCommon` on every
         single frame, which killed the render partway through: the scene showed
         its floor and its dummies from an earlier good frame and NOTHING drawn
         after the instructor ever appeared again.
@@ -139,56 +191,134 @@ export function Instructor({ run }: { run: RefObject<TrainingState> }) {
         project keeps meeting: nothing was missing from the scene graph. The
         instructor existed, its parent chain was visible, and its world position
         was exactly right - three separate checks all said it was fine, and the
-        canvas was simply a stale picture. The console was the only place the
-        truth was written down.
-
-        `glowStrip()` is the preset that DOES return basic-material props, and it
-        is the right choice for a flat additive line. An eye lens is a lit
-        surface, so it takes the physical one.
+        canvas was simply a stale picture.
       */}
-      <mesh position={[-0.085, 0.05, 0.44]}>
-        <sphereGeometry args={[0.045, 12, 10]} />
-        <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
-      </mesh>
-      <mesh position={[0.085, 0.05, 0.44]}>
-        <sphereGeometry args={[0.045, 12, 10]} />
-        <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
-      </mesh>
+      {([-1, 1] as const).map((side) => (
+        <mesh key={side} position={eyeCentre(side)}>
+          <sphereGeometry args={[EYE.radius, 14, 12]} />
+          <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
+        </mesh>
+      ))}
 
       {/*
         The moustache, which is most of the character in two primitives.
 
-        Set below the visor and turned so the ends sweep upward, because a
-        moustache that droops reads as sad and the brief asked for playful.
-      */}
-      <group position={[0, -0.16, 0.3]}>
-        <mesh geometry={whisker} rotation={[0, 0, Math.PI * 0.62]} position={[-0.1, 0, 0]} castShadow>
-          <meshPhysicalMaterial {...mattePlastic(palette.shellShadow)} />
-        </mesh>
-        <mesh geometry={whisker} rotation={[0, Math.PI, Math.PI * 0.62]} position={[0.1, 0, 0]} castShadow>
-          <meshPhysicalMaterial {...mattePlastic(palette.shellShadow)} />
-        </mesh>
-      </group>
+        Below the plate rather than behind it, and standing proud of the head's
+        own surface by a solved amount - `moustacheZ`. The arc sweeps past half a
+        circle so each half curls back on itself, and the roll turns those curls
+        UP: a moustache that droops reads as sad, and the brief asked for playful.
 
-      {/* The hat: a leaning cone with a flowing tip hanging off its apex. */}
-      <group ref={hatTip} position={[0, WIZARD_HAT.lift, 0]}>
-        <mesh geometry={cone} position={[0, WIZARD_HAT.height / 2, 0]} castShadow>
-          <meshPhysicalMaterial {...mattePlastic(palette.helmet)} />
+        `wrap` turns each half around the head so its outer end follows the cheek
+        rather than hanging off it - see `MOUSTACHE.wrap` for why a planar torus
+        on a curved face has no single depth that works without it.
+      */}
+      {([-1, 1] as const).map((side) => (
+        <mesh key={side} geometry={whisker} {...moustacheHalf(side)} castShadow>
+          <meshPhysicalMaterial {...mattePlastic(MOUSTACHE_HAIR)} />
         </mesh>
-        {/* The brim, so the cone sits ON the head rather than through it. */}
-        <mesh rotation={[Math.PI / 2, 0, 0]} castShadow>
-          <torusGeometry args={[WIZARD_HAT.radius * 0.94, 0.05, 8, 20]} />
-          <meshPhysicalMaterial {...mattePlastic(palette.helmet)} />
+      ))}
+
+      {/* The hat: brim, band, crown, stars, and a tip that flops off the apex. */}
+      <group ref={hat} position={[0, WIZARD_HAT.lift, 0]} rotation={[0, 0, WIZARD_HAT.lean]}>
+        {/*
+          The brim, WIDER than the crown by a clear margin. A rim at the crown's
+          own radius - which is what the first version had - reads as a seam where
+          the cone meets the head; a brim is the second horizontal that turns a
+          cone into a hat.
+        */}
+        <mesh rotation={[Math.PI / 2, 0, 0]} castShadow receiveShadow>
+          <torusGeometry args={[WIZARD_HAT.brimRadius, WIZARD_HAT.brimTube, 10, 28]} />
+          <meshPhysicalMaterial {...mattePlastic(HAT_CLOTH)} />
         </mesh>
-        <group position={[0, WIZARD_HAT.height, 0]} rotation={[0, 0, Math.PI]}>
+        {/* The brim's cloth, so it is a disc with a rolled edge and not a hoop. */}
+        <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+          <circleGeometry args={[WIZARD_HAT.brimRadius, 28]} />
+          <meshPhysicalMaterial {...mattePlastic(HAT_CLOTH)} side={2} />
+        </mesh>
+
+        <mesh geometry={crown} castShadow receiveShadow>
+          <meshPhysicalMaterial {...mattePlastic(HAT_CLOTH)} />
+        </mesh>
+
+        {/* The band: the one bright note on the cloth, in the world's own silver. */}
+        <mesh position={[0, WIZARD_HAT.bandY, 0]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+          <torusGeometry args={[WIZARD_HAT.bandRadius, WIZARD_HAT.bandTube, 8, 24]} />
+          <meshPhysicalMaterial {...plastic(palette.hardware)} />
+        </mesh>
+
+        {/*
+          The stars, laid ON the cloth: placed at the profile's own radius for
+          their height and pitched by its local slope, so each lies flat against
+          the surface instead of standing off it like a badge on a pin.
+
+          `HAT_STAR_LIFT` is the one authored number - a hair off the surface,
+          because a decal coplanar with the solid it sits on z-fights, and the
+          failure is glitter rather than a missing star.
+        */}
+        {HAT_STARS.map((s, i) => (
+          <group key={i} rotation={[0, s.theta, 0]}>
+            <mesh
+              geometry={star}
+              position={[0, s.y, hatRadiusAt(s.y) + HAT_STAR_LIFT]}
+              rotation={[hatSlopeAt(s.y), 0, i * 0.7]}
+              scale={s.size}
+            >
+              <meshPhysicalMaterial {...mattePlastic(HAT_STAR)} side={2} />
+            </mesh>
+          </group>
+        ))}
+
+        {/*
+          The floppy tip, continuing from the crown's own top radius.
+
+          Narrowed by a scale rather than by forking `createCapeRibbon`, which the
+          player's cape also uses. Mounted pointing UP along the crown's axis and
+          folded over by `WIZARD_HAT.droop` at rest - the first version had no
+          rest bend, so it stood vertically above the hat as a separate card.
+        */}
+        <group
+          position={[0, WIZARD_HAT.height, 0]}
+          rotation={[0, 0, Math.PI]}
+          scale={[WIZARD_HAT.tipWidth, 1, WIZARD_HAT.tipDepth]}
+        >
           <mesh geometry={ribbon.geometry} castShadow>
-            <meshPhysicalMaterial {...mattePlastic(palette.helmet)} />
+            <meshPhysicalMaterial {...mattePlastic(HAT_CLOTH)} />
           </mesh>
         </group>
       </group>
     </group>
   )
 }
+
+/**
+ * The cloth.
+ *
+ * A local constant rather than `palette.helmet`, which is the hero's own
+ * `#2F7AD2` - a bright, saturated mid-blue that is right on a robot's helmet and
+ * wrong on a wizard. It made the first hat read as moulded plastic, which a hat
+ * is not, and it left no room for anything on it to be lighter.
+ *
+ * This is a deep night-blue instead. It is the same hue family the design
+ * direction settled on - blues, silvers, greys - taken to the dark end so the
+ * silver band and the stars have somewhere to sit. `palette.ts` carries the
+ * world's own vocabulary and every addition to it invites a `band()` claim; this
+ * is one prop in one mini-game.
+ */
+const HAT_CLOTH = '#28356B'
+/**
+ * The moustache.
+ *
+ * `palette.shellShadow` first, which is the hero's own shadow tone - so the
+ * moustache was made of exactly the same plastic as the head it sits on and read
+ * as a moulded handle rather than as hair. Pulled toward the hat's cloth instead:
+ * it now belongs to the costume, which is what a wizard's beard does, and it has
+ * somewhere to be dark against a pale face.
+ */
+const MOUSTACHE_HAIR = '#3B4874'
+/** The stars: pale silver, well under the bloom threshold. Cloth, not light. */
+const HAT_STAR = '#C9D6EC'
+/** How far a star floats off the cloth, to keep it out of a z-fight. */
+const HAT_STAR_LIFT = 0.006
 
 /** Re-exported so the scene can place a light at the instructor without guessing. */
 export { INSTRUCTOR_HOME, INSTRUCTOR_EXIT }

@@ -1467,6 +1467,35 @@ export function shard(height: number, topRadius = 0.05, baseRadius = 0.22): Buff
  * itself to nothing. Fins are read at distance and in silhouette, which is why
  * their bevel is the 15 mm floor rather than the 8 mm one.
  */
+/**
+ * A star polygon, as a `Shape`.
+ *
+ * Points alternate outer and inner radius starting at the TOP, so the star sits
+ * upright on a point rather than balanced on one. `Shape` rather than a geometry
+ * because both callers want it flat and one of them extrudes nothing: the quiz
+ * plank's reward star is a `shapeGeometry`, and the wizard hat's decals are the
+ * same shape at a twentieth of the size.
+ *
+ * It lives here rather than in either of them because it was in `Planks.tsx`,
+ * where the hat could not reach it - and a second hand-rolled star would drift
+ * from the first in exactly the way two stars in one scene must not.
+ */
+export function starShape(points: number, outer: number, inner: number): Shape {
+  if (points < 2) throw new Error(`geometry: a star needs at least 2 points, got ${points}`)
+  if (!(inner > 0) || !(outer > inner)) {
+    throw new Error(`geometry: a star needs 0 < inner < outer, got inner ${inner} outer ${outer}`)
+  }
+  const shape = new Shape()
+  for (let i = 0; i < points * 2; i++) {
+    const radius = i % 2 === 0 ? outer : inner
+    const angle = (i * Math.PI) / points + Math.PI / 2
+    if (i === 0) shape.moveTo(Math.cos(angle) * radius, Math.sin(angle) * radius)
+    else shape.lineTo(Math.cos(angle) * radius, Math.sin(angle) * radius)
+  }
+  shape.closePath()
+  return shape
+}
+
 export function fin(width: number, height: number, depth: number): BufferGeometry {
   const taper = Math.min(depth * 0.4, height * Math.tan((8 * Math.PI) / 180))
   return beveledExtrude({

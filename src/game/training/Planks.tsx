@@ -1,10 +1,11 @@
 import { Suspense, useMemo, useRef, type RefObject } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { Text } from '@react-three/drei'
-import { Shape, type Group } from 'three'
+import type { Group } from 'three'
 import { GLOW, emissive, emissiveRaw, mattePlastic } from '@/art/materials'
 import { palette } from '@/art/palette'
 import { createWoodMaps } from '@/art/woodTexture'
+import { starShape } from '@/art/geometry'
 import { ArrowBody } from './ArrowBody'
 import { PLANK_RADIUS } from './stage'
 import { QUIZ } from './cards'
@@ -285,27 +286,6 @@ function NoFace() {
       </mesh>
     </group>
   )
-}
-
-/**
- * A star polygon, as a `Shape`.
- *
- * Built here rather than imported because `robotGeometry.ts`'s shape helpers are
- * character-scoped and this is a prop. Points alternate outer and inner radius,
- * starting at the top so the star sits upright rather than on a point.
- */
-function starShape(points: number, outer: number, inner: number): Shape {
-  const shape = new Shape()
-  for (let i = 0; i < points * 2; i++) {
-    const radius = i % 2 === 0 ? outer : inner
-    const angle = (i * Math.PI) / points + Math.PI / 2
-    const x = Math.cos(angle) * radius
-    const y = Math.sin(angle) * radius
-    if (i === 0) shape.moveTo(x, y)
-    else shape.lineTo(x, y)
-  }
-  shape.closePath()
-  return shape
 }
 
 /**

@@ -1,4 +1,10 @@
-export { createCapeRibbon, skinCapeRibbon, type CapeBend, type CapeRibbon } from '@/game/player/robotGeometry'
+export {
+  createCapeRibbon,
+  skinCapeRibbon,
+  taperedSuperellipsoid,
+  type CapeBend,
+  type CapeRibbon,
+} from '@/game/player/robotGeometry'
 export { CAPE } from '@/game/player/animTuning'
 
 /**
@@ -17,7 +23,21 @@ export { CAPE } from '@/game/player/animTuning'
  * the boundary: if the hat ever needs a section the cape does not have, this file
  * is where the fork happens, and the diff will say so.
  *
- * Nothing else in `src/game/training` may import from `src/game/player` directly.
- * The round borrows the character's geometry kit; it does not depend on the
- * character's rig.
+ * ## The boundary this marks, stated accurately
+ *
+ * The rule is about the RIG, not about geometry. The round borrows the
+ * character's geometry kit freely - `Bow.tsx` builds its viewmodel out of `Fist`
+ * and mounts it by `fistGrip`, and the instructor's head is a
+ * `taperedSuperellipsoid` - because those are shapes, and a mini-game that
+ * modelled its own robot hand would be modelling a second character.
+ *
+ * What it must not touch is `robotPose`, `springs` or `rig`. Those carry the
+ * hero's animation state, they are the heaviest tested modules in the project,
+ * and `springs.test.ts` asserts the `SPRINGS` key set EXACTLY - so a round that
+ * reached into them would be one refactor away from breaking the character it is
+ * a lesson about.
+ *
+ * An earlier version of this comment claimed nothing in `src/game/training` may
+ * import from `src/game/player` at all. That was never what the code did and it
+ * is not what the boundary is for.
  */
