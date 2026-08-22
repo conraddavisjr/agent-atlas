@@ -17,6 +17,20 @@ export type SpawnId = string
 export type SceneDefinition = {
   id: string
   title: string
+  /**
+   * A second line under the title on the HUD's scene card.
+   *
+   * Optional, and the only optional field in this type - everything else is
+   * required on the stated principle that a scene which silently inherits a
+   * default is a bug nobody notices. This one earns the exception because its
+   * absence is meaningful: the hub and the cave ARE their titles, and a lesson
+   * scene is a title plus the question it exists to answer.
+   *
+   * It is also the round's guarantee that it names itself. The `WHAT IS AI?`
+   * headline is 3D text on a font fetched at runtime, and if that fetch never
+   * resolves the stage would be an unlabelled room - see `Headline.tsx`.
+   */
+  subtitle?: string
   Component: LazyExoticComponent<ComponentType>
   lighting: LightingVariant
   /**
@@ -85,6 +99,24 @@ export const SCENES: Record<string, SceneDefinition> = {
         reaches 3.35, where the kerb's inner face is at 4.00 - 0.36 = 3.64.
       */
       'from-cave': [3.0, 4.4, -13.0],
+      /*
+        Arriving back from the AI training round, beside the totem that sent you.
+
+        The `what-is-ai` totem stands on its spur at `TOTEM_SPURS['what-is-ai']`,
+        which is `(-5, STEP, 5)`, and `TotemAnchor` puts its trigger a metre above
+        that. Landing at `(-5, ?, 8.4)` is 3.4 m away on Z alone, clear of
+        `INTERACTION.exitRadius` of 3.1 by 0.3.
+
+        The clearance is the point, and it is the same hazard `from-cave` above
+        documents: `useProximity` does not fire `onExit` on unmount, so a player
+        who materialised inside the trigger would carry a stale prompt, and the
+        first frame's `primed` guard would then record them as already inside -
+        so the prompt would never appear again until they walked out and back.
+
+        Off the deck and on the lawn on purpose. The spur is a raised puck, and
+        dropping a revival onto its edge is how you get a player sliding off it.
+      */
+      'from-training': [-5, 2, 8.4],
     },
     /*
       Taken from the palette rather than written out again here.
@@ -110,6 +142,56 @@ export const SCENES: Record<string, SceneDefinition> = {
     */
     killY: -12,
   },
+  'training-ai': {
+    id: 'training-ai',
+    title: 'AI Training',
+    subtitle: 'What is AI?',
+    Component: lazy(() =>
+      import('../world/TrainingScene').then((m) => ({ default: m.TrainingScene })),
+    ),
+    lighting: 'digital',
+    spawns: {
+      /*
+        The stage's origin, and the one spawn this scene has.
+
+        `PlayerController` seeds `facing` to 0, which `headingVector` maps to +Z,
+        so the robot arrives already looking at the stage and the round needs no
+        facing intervention. Everything the player watches is at positive Z and
+        the camera sits behind at negative Z - see `src/game/training/stage.ts`,
+        which is the one place that convention is written down.
+      */
+      stage: [0, 2, 0],
+    },
+    /*
+      A sky, not an enclosure, and a deliberately flat one.
+
+      `null` would give this room the hardcoded cave fog, which is tuned to hide
+      walls that are 12 m away. This stage has no walls: the headline stands at
+      z 16 and the dummies further still, and they are supposed to be legible.
+      A near-black top over a barely-lighter horizon reads as a void with a floor
+      in it, which is what "an intentional, simple digital world" wants.
+    */
+    sky: { top: '#070b13', horizon: '#101a2b' },
+    /*
+      1, and it is inert.
+
+      Every camera in this round comes from `cameraFrame.override`, which
+      `FollowCamera` checks before it does anything else, so `CAMERA.distance`
+      and `CAMERA.height` are never consulted here. It is required rather than
+      optional by design - the registry makes you answer - and the honest answer
+      is that the question does not apply, so it takes the neutral value with
+      this note rather than a number chosen to look considered.
+    */
+    cameraScale: 1,
+    /*
+      The floor is solid and the player cannot move, so nothing should ever reach
+      this. Set close rather than far precisely because of that: if the input
+      lock ever fails and a player drives off the stage, a short fall gets them
+      respawned quickly instead of dropping for four seconds first.
+    */
+    killY: -8,
+  },
+
   cave: {
     id: 'cave',
     title: 'The Prompt Cave',

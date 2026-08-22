@@ -10,6 +10,8 @@ import { FollowCamera } from './game/camera/FollowCamera'
 import { GameContext } from './game/GameContext'
 import { useSceneTravel, type TravelRequest } from './game/scenes/SceneHost'
 import { getScene } from './game/scenes/registry'
+import { totemAction } from './state/lessonRoutes'
+import { TrainingHUD } from './ui/TrainingHUD'
 import { Transition } from './game/scenes/Transition'
 import { IrisTracker } from './game/scenes/IrisTracker'
 import { DevHooks } from './dev/DevHooks'
@@ -69,6 +71,13 @@ export default function App() {
   const completeLesson = useGameStore((s) => s.completeLesson)
   const resetProgress = useGameStore((s) => s.resetProgress)
   const progress = useProgress()
+  /*
+    Subscribed rather than read imperatively, because `inputLocked` is set from an
+    effect and an effect only re-runs when something it depends on changes. A
+    `getState()` read here would latch whatever the value was at mount and the
+    lock would never come on.
+  */
+  const playerLocked = useGameStore((s) => s.playerLocked)
 
   /**
    * Where to start. Read once on mount rather than tracked, so restoring a save
@@ -112,21 +121,49 @@ export default function App() {
     that phase and the controller holds its own lock until the feet touch down,
     which is a beat later than any timer here could know about.
   */
-  useEffect(() => {
-    inputLocked.current = covering && !reviving
-  }, [covering, reviving])
+  /*
+    Two reasons the player might not be driving, folded into one ref.
 
-  /** Interact key. Handled centrally so totems stay presentational. */
+    The iris is the original: input is dead while a transition covers the screen.
+    `playerLocked` is the second, and it exists because a scripted scene has no way
+    to reach this ref - `GameContext` carries `player` and `travel` and nothing
+    else, and widening it would give every scene the ability to seize input as a
+    side effect of rendering. A store field is the narrower seam: the scene asks,
+    `App` decides, and the release is a cleanup rather than a promise.
+  */
+  useEffect(() => {
+    inputLocked.current = (covering && !reviving) || playerLocked
+  }, [covering, reviving, playerLocked])
+
+  /**
+   * Interact key. Handled centrally so totems stay presentational.
+   *
+   * **The decision moved out of here and into `totemAction`, and that is the point
+   * of the change rather than a tidy-up.** This handler is the one place every
+   * lesson in the game passes through, and until the first mini-game it had no
+   * branches at all: press E, complete whatever totem you are standing at. Adding
+   * a branch here is the highest-leverage way to break four working lessons, in a
+   * way that only shows up by walking to each totem in turn.
+   *
+   * `totemAction` is pure, takes the lesson table as an argument, and is swept over
+   * every lesson id in `lessonRoutes.test.ts`. What is left here is the side
+   * effects, which is the half a test could not have covered anyway.
+   */
+  const onInteract = useCallback(() => {
+    if (covering) return
+    const action = totemAction(useGameStore.getState().activeTotemId, LESSONS)
+    if (action.kind === 'complete') completeLesson(action.lessonId)
+    else if (action.kind === 'travel') doTravel(action.sceneId, action.spawnId, action.label)
+  }, [covering, completeLesson, doTravel])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code !== 'KeyE' && e.code !== 'Enter') return
-      if (covering) return
-      const id = useGameStore.getState().activeTotemId
-      if (id) completeLesson(id)
+      onInteract()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [covering, completeLesson])
+  }, [onInteract])
 
   /**
    * The admin panel's reset, which is the store write plus the one thing the
@@ -353,6 +390,7 @@ export default function App() {
         an admin surface that has to swallow whole gestures - wheel, drag, keys -
         does not belong in a tree built on the opposite assumption.
       */}
+      <TrainingHUD />
       <AdminPanel
         displayedSceneId={displayed.sceneId}
         busy={covering}
