@@ -7,7 +7,6 @@ import {
   canAdvance,
   initialTrainingState,
   isAiming,
-  isQuestionUp,
   readingProgress,
   stepTraining,
   type Phase,
@@ -80,7 +79,13 @@ describe('the round runs all the way through on its own', () => {
   it('never leaves a timed phase without a rule to leave it by', () => {
     // A phase with no duration and no input rule hangs the round forever, and the
     // symptom is a player standing in a scene where nothing happens.
-    const waits: Phase[] = ['reading', 'aiming', 'exiting']
+    /*
+      The beats that wait on a PERSON rather than on a clock. `question` joined
+      this list when the board stopped being a reading card - it is the last thing
+      anybody reads before the shooting, and putting it on a timer would take the
+      round's one moment of "have you got this?" away from the player.
+    */
+    const waits: Phase[] = ['reading', 'question', 'aiming', 'exiting']
     for (const phase of PHASES) {
       if (waits.includes(phase)) continue
       expect(DURATIONS[phase], `${phase} has no duration`).toBeGreaterThan(0)
@@ -180,47 +185,58 @@ describe('the reading', () => {
 
     for (let card = 1; card < CARD_COUNT; card++) {
       s = stepTraining(s, { ...NOTHING, advance: true }, DT)
-      expect(s.phase).toBe('turning')
+      expect(s.phase).toBe('swapping')
       s = until(s)
       expect(s.phase).toBe('reading')
       expect(s.card).toBe(card)
     }
   })
 
-  it('increments the card on the TURN, not on the press', () => {
+  it('increments the card on the SWAP, not on the press', () => {
     /*
-      The cube's rotation is driven from `card`, so incrementing it on the press
-      would snap the face over before the animation that is supposed to reveal it
-      had run - the turn would be showing the face it had already turned to.
+      The diorama's stations are chosen from `card`, so incrementing it on the
+      press would cut to the next card's illustration before the change-over had
+      run - the swap would be hiding a stage that had already changed.
     */
     const s = reach('reading')
     const pressed = stepTraining(s, { ...NOTHING, advance: true }, DT)
-    expect(pressed.phase).toBe('turning')
+    expect(pressed.phase).toBe('swapping')
     expect(pressed.card).toBe(s.card)
   })
 
-  it('gives the QUESTION a beat of its own before the bow', () => {
+  it('brings the BOARD in after the last card, not the bow', () => {
     /*
-      The quiz face used to go straight from `turning` to `arming`, which meant
-      the question had to stay legible for the whole of the shooting. It cannot:
-      the shooting is first person, and from the player's own eye there is
-      nowhere to put a 2.1 m cube that is not in front of the targets.
-
-      So the last face is a reading card like the two before it, with its own
-      press. This walks the whole reading and checks it lands on the question
-      rather than on the bow.
+      The round gives one object to each act: the wizard introduces, the diorama
+      teaches, the cube asks, the bow tests. So the reading ends by bringing the
+      board down with the question on it, and `question` is where that is read -
+      in the third-person framing, before the camera drops to the player's eye.
     */
     let s = reach('reading')
-    for (let i = 0; i < CARD_COUNT; i++) {
-      s = stepTraining(s, { ...NOTHING, advance: true }, DT)
-      s = until(s)
-    }
+    expect(s.card).toBe(0)
+
+    s = stepTraining(s, { ...NOTHING, advance: true }, DT)
+    expect(s.phase).toBe('swapping')
+    s = until(s)
     expect(s.phase).toBe('reading')
-    expect(s.card).toBe(CARD_COUNT)
-    expect(isQuestionUp(s.phase, s.card)).toBe(true)
+    expect(s.card).toBe(1)
+
+    s = stepTraining(s, { ...NOTHING, advance: true }, DT)
+    expect(s.phase).toBe('cubeIn')
+    s = until(s)
+    expect(s.phase).toBe('question')
 
     // And only THEN the bow.
     expect(stepTraining(s, { ...NOTHING, advance: true }, DT).phase).toBe('arming')
+  })
+
+  it('never runs the card index past the cards it has', () => {
+    // A third swap would show a diorama for a paragraph that does not exist.
+    let s = reach('reading')
+    for (let i = 0; i < CARD_COUNT + 3; i++) {
+      s = stepTraining(s, { ...NOTHING, advance: true }, DT)
+      s = until(s)
+    }
+    expect(s.card).toBeLessThan(CARD_COUNT)
   })
 
   it('does not turn the cube past its last face', () => {
@@ -234,10 +250,11 @@ describe('the reading', () => {
     expect(last.card).toBeLessThanOrEqual(CARD_COUNT)
   })
 
-  it('fills the progress bar at the quiz, not at the last card', () => {
+  it('fills the progress bar at the question, not at the last card', () => {
     // A full bar on the last card says the round is over when it is not.
     const first = reach('reading')
     expect(readingProgress(first)).toBe(0)
+    expect(readingProgress(reach('question'))).toBe(1)
     expect(readingProgress(reach('arming'))).toBe(1)
   })
 })

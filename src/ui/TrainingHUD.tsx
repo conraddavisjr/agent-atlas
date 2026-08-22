@@ -1,8 +1,8 @@
 import { useEffect, type CSSProperties } from 'react'
 import { useGameStore } from '@/state/gameStore'
 import { useTrainingStore } from '@/game/training/trainingStore'
-import { INSTRUCTOR_LINES, QUIZ } from '@/game/training/cards'
-import { CARD_COUNT, isQuestionUp } from '@/game/training/trainingMachine'
+import { CARDS, INSTRUCTOR_LINES, QUIZ } from '@/game/training/cards'
+import { CARD_COUNT } from '@/game/training/trainingMachine'
 import { LAYER } from './layers'
 
 /**
@@ -80,18 +80,20 @@ export function TrainingHUD() {
     machine ignores an advance mid-turn anyway, and a control that silently does
     nothing is worse than one that says it cannot.
   */
-  const reading = phase === 'reading' || phase === 'turning'
+  const reading = phase === 'dioramaIn' || phase === 'reading' || phase === 'swapping'
   /*
-    The question beat: the cube has turned to the quiz face and is waiting to be
-    read. It reuses the reader chrome - it IS a card, it just happens to be the
-    last one - and only the button's label changes.
+    The question beat: the board has dropped in and is waiting to be read. It
+    reuses the reader chrome - the counter and the button - and only their labels
+    change, because it IS the last step of the same sequence.
   */
-  const question = isQuestionUp(phase, card)
+  const question = phase === 'cubeIn' || phase === 'question'
   /*
     The shooting beats. The question moves to the HUD for them, because the cube
     it was written on has left: from inside the character's head there is nowhere
     to put a 2.1 m board that is not in front of the targets.
   */
+  /** Beats whose animation the Next button cannot cut short. */
+  const busy = phase === 'swapping' || phase === 'cubeIn'
   const shooting =
     phase === 'aiming' ||
     phase === 'firing' ||
@@ -108,6 +110,28 @@ export function TrainingHUD() {
       )}
 
       {reading && (
+        /*
+          THE CARD ITSELF, which used to be printed on the cube.
+
+          The paragraph moved here when the diorama took the stage: a 6.5 m band
+          of illustration and a 2.1 m board of text cannot both own the middle of
+          the frame, and of the two it is the illustration that cannot be read
+          anywhere else. The same panel already carries the quiz question during
+          the shooting for the same reason.
+
+          `pointerEvents: 'none'`, and it matters more than it looks: the aim
+          plane is a scene object read through r3f's pointer events, so any DOM
+          element over the canvas that accepts the pointer is a dead zone. This
+          one is gone by the time the bow appears, but the rule is cheaper to keep
+          than to remember.
+        */
+        <div style={styles.card}>
+          <div style={styles.cardHeading}>{CARDS[Math.min(card, CARD_COUNT - 1)].heading}</div>
+          <div style={styles.cardBody}>{CARDS[Math.min(card, CARD_COUNT - 1)].body}</div>
+        </div>
+      )}
+
+      {(reading || question) && (
         <div style={styles.reader}>
           {/*
             The progress bar counts the quiz as the last step, so it is full when
@@ -122,9 +146,15 @@ export function TrainingHUD() {
             <span style={styles.counter}>
               {question ? 'The test' : `${Math.min(card + 1, CARD_COUNT)} of ${CARD_COUNT}`}
             </span>
+            {/*
+              Disabled while an animation the press cannot interrupt is running.
+              The machine ignores an advance during a change-over or an arrival
+              anyway, and a control that silently does nothing is worse than one
+              that says it cannot.
+            */}
             <button
-              style={{ ...styles.next, opacity: phase === 'turning' ? 0.45 : 1 }}
-              disabled={phase === 'turning'}
+              style={{ ...styles.next, opacity: busy ? 0.45 : 1 }}
+              disabled={busy}
               onClick={requestAdvance}
             >
               {question ? 'Take up the bow' : 'Next'} &rsaquo;
@@ -209,6 +239,36 @@ const styles: Record<string, CSSProperties> = {
    * over the canvas that accepts the pointer is a dead zone the player's aim
    * silently stops working in - and they would read that as the game hanging.
    */
+  /**
+   * The reading card, top-centre.
+   *
+   * Wide enough for a 300-character paragraph at a comfortable measure without
+   * running the full width of a large monitor - `CARD_BODY_LIMIT` caps the copy
+   * and 620 px puts that at about six lines. Above the diorama rather than beside
+   * it, because the stage is the widest thing in the frame and has no side to
+   * spare.
+   */
+  card: {
+    position: 'absolute',
+    top: 24,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    ...panel,
+    width: 620,
+    maxWidth: 'calc(100vw - 48px)',
+    pointerEvents: 'none',
+  },
+  cardHeading: {
+    fontSize: 11,
+    letterSpacing: 1.6,
+    color: '#7f97bd',
+    marginBottom: 6,
+  },
+  cardBody: {
+    fontSize: 14,
+    lineHeight: 1.55,
+    color: '#e4ecfa',
+  },
   question: {
     position: 'absolute',
     /*

@@ -306,6 +306,64 @@ export const PLANK_RADIUS = 0.31
 */
 export const PLANK_AT: [number, number, number] = [0, EYE[1], 6.2]
 
+/**
+ * The diorama: a wide, shallow stage of three stations that acts out a card.
+ *
+ * ## The anchor
+ *
+ * Where the cube used to stand, at the same depth, because that is the distance
+ * the reading camera was already framed for. It sits LOWER than the cube did -
+ * the cube was a 2.1 m square whose middle had to clear the player's head, and
+ * this is a 2.5 m band whose bottom does.
+ */
+export const DIORAMA_AT: [number, number, number] = [0, 2.05, 3.6]
+
+/**
+ * How far apart the three stations stand, centre to centre.
+ *
+ * ## Sized by the NARROW window, not the wide one
+ *
+ * At `STAGE_FOV` the visible width is `2 * d * tan(fov/2) * aspect`, so a 16:9
+ * window shows 40% more of this stage than a square one at the same distance.
+ * Sizing against a wide window is how a diorama ends up with its first and last
+ * stations cropped on a laptop in a split screen.
+ *
+ * `dioramaSafeWidth()` computes the width that survives an aspect of 1.0, and the
+ * pitch is a third of it. Everything that must be READ lives inside that box;
+ * only decoration is allowed outside it, and `diorama.test.ts` holds the line.
+ */
+export const STATION_PITCH = 2.15
+
+/** How tall a station's own content may be, centred on `DIORAMA_AT`. */
+export const STATION_HEIGHT = 2.5
+
+/**
+ * The width of the reading frame at the diorama's depth, on a SQUARE window.
+ *
+ * The worst case a player can present, short of a phone held upright - and the
+ * one number that decides whether this stage fits. Derived rather than measured
+ * so that moving the camera moves the box with it.
+ */
+export function dioramaSafeWidth(cameraZ: number, fovDegrees = STAGE_FOV): number {
+  const distance = DIORAMA_AT[2] - cameraZ
+  return 2 * distance * Math.tan((fovDegrees * Math.PI) / 360)
+}
+
+/**
+ * Which way along X a station index sits.
+ *
+ * **`+X` is screen LEFT on this stage**, because the camera sits at negative Z
+ * looking toward positive Z. Station 0 must READ first, so it takes the positive
+ * side. That inversion has now caught this feature out five times - the headline
+ * rendered mirrored, the cube opened on the quiz face, all three plank verdicts
+ * showed before a shot, the hat's tip flopped out of sight, and the moustache
+ * curled the wrong way - so this is a function with a test rather than a sign
+ * typed at a mount point.
+ */
+export function stationX(index: number): number {
+  return (1 - index) * STATION_PITCH
+}
+
 /** The headline, standing large behind everything. */
 export const HEADLINE = 'WHAT IS AI?'
 export const HEADLINE_AT: [number, number, number] = [0, 4.6, 16]
@@ -329,7 +387,7 @@ export const HEADLINE_AT: [number, number, number] = [0, 4.6, 16]
  * It is now the only thing above the coins, the cube having left, which is what
  * makes it worth keeping in shot at all.
  */
-export const HEADLINE_QUIZ_Y = 6.3
+export const HEADLINE_QUIZ_Y = 7.1
 export const HEADLINE_SIZE = 1.85
 
 /**

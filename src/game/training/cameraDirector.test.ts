@@ -111,7 +111,8 @@ describe('the poses are a small set, on purpose', () => {
     */
     const groups = [
       ['instructorIn', 'speech1', 'speech2', 'instructorOut'],
-      ['cubeIn', 'reading', 'turning'],
+      ['dioramaIn', 'reading', 'swapping'],
+      ['cubeIn', 'question'],
       ['arming', 'aiming', 'firing', 'rejecting', 'reloading', 'accepting', 'celebrating'],
     ] as const
 

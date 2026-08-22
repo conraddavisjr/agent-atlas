@@ -87,8 +87,9 @@ export const PLANK_STAGGER = 0.17
 export function plankReveal(state: TrainingState, index: number): number {
   if (state.phase === 'arriving' || state.phase === 'instructorIn') return 0
   if (state.phase === 'speech1' || state.phase === 'speech2') return 0
-  if (state.phase === 'instructorOut' || state.phase === 'cubeIn') return 0
-  if (state.phase === 'reading' || state.phase === 'turning') return 0
+  if (state.phase === 'instructorOut' || state.phase === 'dioramaIn') return 0
+  if (state.phase === 'reading' || state.phase === 'swapping') return 0
+  if (state.phase === 'cubeIn' || state.phase === 'question') return 0
   if (state.phase !== 'arming') return 1
 
   const duration = DURATIONS.arming ?? 2.2

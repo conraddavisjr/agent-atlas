@@ -24,6 +24,7 @@ import { Bow } from '@/game/training/Bow'
 import { Reticle } from '@/game/training/Reticle'
 import { makeShot, type Shot } from '@/game/training/arrowFlight'
 import { CardCube } from '@/game/training/CardCube'
+import { TeachingStage } from '@/game/training/TeachingStage'
 import { Confetti } from '@/game/training/Confetti'
 import { Planks } from '@/game/training/Planks'
 import { QUIZ } from '@/game/training/cards'
@@ -386,6 +387,7 @@ export function TrainingScene() {
       <Headline run={run} />
 
       <CardCube run={run} />
+      <TeachingStage run={run} />
 
       <Planks run={run} shot={shot} />
       <Bow run={run} aim={aim} />

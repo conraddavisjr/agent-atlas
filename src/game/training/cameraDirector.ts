@@ -2,6 +2,7 @@ import {
   CAMERA_BACK,
   CAMERA_UP,
   CUBE_AT,
+  DIORAMA_AT,
   EYE,
   FIRST_PERSON_FOV,
   INSTRUCTOR_HOME,
@@ -84,14 +85,37 @@ export function cameraPose(phase: Phase): CameraPose {
     case 'instructorOut':
       return overShoulder([INSTRUCTOR_HOME[0] * 0.55, INSTRUCTOR_HOME[1], INSTRUCTOR_HOME[2]])
 
-    case 'cubeIn':
+    case 'dioramaIn':
     case 'reading':
-    case 'turning':
+    case 'swapping':
       /*
-        Slightly lifted and pulled back for the cube, which is 2.1 m across and
-        needs the room. The lift also keeps the player's head below the cube's
-        bottom edge rather than overlapping it, so the two read as separate
+        BACK for the diorama, because the subject changed shape.
+
+        The cube was a 2.1 m square and this pose was framed for it: lifted a
+        little and pulled back half a metre. The diorama is a 6.5 m band, three
+        times as wide and shorter, so the same pose crops its outer two stations
+        on any window narrower than 16:9.
+
+        `DIORAMA_BACK` is derived from that rather than chosen - see
+        `dioramaSafeWidth`, which asks how much of this stage survives a SQUARE
+        window, and `diorama.test.ts`, which fails if a station or a label falls
+        outside it. Aiming a little above the anchor keeps the player's own head
+        below the stage rather than overlapping it, so the two read as separate
         objects at separate depths.
+      */
+      return overShoulder(
+        [DIORAMA_AT[0], DIORAMA_AT[1] + DIORAMA_AIM_LIFT, DIORAMA_AT[2]],
+        DIORAMA_UP,
+        DIORAMA_BACK,
+      )
+
+    case 'cubeIn':
+    case 'question':
+      /*
+        Back to the cube's own pose for the question. It is a 2.1 m square again,
+        so the framing the reading used to have is the framing it wants - and
+        re-using it exactly is what stops the camera twitching a few centimetres
+        when the board arrives.
       */
       return overShoulder(CUBE_AT, 0.55, 0.5)
 
@@ -132,6 +156,31 @@ export function cameraPose(phase: Phase): CameraPose {
   }
 }
 
+/**
+ * How the diorama's pose differs from the cube's, in metres.
+ *
+ * ## Derived, and the first attempt was derived from the wrong thing
+ *
+ * 3.4 back put the camera 12 m from the stage, where a square window shows 8.7 m
+ * of width. That satisfies the safe-width test - a 6.75 m stage fits inside 8.7 -
+ * and it looks nothing like right, because "fits" is not "fills". The diorama sat
+ * in the middle third of the frame with two metres of empty floor either side and
+ * read as a model on a shelf rather than as the thing being taught.
+ *
+ * The number that matters is the distance at which the stage nearly fills a
+ * SQUARE window, because that is the narrowest a player can present: 6.75 m of
+ * stage wants 9.5 m of range, which is 0.9 back from the camera's own rest pose.
+ * A 16:9 window then gives it 70% of the width, which is a diorama taking the
+ * stage.
+ *
+ * `diorama.test.ts` still holds the ceiling - nothing may fall outside a square
+ * window - and this comment holds the floor, which is a judgement rather than an
+ * assertion.
+ */
+export const DIORAMA_BACK = 0.9
+export const DIORAMA_UP = 0.55
+export const DIORAMA_AIM_LIFT = 0.35
+
 /** Smoothing weight for one frame. `FollowCamera`'s formula, not a second one. */
 export function cameraBlend(damping: number, dt: number): number {
   return 1 - Math.exp(-damping * dt)
@@ -161,9 +210,11 @@ export function firstPerson(phase: Phase): boolean {
     case 'speech1':
     case 'speech2':
     case 'instructorOut':
-    case 'cubeIn':
+    case 'dioramaIn':
     case 'reading':
-    case 'turning':
+    case 'swapping':
+    case 'cubeIn':
+    case 'question':
     case 'exiting':
       return false
   }

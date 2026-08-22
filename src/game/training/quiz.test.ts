@@ -180,7 +180,7 @@ describe('the staggered arrival', () => {
   it('is absent before the quiz and present for the whole of it', () => {
     const before: TrainingState['phase'][] = [
       'arriving', 'instructorIn', 'speech1', 'speech2', 'instructorOut', 'cubeIn',
-      'reading', 'turning',
+      'reading', 'swapping',
     ]
     for (const phase of before) expect(plankReveal(at({ phase }), 0), phase).toBe(0)
     for (const phase of ['aiming', 'rejecting', 'accepting', 'celebrating'] as const) {

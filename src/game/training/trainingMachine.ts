@@ -43,12 +43,16 @@ export const PHASES = [
   'speech2',
   /** It flies out again. */
   'instructorOut',
-  /** The cube descends into view. */
-  'cubeIn',
-  /** A reading card is up. `card` says which. */
+  /** The diorama rises into view, carrying the first card's illustration. */
+  'dioramaIn',
+  /** A card is up: its diorama plays, its paragraph sits in the HUD. */
   'reading',
-  /** The cube is turning between faces. */
-  'turning',
+  /** The diorama changes over between one card's stations and the next. */
+  'swapping',
+  /** The cube descends, carrying the question. */
+  'cubeIn',
+  /** The question is up, waiting for the player to take up the bow. */
+  'question',
   /** The camera moves to the eye, the cube withdraws, planks and bow arrive. */
   'arming',
   /** Aim and shoot. The only phase that takes pointer input. */
@@ -87,8 +91,9 @@ export const DURATIONS: Partial<Record<Phase, number>> = {
   speech1: 2.6,
   speech2: 3.2,
   instructorOut: 1.0,
+  dioramaIn: 1.1,
+  swapping: 0.7,
   cubeIn: 1.1,
-  turning: 0.55,
   arming: 2.2,
   firing: 0.34,
   rejecting: 0.9,
@@ -216,34 +221,41 @@ export function stepTraining(
     case 'speech2':
       return done || input.advance ? to(next, 'instructorOut') : next
     case 'instructorOut':
-      return done ? to(next, 'cubeIn') : next
-    case 'cubeIn':
+      return done ? to(next, 'dioramaIn') : next
+    case 'dioramaIn':
       return done || input.advance ? to(next, 'reading', { card: 0 }) : next
 
     case 'reading':
       if (!input.advance) return next
       /*
-        The QUIZ FACE is a reading card too, and making it one is what let the
-        camera go first person.
+        The last card leads to the CUBE, not straight to the bow.
 
-        The cube used to turn to the question and go straight to `arming`, which
-        meant the question had to stay legible for the whole of the shooting -
-        and from the player's own eye there is nowhere to put a 2.1 m cube that
-        does not stand in front of the targets. Giving it a beat of its own means
-        the question is read at leisure in the third-person framing the cards
-        already use, and the board can then get out of the way entirely.
+        The round now gives one object to each act: the wizard introduces, the
+        diorama teaches, the cube asks, the bow tests. So the reading ends by
+        bringing the cube down with the question on it, and `question` is the beat
+        where that is read - in the third-person framing, at leisure, before the
+        camera drops to the player's eye for the shooting.
       */
-      return state.card >= CARD_COUNT ? to(next, 'arming') : to(next, 'turning')
+      return state.card + 1 >= CARD_COUNT ? to(next, 'cubeIn') : to(next, 'swapping')
 
-    case 'turning': {
+    case 'swapping': {
       if (!done) return next
       /*
-        The turn is what advances the card, not the press that started it. The
-        cube's rotation is driven from `card`, so incrementing on the press would
-        snap the face over before the animation had run.
+        The SWAP advances the card, not the press that started it.
+
+        The diorama's stations are chosen from `card`, so incrementing on the
+        press would cut to the next card's illustration before the change-over had
+        run - which is the same reason the cube's turn used to own this
+        increment, moved to the object that now carries the teaching.
       */
       return to(next, 'reading', { card: state.card + 1 })
     }
+
+    case 'cubeIn':
+      return done ? to(next, 'question') : next
+
+    case 'question':
+      return input.advance ? to(next, 'arming') : next
 
     case 'arming':
       return done ? to(next, 'aiming') : next
@@ -312,27 +324,27 @@ export function stepTraining(
  * and a full bar there would say it was.
  */
 export function readingProgress(state: TrainingState): number {
-  const step = state.phase === 'reading' || state.phase === 'turning' ? state.card : CARD_COUNT
-  return Math.min(1, step / CARD_COUNT)
+  const teaching =
+    state.phase === 'dioramaIn' || state.phase === 'reading' || state.phase === 'swapping'
+  return Math.min(1, (teaching ? state.card : CARD_COUNT) / CARD_COUNT)
 }
 
 /**
- * Whether the round is showing the quiz question, waiting for the player to begin.
+ * Whether the round is showing something the player can advance past.
  *
- * Takes the two fields rather than a whole `TrainingState`, because the two
- * callers hold different things: the round holds the state, and `TrainingHUD`
- * lives outside the Canvas and holds only what `trainingStore` publishes. A
- * predicate that demanded the full state would have forced the HUD to repeat the
- * `card >= CARD_COUNT` comparison by hand, which is exactly the duplication this
- * exists to remove - and the copy that drifts is always the one in the UI.
+ * `question` is on this list and `swapping` is not, which is the distinction that
+ * matters: a beat waiting on a person is advanceable, a beat waiting on an
+ * animation is not. `dioramaIn` is advanceable for the same reason `cubeIn` was -
+ * somebody who has seen it once should not have to watch it arrive again.
  */
-export function isQuestionUp(phase: Phase, card: number): boolean {
-  return phase === 'reading' && card >= CARD_COUNT
-}
-
-/** Whether the round is showing something the player can advance past. */
 export function canAdvance(state: TrainingState): boolean {
-  return state.phase === 'reading' || state.phase === 'speech1' || state.phase === 'speech2'
+  return (
+    state.phase === 'reading' ||
+    state.phase === 'question' ||
+    state.phase === 'dioramaIn' ||
+    state.phase === 'speech1' ||
+    state.phase === 'speech2'
+  )
 }
 
 /** Whether the pointer should be aiming. The one phase that takes a shot. */
