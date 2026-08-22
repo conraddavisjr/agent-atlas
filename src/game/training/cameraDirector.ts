@@ -2,7 +2,10 @@ import {
   CAMERA_BACK,
   CAMERA_UP,
   CUBE_AT,
+  EYE,
+  FIRST_PERSON_FOV,
   INSTRUCTOR_HOME,
+  PLANK_AT,
   PLAYER_AT,
   STAGE_FOV,
 } from './stage'
@@ -94,40 +97,34 @@ export function cameraPose(phase: Phase): CameraPose {
 
     case 'arming':
     case 'aiming':
+    case 'firing':
     case 'rejecting':
+    case 'reloading':
     case 'accepting':
-      /*
-        BACK for the quiz, not in.
-
-        The instinct is to push in - the planks are the smallest thing the round
-        asks anyone to look at. The frame says otherwise: the player's own robot
-        stands between the camera and the targets, and moving closer makes it
-        bigger faster than it makes the planks bigger, because it is half the
-        distance away. Closing in filled a third of the frame with the back of a
-        head.
-
-        Further back and lifted instead, so the three planks and the bow are all in
-        shot with the robot low and small underneath them.
-
-        The lookAt is NOT `PLANK_AT` any more, and that is the whole reason this
-        pose was re-derived. Once the cube rises to `CUBE_QUIZ_AT` the beat is a
-        tall one - question at 6.35, bottom plank at 1.1 - and centring on the
-        planks alone pushed the question off the top of the frame. Aiming at 3.35
-        splits the difference: from 7 m back that puts the cube's top edge 15
-        degrees up and the bottom plank 13 down, inside a 20-degree half-fov, with
-        the robot's head at 17.5 and therefore just barely in shot.
-      */
-      return overShoulder([0, QUIZ_EYELINE, 3.0], 0.7, 2.0)
-
     case 'celebrating':
       /*
-        Pull back for the confetti. A burst that leaves the frame immediately is
-        a burst nobody sees, and this is the round's one moment of spectacle.
+        FIRST PERSON, from `arming` all the way through the celebration.
 
-        Same eyeline as the aim, so the win is a pull-back from the shot rather
-        than a cut to somewhere else.
+        Over the shoulder this was a bow floating beside a robot's hand with the
+        plunger tip four pixels of red somewhere below the targets, and the thing
+        the player had to do - line a point up with a circle - was the one thing
+        the framing did not show. Aiming wants the archer's sight line.
+
+        `overShoulder` is not used here and could not be: it is defined as an
+        offset BEHIND `PLAYER_AT`, and this is the opposite of behind. The camera
+        sits at the eye and looks level at the middle plank, which is why
+        `PLANK_AT[1]` is `EYE[1]` - a column centred above the eye would make the
+        easy, level shot the wrong one.
+
+        The whole quiz shares this pose, celebration included. A cut back to third
+        person for the confetti was the alternative, and it loses the one thing
+        first person bought: the burst comes at YOU.
       */
-      return overShoulder([0, QUIZ_EYELINE, 3.0], 1.0, 3.0)
+      return {
+        position: EYE,
+        lookAt: [PLANK_AT[0], PLANK_AT[1], PLANK_AT[2]],
+        fov: FIRST_PERSON_FOV,
+      }
 
     case 'exiting':
       // Hold whatever we were looking at. The iris is closing over this.
@@ -135,17 +132,39 @@ export function cameraPose(phase: Phase): CameraPose {
   }
 }
 
-/**
- * What the camera centres on during the quiz.
- *
- * Between the risen cube and the plank column rather than on either, so both fit
- * a 40-degree frame. Named rather than inlined because the aim and the
- * celebration have to share it exactly - a celebration that re-centred would tilt
- * the camera at the moment the confetti fires.
- */
-const QUIZ_EYELINE = 3.35
-
 /** Smoothing weight for one frame. `FollowCamera`'s formula, not a second one. */
 export function cameraBlend(damping: number, dt: number): number {
   return 1 - Math.exp(-damping * dt)
+}
+
+/**
+ * Whether this beat is drawn from inside the character's head.
+ *
+ * The same phase set `cameraPose` gives the eye pose to, stated once so the two
+ * cannot drift. They must agree exactly: a phase that gets the first-person pose
+ * without the character being hidden puts the near plane inside a skull, and one
+ * that hides the character without the pose deletes the hero from a third-person
+ * shot. Both failures look like a rendering bug rather than like a missing case.
+ */
+export function firstPerson(phase: Phase): boolean {
+  switch (phase) {
+    case 'arming':
+    case 'aiming':
+    case 'firing':
+    case 'rejecting':
+    case 'reloading':
+    case 'accepting':
+    case 'celebrating':
+      return true
+    case 'arriving':
+    case 'instructorIn':
+    case 'speech1':
+    case 'speech2':
+    case 'instructorOut':
+    case 'cubeIn':
+    case 'reading':
+    case 'turning':
+    case 'exiting':
+      return false
+  }
 }

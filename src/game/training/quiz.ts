@@ -152,7 +152,26 @@ export function easeOutCubic(t: number): number {
  * would rotate away with it, and the player would lose the text of the answer at
  * the exact moment they are being told whether it was right.
  */
-export const LABEL_LIFT = PLANK_RADIUS + 0.17
+export const LABEL_LIFT = PLANK_RADIUS + 0.14
+
+/**
+ * The answer label's type size and how tall it can get, in metres.
+ *
+ * Here rather than in `Planks.tsx` because the LAYOUT depends on it: the label
+ * hangs in the gap between its own plank and the one above, so how tall it is
+ * decides whether the column's pitch is wide enough. Left in the component,
+ * that number would have been invisible to the test that checks the clearance -
+ * which would have been a test comparing two constants and ignoring the thing
+ * that actually collides.
+ *
+ * Two lines is the worst case at this width; the longest answer wraps to two and
+ * `cards.test.ts` caps the length so a third cannot appear.
+ */
+export const LABEL_FONT_SIZE = 0.085
+export const LABEL_LINE_HEIGHT = 1.15
+export const LABEL_MAX_LINES = 2
+/** Half the tallest a label gets. `anchorY` is middle, so it grows both ways. */
+export const LABEL_HALF_HEIGHT = (LABEL_FONT_SIZE * LABEL_LINE_HEIGHT * LABEL_MAX_LINES) / 2
 
 /**
  * Where the win burst fires from.

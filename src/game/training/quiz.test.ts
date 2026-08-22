@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  LABEL_HALF_HEIGHT,
   LABEL_LIFT,
   burstOrigin,
   PLANK_STAGGER,
@@ -10,7 +11,7 @@ import {
   screenGapToWorld,
 } from './quiz'
 import { QUIZ } from './cards'
-import { PLANK_PITCH, PLANK_RADIUS, STAGE_FOV } from './stage'
+import { EYE, FIRST_PERSON_FOV, PLANK_AT, PLANK_PITCH, PLANK_RADIUS } from './stage'
 import { DURATIONS, PHASES, initialTrainingState, type TrainingState } from './trainingMachine'
 
 const at = (over: Partial<TrainingState>): TrainingState => ({ ...initialTrainingState(), ...over })
@@ -35,14 +36,33 @@ describe('turning "about 40 pixels" into a real distance', () => {
     expect(screenGapToWorld(80, 900, 8)).toBeCloseTo(screenGapToWorld(40, 900, 8) * 2, 9)
   })
 
-  it('backs the pitch the planks actually ship with', () => {
+  it('backs the pitch the planks actually ship with, at the camera they ship with', () => {
     /*
       `PLANK_PITCH` is centre to centre and the brief's 40 px is the GAP between
-      edges, so the pitch has to be the gap plus one plank. This is the check that
-      the shipped constant still means what its own comment says.
+      edges, so the pitch has to be the gap plus one plank.
+
+      **The range and the lens are read from the shipped constants rather than
+      written down here**, and that is the whole point of this test now. It used
+      to hard-code 8 m and `STAGE_FOV`, which were true of the third-person quiz
+      camera; the shooting moved to the player's own eye, and the same 40 px then
+      meant a completely different distance. A derivation with the camera baked
+      into it agrees with itself forever and stops describing the game.
     */
-    const gap = screenGapToWorld(40, 900, 8, STAGE_FOV)
+    const range = PLANK_AT[2] - EYE[2]
+    const gap = screenGapToWorld(40, 900, range, FIRST_PERSON_FOV)
     expect(PLANK_PITCH).toBeCloseTo(gap + PLANK_RADIUS * 2, 1)
+  })
+
+  it('leaves room for a label between each pair', () => {
+    /*
+      The labels hang `LABEL_LIFT` above their own plank, which puts them in the
+      gap under the plank ABOVE. Tightening the pitch to taste is how that gap
+      closes and how a label ends up crossing a disc - so the clearance is a
+      test rather than something to notice in a screenshot.
+    */
+    const labelTop = LABEL_LIFT + LABEL_HALF_HEIGHT
+    const plankAboveBottom = PLANK_PITCH - PLANK_RADIUS
+    expect(labelTop, 'a label now reaches the plank above it').toBeLessThan(plankAboveBottom)
   })
 })
 

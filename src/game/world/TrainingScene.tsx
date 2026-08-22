@@ -13,12 +13,16 @@ import {
   DUMMIES,
   GRID_HALF,
   GRID_STEP,
+  PLANK_AT,
   PLAYER_AT,
   STAGE_FOV,
 } from '@/game/training/stage'
-import { cameraBlend, cameraPose } from '@/game/training/cameraDirector'
+import { cameraBlend, cameraPose, firstPerson } from '@/game/training/cameraDirector'
 import { AimPlane } from '@/game/training/AimPlane'
+import { Arrow } from '@/game/training/Arrow'
 import { Bow } from '@/game/training/Bow'
+import { Reticle } from '@/game/training/Reticle'
+import { makeShot, type Shot } from '@/game/training/arrowFlight'
 import { CardCube } from '@/game/training/CardCube'
 import { Confetti } from '@/game/training/Confetti'
 import { Planks } from '@/game/training/Planks'
@@ -81,15 +85,21 @@ import {
  */
 const devRound: {
   state: TrainingState | null
+  /** The live aim point and the last shot, for checking a miss that should not be. */
+  aim: [number, number, number] | null
+  shot: Shot | null
   seek: ((phase: Phase, patch?: Partial<TrainingState>) => void) | null
 } = {
   state: null,
+  aim: null,
+  shot: null,
   seek: null,
 }
 
 export function TrainingScene() {
   const { travel } = useGame()
   const setPlayerLocked = useGameStore((s) => s.setPlayerLocked)
+  const setPlayerHidden = useGameStore((s) => s.setPlayerHidden)
   const completeLesson = useGameStore((s) => s.completeLesson)
   const publish = useTrainingStore((s) => s.publish)
   const resetRound = useTrainingStore((s) => s.reset)
@@ -101,10 +111,24 @@ export function TrainingScene() {
   const left = useRef(false)
   /** Latched too. The completion is written once, on the frame the win lands. */
   const recorded = useRef(false)
-  /** The live aim point, shared by the bow and the shot. See `AimPlane`. */
-  const aim = useRef<[number, number, number]>([0, 2.5, 3.9])
-  /** A shot waiting to be handed to the machine on the next step. */
-  const pendingHit = useRef<number | null>(null)
+  /** The live aim point, shared by the bow, the reticle and the shot. */
+  const aim = useRef<[number, number, number]>([PLANK_AT[0], PLANK_AT[1], PLANK_AT[2]])
+  /**
+   * A shot waiting to be handed to the machine on the next step.
+   *
+   * `undefined` means no shot this frame; `null` inside the object means a shot
+   * that hit nothing. Those are different things now that a miss has an
+   * animation, and collapsing them is what made a missed arrow invisible.
+   */
+  const pendingShot = useRef<{ plank: number | null } | null>(null)
+  /**
+   * The arrow currently in the air or stuck in a plank.
+   *
+   * A ref rather than state: it is written from a pointer handler and read from
+   * two `useFrame` callbacks, and putting it in React state would re-render the
+   * whole scene - and remount the cube's text - on every shot.
+   */
+  const shot = useRef<Shot | null>(null)
 
   /* The camera's running pose, smoothed toward the director's target. */
   const camPos = useRef(new Vector3())
@@ -137,8 +161,10 @@ export function TrainingScene() {
     seen.current = { advance: counters.advanceSeq, bail: counters.bailSeq }
     left.current = false
     recorded.current = false
-    pendingHit.current = null
+    pendingShot.current = null
+    shot.current = null
     setPlayerLocked(true)
+    setPlayerHidden(false)
 
     if (import.meta.env.DEV) {
       /*
@@ -156,10 +182,11 @@ export function TrainingScene() {
 
     return () => {
       setPlayerLocked(false)
+      setPlayerHidden(false)
       cameraFrame.override = null
       if (import.meta.env.DEV) devRound.seek = null
     }
-  }, [resetRound, setPlayerLocked])
+  }, [resetRound, setPlayerLocked, setPlayerHidden])
 
   useFrame((_, delta) => {
     /*
@@ -189,15 +216,32 @@ export function TrainingScene() {
       means the machine sees at most one shot per frame, which is the invariant
       `stepTraining` is written against and which its own test pins.
     */
-    const hit = pendingHit.current
-    pendingHit.current = null
+    const fired = pendingShot.current
+    pendingShot.current = null
 
     run.current = stepTraining(
       run.current,
-      { advance, bail, hit, correct: QUIZ.correct },
+      { advance, bail, shot: fired !== null, hit: fired?.plank ?? null, correct: QUIZ.correct },
       dt,
     )
     publish(run.current.phase, run.current.card)
+
+    /*
+      Hidden for the first-person beats, and driven from the phase rather than
+      latched on a transition.
+
+      A latch would need an else-branch for every way out of the quiz, and the
+      one that gets forgotten is Escape - which can fire from `aiming` and would
+      leave the character invisible back in the hub. Recomputing it every frame
+      makes the wrong state unreachable rather than merely unlikely; the store
+      only writes when the value actually changes, so this is a comparison per
+      frame and nothing else.
+
+      `arming` is included, which is when the camera makes its run from behind
+      the player to the player's own eye. Keeping the robot drawn through that
+      would fly the lens straight through the back of its head.
+    */
+    setPlayerHidden(firstPerson(run.current.phase))
 
     /*
       The completion, written the moment the round is won and BEFORE the exit.
@@ -265,7 +309,11 @@ export function TrainingScene() {
       travel(RETURN_ROUTE.sceneId, RETURN_ROUTE.spawnId, RETURN_ROUTE.label)
     }
 
-    if (import.meta.env.DEV) devRound.state = run.current
+    if (import.meta.env.DEV) {
+      devRound.state = run.current
+      devRound.aim = aim.current
+      devRound.shot = shot.current
+    }
   }, /* before FollowCamera's default-priority frame, so the override is fresh */ -1)
 
   const grid = useMemo(() => buildGrid(), [])
@@ -339,19 +387,34 @@ export function TrainingScene() {
 
       <CardCube run={run} />
 
-      <Planks run={run} />
+      <Planks run={run} shot={shot} />
       <Bow run={run} aim={aim} />
+      <Arrow run={run} shot={shot} />
+      <Reticle run={run} aim={aim} />
       <Confetti run={run} />
       <AimPlane
         run={run}
         onAim={(point) => {
           aim.current = point
         }}
-        onShoot={(plank) => {
-          // Only a hit is worth reporting. A miss into open space costs nothing -
-          // the brief gives unlimited tries, so an arrow into the dark is simply
-          // an arrow into the dark.
-          if (plank !== null) pendingHit.current = plank
+        onShoot={(plank, point) => {
+          /*
+            EVERY loose is reported, hit or miss, and the shot's whole trajectory
+            is recorded here rather than derived later.
+
+            `makeShot` reads the same aim point the reticle was drawn at and the
+            same plank `resolveHit` scored, so the arrow the player watches and
+            the outcome the round records come from one ray. Deriving the flight
+            afterwards from a re-cast ray is the version where a plunger sails
+            through a plank the game has already counted as a hit.
+
+            Guarded on the phase because `AimPlane` can fire between the frame the
+            machine left `aiming` and the frame this handler sees it - a second
+            arrow recorded there would replace the one still in the air.
+          */
+          if (run.current.phase !== 'aiming') return
+          shot.current = makeShot(point, plank)
+          pendingShot.current = { plank }
         }}
       />
 

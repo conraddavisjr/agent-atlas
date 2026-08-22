@@ -1,8 +1,8 @@
 import { useEffect, type CSSProperties } from 'react'
 import { useGameStore } from '@/state/gameStore'
 import { useTrainingStore } from '@/game/training/trainingStore'
-import { INSTRUCTOR_LINES } from '@/game/training/cards'
-import { CARD_COUNT } from '@/game/training/trainingMachine'
+import { INSTRUCTOR_LINES, QUIZ } from '@/game/training/cards'
+import { CARD_COUNT, isQuestionUp } from '@/game/training/trainingMachine'
 import { LAYER } from './layers'
 
 /**
@@ -81,6 +81,22 @@ export function TrainingHUD() {
     nothing is worse than one that says it cannot.
   */
   const reading = phase === 'reading' || phase === 'turning'
+  /*
+    The question beat: the cube has turned to the quiz face and is waiting to be
+    read. It reuses the reader chrome - it IS a card, it just happens to be the
+    last one - and only the button's label changes.
+  */
+  const question = isQuestionUp(phase, card)
+  /*
+    The shooting beats. The question moves to the HUD for them, because the cube
+    it was written on has left: from inside the character's head there is nowhere
+    to put a 2.1 m board that is not in front of the targets.
+  */
+  const shooting =
+    phase === 'aiming' ||
+    phase === 'firing' ||
+    phase === 'rejecting' ||
+    phase === 'reloading'
 
   return (
     <div style={styles.root}>
@@ -104,16 +120,32 @@ export function TrainingHUD() {
           </div>
           <div style={styles.readerRow}>
             <span style={styles.counter}>
-              {Math.min(card + 1, CARD_COUNT)} of {CARD_COUNT}
+              {question ? 'The test' : `${Math.min(card + 1, CARD_COUNT)} of ${CARD_COUNT}`}
             </span>
             <button
               style={{ ...styles.next, opacity: phase === 'turning' ? 0.45 : 1 }}
               disabled={phase === 'turning'}
               onClick={requestAdvance}
             >
-              {card + 1 >= CARD_COUNT ? 'Take the test' : 'Next'} &rsaquo;
+              {question ? 'Take up the bow' : 'Next'} &rsaquo;
             </button>
           </div>
+        </div>
+      )}
+
+      {shooting && (
+        /*
+          The question, carried through the shooting.
+
+          Not decoration and not a second copy: from the first-person camera the
+          cube that asked it is gone, and a quiz whose question is only legible
+          before you pick up the bow is a memory test. It sits at the top of the
+          frame, clear of the plank column in the middle and of the bow in the
+          lower left.
+        */
+        <div style={styles.question}>
+          <span style={styles.questionMark}>?</span>
+          {QUIZ.question}
         </div>
       )}
 
@@ -165,6 +197,45 @@ const styles: Record<string, CSSProperties> = {
     marginBottom: 6,
   },
   line: { fontSize: '1.02rem', lineHeight: 1.45 },
+  /**
+   * The question banner during the shooting.
+   *
+   * Top-centre, which is the one part of a first-person frame nothing else
+   * wants: the plank column owns the middle, the bow owns the lower left, and
+   * the reticle can be anywhere between them.
+   *
+   * `pointerEvents: 'none'` matters more here than on the other panels. The aim
+   * plane is a scene object read through r3f's pointer events, so any DOM element
+   * over the canvas that accepts the pointer is a dead zone the player's aim
+   * silently stops working in - and they would read that as the game hanging.
+   */
+  question: {
+    position: 'absolute',
+    /*
+      Above the headline rather than over it. `HEADLINE_AT` puts `WHAT IS AI?`
+      about a third of the way down a first-person frame, and a banner at 92 sat
+      squarely across it - two pieces of text competing at the top of the same
+      shot.
+    */
+    top: 24,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    ...panel,
+    maxWidth: 520,
+    display: 'flex',
+    gap: 10,
+    alignItems: 'baseline',
+    fontSize: 14,
+    lineHeight: 1.45,
+    color: '#dce7f8',
+    pointerEvents: 'none',
+    textAlign: 'center',
+  },
+  questionMark: {
+    fontSize: 15,
+    fontWeight: 700,
+    color: '#7fb0ff',
+  },
   reader: {
     position: 'absolute',
     bottom: 44,

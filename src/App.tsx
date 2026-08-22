@@ -78,6 +78,7 @@ export default function App() {
     lock would never come on.
   */
   const playerLocked = useGameStore((s) => s.playerLocked)
+  const playerHidden = useGameStore((s) => s.playerHidden)
 
   /**
    * Where to start. Read once on mount rather than tracked, so restoring a save
@@ -340,6 +341,7 @@ export default function App() {
                 cosmetics={cosmetics}
                 playerRef={player}
                 contactTint={CONTACT_TINT[scene.lighting]}
+                hidden={playerHidden}
                 inputLocked={inputLocked}
                 killY={scene.killY}
                 onDeath={respawn}

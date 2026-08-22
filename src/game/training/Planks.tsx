@@ -4,9 +4,19 @@ import { Text } from '@react-three/drei'
 import { Shape, type Group } from 'three'
 import { GLOW, emissive, emissiveRaw, mattePlastic } from '@/art/materials'
 import { palette } from '@/art/palette'
+import { createWoodMaps } from '@/art/woodTexture'
+import { ArrowBody } from './ArrowBody'
 import { PLANK_RADIUS } from './stage'
 import { QUIZ } from './cards'
-import { LABEL_LIFT, plankLayout, plankReveal, plankSpin } from './quiz'
+import {
+  LABEL_FONT_SIZE,
+  LABEL_LIFT,
+  LABEL_LINE_HEIGHT,
+  plankLayout,
+  plankReveal,
+  plankSpin,
+} from './quiz'
+import { stuckPlunger, type Shot } from './arrowFlight'
 import type { TrainingState } from './trainingMachine'
 
 /**
@@ -36,13 +46,19 @@ import type { TrainingState } from './trainingMachine'
  * away with the flip, and the player would lose the text of the answer at the exact
  * moment they are being told whether it was right.
  */
-export function Planks({ run }: { run: RefObject<TrainingState> }) {
+export function Planks({ run, shot }: { run: RefObject<TrainingState>; shot: RefObject<Shot | null> }) {
   const planks = useMemo(() => plankLayout(), [])
+  /*
+    ONE set of wood maps for all three, built once. They are the same board, and
+    three identical 512-square uploads to draw three copies of the same disc is
+    three times the VRAM and three times the sampler for no visible difference.
+  */
+  const wood = useMemo(() => createWoodMaps(512), [])
 
   return (
     <>
       {planks.map((position, index) => (
-        <Plank key={index} index={index} position={position} run={run} />
+        <Plank key={index} index={index} position={position} run={run} shot={shot} wood={wood} />
       ))}
     </>
   )
@@ -52,17 +68,45 @@ function Plank({
   index,
   position,
   run,
+  shot,
+  wood,
 }: {
   index: number
   position: [number, number, number]
   run: RefObject<TrainingState>
+  shot: RefObject<Shot | null>
+  wood: ReturnType<typeof createWoodMaps>
 }) {
   const group = useRef<Group>(null)
   const spinner = useRef<Group>(null)
+  const plunger = useRef<Group>(null)
 
   useFrame(() => {
     const state = run.current
     if (!state || !group.current || !spinner.current) return
+
+    /*
+      The stuck plunger, parented to the SPINNER so it rides the flip.
+
+      That is the whole reason it is mounted per-plank rather than drawn once in
+      world space: the brief asks to see the plunger hit the coin, and a decal
+      that stayed put while the coin turned over behind it would read as a
+      sticker on the camera rather than as an arrow in the wood.
+
+      It only ever lets go during `reloading`, when the plank is square again -
+      see `stuckPlunger` for the bug that taught us why.
+    */
+    if (plunger.current) {
+      const stuck = state.lastHit === index ? stuckPlunger(state) : null
+      const s = shot.current
+      if (!stuck || !s || s.plank !== index) {
+        plunger.current.visible = false
+      } else {
+        plunger.current.visible = true
+        plunger.current.position.set(s.local[0], s.local[1] - stuck.fall, s.local[2])
+        plunger.current.scale.setScalar(Math.max(0.001, stuck.fade))
+      }
+    }
 
     /*
       The staggered arrival, as a scale. Growing from nothing rather than sliding
@@ -94,7 +138,8 @@ function Plank({
         <Text
           position={[0, LABEL_LIFT, 0.02]}
           rotation={[0, Math.PI, 0]}
-          fontSize={0.085}
+          fontSize={LABEL_FONT_SIZE}
+          lineHeight={LABEL_LINE_HEIGHT}
           color="#dce7f8"
           anchorX="center"
           anchorY="middle"
@@ -118,7 +163,7 @@ function Plank({
           the 0.09 depth is what makes the rim visible as the plank turns.
         */}
         <mesh rotation={[Math.PI / 2, 0, 0]} castShadow receiveShadow>
-          <cylinderGeometry args={[PLANK_RADIUS, PLANK_RADIUS, 0.09, 24]} />
+          <cylinderGeometry args={[PLANK_RADIUS, PLANK_RADIUS, 0.09, 32]} />
           {/*
             A colour hold, which is `GLOW.hold`'s stated purpose: "emissive used
             only so a surface does not go dead in shadow, never as light".
@@ -134,17 +179,44 @@ function Plank({
             the normalisation the bloom budget uses - a tenth of the threshold,
             which is an order of magnitude under it and cannot bloom.
           */}
+          {/*
+            The generated board grain, from `woodTexture.ts`.
+
+            It goes on the CYLINDER rather than on a separate disc, which is what
+            gets the figure onto the rim as well as the face: three's cylinder
+            caps are uv-mapped radially from the axis, so a square tile lands on
+            them square, and the side wraps the same tile around the edge. One
+            texture, both surfaces, and `woodTexture.ts` has a test pinning that
+            the tile meets itself at u 0 and u 1 so the rim has no seam.
+
+            `null` on a server or in a test, where there is no canvas - the
+            material then compiles exactly the program it would have compiled
+            anyway rather than sampling three neutral stubs.
+          */}
           <meshPhysicalMaterial
             {...mattePlastic(PLANK_WOOD, { clearcoat: 0.08 })}
             {...emissiveRaw(PLANK_WOOD, GLOW.hold)}
+            {...(wood ?? {})}
           />
         </mesh>
 
-        {/* The grain, as a darker inset ring, on the side the player starts on. */}
-        <mesh position={[0, 0, -0.048]} rotation={[0, Math.PI, 0]}>
-          <ringGeometry args={[PLANK_RADIUS * 0.62, PLANK_RADIUS * 0.78, 24]} />
+        {/* The sawn edge, a shade deeper than the face. Rims catch less light. */}
+        <mesh position={[0, 0, -0.0455]} rotation={[0, Math.PI, 0]}>
+          <ringGeometry args={[PLANK_RADIUS * 0.93, PLANK_RADIUS, 32]} />
           <meshPhysicalMaterial {...mattePlastic(PLANK_WOOD_DEEP)} />
         </mesh>
+
+        {/*
+          The plunger, once one is in this plank. Mounted always and hidden,
+          rather than conditionally rendered: mounting it on impact would build
+          geometry on the one frame the player is watching the impact.
+
+          Turned to face the camera - the stage is at +Z and viewed from -Z, so
+          an arrow left pointing down +Z is pointing away through the plank.
+        */}
+        <group ref={plunger} visible={false} rotation={[0, Math.PI, 0]}>
+          <ArrowBody />
+        </group>
 
         {/*
           The verdict, on the face turned AWAY from the camera - which on this
@@ -246,6 +318,11 @@ function starShape(points: number, outer: number, inner: number): Shape {
  * the point, because the planks are the one object the player has to pick out and
  * aim at.
  */
-const PLANK_WOOD = '#a8794e'
+/*
+  The multiplier map in `woodTexture.ts` only ever darkens, so this is the colour
+  of the palest earlywood rather than an average - authoring it as the mean would
+  hand back a board a shade darker than intended everywhere.
+*/
+const PLANK_WOOD = '#c08c5c'
 const PLANK_WOOD_DEEP = '#7d5734'
 const NO_RED = '#e0483c'

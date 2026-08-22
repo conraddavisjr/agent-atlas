@@ -98,26 +98,43 @@ export function cubeDescent(state: TrainingState): number {
 }
 
 /**
- * How far the cube has moved from its reading pose to its quiz pose, 0 to 1.
+ * How far the cube has withdrawn from its reading pose, 0 to 1.
  *
- * The move happens during `arming` - the same window the planks stagger in on -
- * so the cube withdrawing and the answers arriving are one gesture rather than
- * two. Everything from `aiming` onward is fully risen, and `turning` is still
- * fully down, which means the quarter turn that brings the quiz face round
- * finishes before the cube starts to climb. Turning and rising at once reads as
- * the cube being knocked upward.
+ * The board's job ends when the question has been read. It leaves during
+ * `arming` - the same window the camera moves to the player's eye, the planks
+ * stagger in and the bow arrives - so the whole change of mode is one gesture.
+ *
+ * ## It has to be GONE before the camera arrives, not merely leaving
+ *
+ * `WITHDRAW_FRACTION` is what makes that true. The camera travels from five
+ * metres behind the player to the player's own eye across the full length of
+ * `arming`, and the cube stands at z 3.6 - directly between the two by the end of
+ * that trip. A cube still rising when the camera lands is a cube sliding up
+ * through the middle of the shot. Finishing in the first 45% puts it out of frame
+ * with the camera still most of the way back, where its exit reads as a board
+ * being lifted away rather than as a wall passing the lens.
+ *
+ * `turning` is still fully down, so the quarter turn that brings the quiz face
+ * round finishes before any of this starts - and the question then gets a
+ * `reading` beat of its own, so it is read from a standstill.
  */
 export function cubeRise(state: TrainingState): number {
   const quiz: Record<string, true> = {
     aiming: true,
+    firing: true,
     rejecting: true,
+    reloading: true,
     accepting: true,
     celebrating: true,
   }
   if (state.phase in quiz) return 1
   if (state.phase !== 'arming') return 0
-  return easeInOutCubic(state.elapsed / (DURATIONS.arming ?? 2.2))
+  const window = (DURATIONS.arming ?? 2.2) * WITHDRAW_FRACTION
+  return easeInOutCubic(state.elapsed / window)
 }
+
+/** How much of `arming` the cube's exit takes. See `cubeRise`. */
+export const WITHDRAW_FRACTION = 0.45
 
 /**
  * The cube's world position, given how far it has descended and how far it has

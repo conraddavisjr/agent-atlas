@@ -79,9 +79,30 @@ type GameStore = ProgressState & {
    */
   playerLocked: boolean
 
+  /**
+   * True while a scene is drawing the world from inside the character's head.
+   *
+   * Separate from `playerLocked`, and it has to be: locked-and-visible is the
+   * normal scripted case - the round parks the robot for its whole first half
+   * while the player watches it from behind - and hidden-and-unlocked is
+   * nonsense. Folding the two would make every locked cutscene invisible.
+   *
+   * What it guards is small and specific. The training round's quiz is shot from
+   * the player's own eye, 0.3 m in front of where their head is; with the model
+   * still drawn, the near plane cuts through the skull from the inside and
+   * renders as a dark smear across the frame that reads as a broken
+   * post-process rather than as a camera in the wrong place.
+   *
+   * Runtime-only, like `playerLocked` and for the same reason: a save file that
+   * remembered the player was invisible would load them into a game with no
+   * character in it.
+   */
+  playerHidden: boolean
+
   completeLesson: (id: string, evidence?: unknown) => void
   setActiveTotem: (id: string | null) => void
   setPlayerLocked: (value: boolean) => void
+  setPlayerHidden: (value: boolean) => void
   travelTo: (sceneId: string, spawnId: string) => void
 
   /**
@@ -112,6 +133,7 @@ export const useGameStore = create<GameStore>()(
       ...freshProgress(),
       activeTotemId: null,
       playerLocked: false,
+      playerHidden: false,
 
       completeLesson: (id, evidence) =>
         set((state) => ({
@@ -124,6 +146,7 @@ export const useGameStore = create<GameStore>()(
 
       setActiveTotem: (id) => set({ activeTotemId: id }),
       setPlayerLocked: (value) => set({ playerLocked: value }),
+      setPlayerHidden: (value) => set({ playerHidden: value }),
 
       /*
         Arriving somewhere new clears the interact prompt.

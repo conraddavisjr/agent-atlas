@@ -4,6 +4,7 @@ import {
   QUIZ_FACE,
   cubeDescent,
   cubePosition,
+  WITHDRAW_FRACTION,
   cubeRise,
   cubeYaw,
   easeInOutCubic,
@@ -17,8 +18,18 @@ import {
   initialTrainingState,
   type TrainingState,
 } from './trainingMachine'
-import { CUBE_AT, CUBE_DROP_FROM, CUBE_QUIZ_AT, CUBE_SIZE, PLANK_RADIUS } from './stage'
-import { LABEL_LIFT, plankLayout } from './quiz'
+import {
+  CUBE_AT,
+  CUBE_DROP_FROM,
+  CUBE_QUIZ_AT,
+  CUBE_SIZE,
+  EYE,
+  FIRST_PERSON_FOV,
+  HEADLINE_AT,
+  HEADLINE_QUIZ_Y,
+  PLANK_RADIUS,
+} from './stage'
+import { LABEL_HALF_HEIGHT, LABEL_LIFT, plankLayout } from './quiz'
 import { cameraPose } from './cameraDirector'
 
 const at = (over: Partial<TrainingState>): TrainingState => ({ ...initialTrainingState(), ...over })
@@ -174,13 +185,24 @@ describe('the descent', () => {
 })
 
 describe('the rise, which is the quiz layout', () => {
-  it('is down for the reading and up for every beat of the quiz', () => {
+  it('is down for the reading and gone for every beat of the quiz', () => {
     for (const phase of ['arriving', 'instructorIn', 'cubeIn', 'reading', 'turning'] as const) {
       expect(cubeRise(at({ phase })), phase).toBe(0)
     }
-    for (const phase of ['aiming', 'rejecting', 'accepting', 'celebrating'] as const) {
+    for (const phase of ['aiming', 'firing', 'rejecting', 'reloading', 'accepting', 'celebrating'] as const) {
       expect(cubeRise(at({ phase })), phase).toBe(1)
     }
+  })
+
+  it('is finished well before the camera reaches the eye', () => {
+    /*
+      The camera crosses five metres during `arming` and the cube stands at z 3.6,
+      directly between where it starts and where it ends. A board still rising
+      when the camera lands is a wall passing the lens.
+    */
+    const duration = DURATIONS.arming ?? 2.2
+    expect(cubeRise(at({ phase: 'arming', elapsed: duration * WITHDRAW_FRACTION }))).toBeCloseTo(1, 9)
+    expect(WITHDRAW_FRACTION).toBeLessThan(0.6)
   })
 
   it('never rises while it is still coming down', () => {
@@ -204,27 +226,31 @@ describe('the rise, which is the quiz layout', () => {
     }
   })
 
-  it('lands exactly on the quiz pose', () => {
+  it('lands exactly on the withdrawn pose', () => {
     const rest = cubePosition(1, 1)
     expect(rest[0]).toBeCloseTo(CUBE_QUIZ_AT[0], 12)
     expect(rest[1]).toBeCloseTo(CUBE_QUIZ_AT[1], 12)
     expect(rest[2]).toBeCloseTo(CUBE_QUIZ_AT[2], 12)
   })
 
-  it('clears the top answer label once it is up', () => {
+  it('leaves the frame entirely, rather than merely getting out of the way', () => {
     /*
-      **This is the test the whole quiz pose exists for.**
+      **This is the test the withdrawal exists for.**
 
-      Before it, the cube rested at 2.8 and the plank column at 2.5, so the
-      question ran straight through the answers and neither could be read. The
-      numbers that fixed it are three constants in three files, and nothing but
-      this assertion connects them - move any one and the frame silently goes
-      back to being illegible.
+      An earlier staging kept the cube in shot and lifted it just enough to clear
+      the answer labels. That worked from five metres behind the player and cannot
+      work from the player's own eye - a 2.1 m board at z 3.6 fills the middle of
+      a first-person frame and the plank column is behind it.
+
+      So the bar is not "above the labels", it is "outside the frame": the cube's
+      LOWEST corner has to sit past the top of a `FIRST_PERSON_FOV` view from
+      `EYE`. Anything less and a corner of the board hangs over the question the
+      HUD is now carrying.
     */
-    const topPlank = plankLayout()[0][1]
-    const labelTop = topPlank + LABEL_LIFT + 0.12
-    const cubeBottom = cubePosition(1, 1)[1] - CUBE_SIZE / 2
-    expect(cubeBottom).toBeGreaterThan(labelTop)
+    const [, y, z] = cubePosition(1, 1)
+    const bottom = y - CUBE_SIZE / 2
+    const angle = (Math.atan2(bottom - EYE[1], z - EYE[2]) * 180) / Math.PI
+    expect(angle, 'the withdrawn cube is still in shot').toBeGreaterThan(FIRST_PERSON_FOV / 2)
   })
 })
 
@@ -239,24 +265,54 @@ describe('the quiz camera frames the whole beat', () => {
     return ((Math.atan2(y - pose.position[1], z - pose.position[2]) - axis) * 180) / Math.PI
   }
 
-  it('holds the risen question and the bottom plank inside the frame', () => {
+  it('holds the whole answer column and its labels inside the frame', () => {
+    /*
+      Three coins, three labels, from the eye. The label is the part that gets
+      forgotten: it hangs above its plank, so the TOP of the frame is set by a
+      piece of text rather than by any geometry, and a column that fits by disc
+      alone can still crop the answer the player is reading.
+    */
     const pose = cameraPose('aiming')
     const half = pose.fov / 2
-    const [, cubeY, cubeZ] = cubePosition(1, 1)
     const planks = plankLayout()
 
-    const top = degreesAbove(pose, cubeY + CUBE_SIZE / 2, cubeZ)
+    const top = degreesAbove(
+      pose,
+      planks[0][1] + LABEL_LIFT + LABEL_HALF_HEIGHT,
+      planks[0][2],
+    )
     const bottom = degreesAbove(pose, planks[2][1] - PLANK_RADIUS, planks[2][2])
-    expect(top, 'question off the top').toBeLessThan(half)
-    expect(bottom, 'bottom plank off the bottom').toBeGreaterThan(-half)
+    expect(top, 'the top label is cropped').toBeLessThan(half)
+    expect(bottom, 'the bottom plank is cropped').toBeGreaterThan(-half)
   })
 
-  it('does not re-centre for the celebration', () => {
-    // A confetti burst that arrives with a camera tilt reads as a camera fault.
-    const aim = cameraPose('aiming')
-    const win = cameraPose('celebrating')
-    expect(win.lookAt).toEqual(aim.lookAt)
-    // Further back, though - the burst needs the room.
-    expect(win.position[2]).toBeLessThan(aim.position[2])
+  it('centres on the middle answer, so the level shot is not the easy one', () => {
+    /*
+      A column whose centre sat above the eye would make shooting level - the
+      thing a bow naturally does - land on the bottom answer every time. The
+      middle plank is dead ahead instead, and the outer two are symmetric about
+      it.
+    */
+    const pose = cameraPose('aiming')
+    const planks = plankLayout()
+    expect(degreesAbove(pose, planks[1][1], planks[1][2])).toBeCloseTo(0, 6)
+    const up = degreesAbove(pose, planks[0][1], planks[0][2])
+    const down = degreesAbove(pose, planks[2][1], planks[2][2])
+    expect(up).toBeCloseTo(-down, 6)
+  })
+
+  it('keeps the headline clear of the answers', () => {
+    /*
+      The headline stands 15.7 m behind the column and rides up with the cube's
+      withdrawal. It is now the only thing above the coins, so it has to be
+      ABOVE them - at its reading height it lands squarely in the top label,
+      which is what it did before the rise was re-derived for this camera.
+    */
+    const pose = cameraPose('aiming')
+    const planks = plankLayout()
+    const label = degreesAbove(pose, planks[0][1] + LABEL_LIFT + LABEL_HALF_HEIGHT, planks[0][2])
+    const headline = degreesAbove(pose, HEADLINE_QUIZ_Y, HEADLINE_AT[2])
+    expect(headline, 'the headline is in the answers again').toBeGreaterThan(label)
+    expect(headline, 'the headline is off the top of the frame').toBeLessThan(pose.fov / 2)
   })
 })
