@@ -63,11 +63,25 @@ const freshProgress = (): ProgressState => ({
 type GameStore = ProgressState & {
   /** Runtime-only. Deliberately excluded from persistence via partialize below. */
   activeTotemId: string | null
-  isTransitioning: boolean
+  /**
+   * True while a scene has taken the character away from the player.
+   *
+   * **Renamed from `isTransitioning`, which nothing ever read.** That flag was
+   * written by `setTransitioning` and consumed by no one, so it was a slot with a
+   * name and no meaning. Keeping the old name for this would have left the app
+   * with two unrelated notions of "transitioning" - the iris, which `App` already
+   * tracks as `covering`, and this - which is the confusion that ships a bug.
+   *
+   * `App` folds it into `inputLocked` alongside the iris, so a scripted scene can
+   * park the character without reaching into a ref it does not own. It is
+   * runtime-only and excluded from persistence: a save file that remembered the
+   * player was locked would load them into a game they could not move in.
+   */
+  playerLocked: boolean
 
   completeLesson: (id: string, evidence?: unknown) => void
   setActiveTotem: (id: string | null) => void
-  setTransitioning: (value: boolean) => void
+  setPlayerLocked: (value: boolean) => void
   travelTo: (sceneId: string, spawnId: string) => void
 
   /**
@@ -97,7 +111,7 @@ export const useGameStore = create<GameStore>()(
     (set) => ({
       ...freshProgress(),
       activeTotemId: null,
-      isTransitioning: false,
+      playerLocked: false,
 
       completeLesson: (id, evidence) =>
         set((state) => ({
@@ -109,7 +123,7 @@ export const useGameStore = create<GameStore>()(
         })),
 
       setActiveTotem: (id) => set({ activeTotemId: id }),
-      setTransitioning: (value) => set({ isTransitioning: value }),
+      setPlayerLocked: (value) => set({ playerLocked: value }),
 
       /*
         Arriving somewhere new clears the interact prompt.

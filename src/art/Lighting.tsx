@@ -22,10 +22,12 @@ import type { QualitySettings } from './quality'
  * frame budget for no visual gain.
  */
 
-export type LightingVariant = 'hub' | 'cave'
+export type LightingVariant = 'hub' | 'cave' | 'digital'
 
 export function Lighting({ variant }: { variant: LightingVariant }) {
-  return variant === 'hub' ? <HubLighting /> : <CaveLighting />
+  if (variant === 'hub') return <HubLighting />
+  if (variant === 'cave') return <CaveLighting />
+  return <DigitalLighting />
 }
 
 /*
@@ -1295,6 +1297,77 @@ function CaveLighting() {
         <Lightformer intensity={1.2} position={[0, 4, 0]} scale={[8, 8, 1]} color={palette.caveCrystal} />
         <Lightformer intensity={0.6} position={[0, 1, 6]} scale={[5, 5, 1]} color="#9fc6ff" />
       </Environment>
+    </>
+  )
+}
+
+/**
+ * The training stage.
+ *
+ * A room that is not a room: a near-black floor, one cool key from high and
+ * behind the camera, and almost no fill. The brief calls it "an intentional,
+ * simple digital world", and the composition problem it creates is the opposite
+ * of the cave's - there is nothing here to bounce light, so anything not lit
+ * directly reads as a hole rather than as shadow.
+ *
+ * ## Three differences from the other two rigs, all deliberate
+ *
+ * **The key comes from behind the camera, not from the side.** Every other rig in
+ * this project keys from `(9, 9.5, 5)` because a raking key is what gives a
+ * landscape its form. This stage has no landscape: the things that matter are a
+ * cube, three discs and a robot's back, all facing the camera, and a raking key
+ * puts the one face the player is looking at into shadow.
+ *
+ * **`castShadow` is off.** There is nothing for anything to cast onto except a
+ * black floor, the character has its own contact decal, and a shadow map here
+ * would be a full extra scene render per frame to darken pixels that are already
+ * near black. The cave keeps its shadows because it has walls.
+ *
+ * **The hemisphere is doing the work the environment does elsewhere.** No
+ * `<Environment>` at all: the round has no metal and no clearcoat showpiece in
+ * it, so a cubemap would be rendered once to be sampled by nothing. That is the
+ * same reasoning the cave uses to justify a literal 128 rather than the quality
+ * tier's resolution, taken one step further.
+ */
+function DigitalLighting() {
+  return (
+    <>
+      {/*
+        The key. High and slightly to the player's left so the cube's near
+        vertical edge catches a highlight and reads as an edge rather than as a
+        seam between two flat tones.
+      */}
+      <directionalLight position={[-4, 11, 9]} intensity={1.45} color="#cfe2ff" />
+
+      {/*
+        A dim, very cool bounce from below, which is the only thing stopping the
+        undersides of the cube and the planks from going to pure black. It reads
+        as the floor grid glowing, which is what a digital room is supposed to do.
+      */}
+      <hemisphereLight args={['#8fb4e8', '#0a0f1a', 0.55]} />
+      <ambientLight intensity={0.22} color="#7f9fd0" />
+
+      {/*
+        Front fill, and its SIDE is the thing to get right here.
+
+        Same argument the hub and the cave both make: every subject in this scene
+        is a vertical face pointed at the camera, and a steep key barely touches
+        those. What is different is which way "front" points. The hub and the cave
+        are viewed from roughly -Z, so their fills sit at POSITIVE z; this stage is
+        authored at +Z and viewed from negative z, so a fill copied from them lands
+        behind every subject and lights the one side nobody can see.
+
+        It shipped that way for one frame and the symptom was specific: the card
+        cube read as a black slab with text floating on it, because its
+        camera-facing side is a -Z normal that neither the key nor the fill
+        reached. The robot's back and the dummies' near faces had the same problem
+        and it was less obvious on them, which is why the cube is what found it.
+
+        0.34 rather than 0.30 because it is now doing real work rather than
+        catching an edge. Still a fifth of the key, so it never flattens the key's
+        own modelling.
+      */}
+      <directionalLight position={[0, 3.2, -9]} intensity={0.34} color="#b9d2f5" />
     </>
   )
 }

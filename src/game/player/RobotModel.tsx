@@ -30,6 +30,7 @@ import {
 } from './robotPose'
 import { RobotFace } from './RobotFace'
 import { applyPose, createCape, createRigRefs, type RigRefs } from './rig'
+import { FootThruster } from './FootThruster'
 import type { RobotAnimState } from './robotAnim'
 import type { SocketName } from '@/state/types'
 
@@ -242,8 +243,8 @@ export function RobotModel({
 
         {/* Legs. Short and wide-set, which is what gives the low centre of gravity
             that makes a platformer character read as stable and controllable. */}
-        <Leg side="L" rigRef={rigRef} />
-        <Leg side="R" rigRef={rigRef} />
+        <Leg side="L" rigRef={rigRef} anim={anim} ground={ground} />
+        <Leg side="R" rigRef={rigRef} anim={anim} ground={ground} />
       </group>
     </group>
   )
@@ -350,7 +351,17 @@ function Arm({
  * the sole to absorb a height difference, and the ground-normal tilt has to be
  * applied below the leg's own toe-out splay or it reads through the wrong pivot.
  */
-function Leg({ side, rigRef }: { side: 'L' | 'R'; rigRef: RefObject<RigRefs | null> }) {
+function Leg({
+  side,
+  rigRef,
+  anim,
+  ground,
+}: {
+  side: 'L' | 'R'
+  rigRef: RefObject<RigRefs | null>
+  anim: RefObject<RobotAnimState>
+  ground: RefObject<GroundSample | null>
+}) {
   return (
     <group
       ref={(o) => void (side === 'L' ? (rigRef.current!.legL = o) : (rigRef.current!.legR = o))}
@@ -366,6 +377,12 @@ function Leg({ side, rigRef }: { side: 'L' | 'R'; rigRef: RefObject<RigRefs | nu
           position={at(side === 'L' ? REST.footL : REST.footR)}
         >
           <Foot />
+          {/*
+            Inside the foot group so the beam inherits the ankle's full transform.
+            Two beams positioned in world space would stay vertical while the feet
+            splay, which is the tell that they are a separate system.
+          */}
+          <FootThruster anim={anim} ground={ground} />
         </group>
       </group>
     </group>

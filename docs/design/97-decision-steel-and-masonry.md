@@ -14,7 +14,8 @@ This file is the record of what was changed, what was measured, and which of the
 3. Narrow the feet, particularly the top portion, by about 30%, because the current diameter reads as an oaf rather than as the bottom of a foot.
 4. Move the character off high-contrast blue-and-orange, which is not Astro's language, and onto blues, silvers, greys and black.
 
-Items 1 to 3 are in this pass. Item 4 is deliberately held - see "What is not in this pass".
+Items 1 to 3 landed first. Item 4 was held for the critique's direction and landed after it, along with corrections to items 2 and 3 that the critique forced.
+The addendum at the end covers the two defects it left open.
 
 ---
 
@@ -86,14 +87,39 @@ So the bond carries a printed tone ladder solved through `panelTintBytes`, and t
 
 **The pylons get a compressed ladder, and the reason is a written decision rather than taste.**
 `97-decision-shadow-end.md` closes the 0.20 to 0.38 midground band's floor to repeated verticals.
-The deck has 0.127 of headroom from 0.687 to the gameplay floor; the frame has 0.10 from 0.30 to the midground floor.
-`FRAME_DROP_SCALE = 0.70` sizes the ladder against headroom rather than against value, and the p100 pylon texel lands at 0.206.
 
-**Measured after, `hub-establishing`, high:** deck 0.615 gameplay, pylon shaft 0.269 midground.
-Both in band.
+**CORRECTED after `91-design-critique.md`, and the first version of this paragraph was wrong in a way worth keeping visible.**
+It read: "the deck has 0.127 of headroom from 0.687 to the gameplay floor; the frame has 0.10 from 0.30 to the midground floor. `FRAME_DROP_SCALE = 0.70` sizes the ladder against headroom rather than against value, and the p100 pylon texel lands at 0.206."
 
-**And the deck is still WARM**, at `warmth` +24, `rgb(163, 157, 140)`, so the bond reads as tan sandstone rather than as the cool stone the direction asks for.
-That is the most obviously off-language thing left in the frame after the character.
+Every term in that was either stale or the wrong quantity.
+0.687 was measured on a `mattePlastic` deck and masonry renders 0.6706; 0.30 came from a pre-brick frame and the pylons sit at 0.3553; and a cylinder has no single value to size against at all, because it presents every facing at once.
+What has to clear the floor is its 5th percentile.
+
+The ladders are now solved against `MASONRY_DECK_LIT_LUMA` and `FRAME_LIT_LUMA`, both measured with `?nobrickmap`, and `FRAME_DROP_SCALE` is **0.55**, derived from the frame: unmapped the pylon's p5 is 0.2710, at scale 0.70 the map took it to 0.1959, and 0.0610 of drop is what fits above a 0.21 target.
+
+**And the test that should have caught it agreed with the constant instead.**
+`brickTexture.test.ts` asserted that no pylon texel leaves the midground band, computed against the same `FRAME_LIT_LUMA` that generated the map.
+A test whose input is its own subject cannot fail.
+It is rewritten against `MEASURED_UNMAPPED_P5`, which comes from a different experiment.
+
+**Measured after:**
+
+| | before | after | rule |
+| --- | --- | --- | --- |
+| pylon p5 | 0.1959 | **0.2194** | > 0.20 |
+| deck p5 | 0.5691 | **0.5824** | > 0.56 |
+
+The pylon's bright end was still 0.011 over the band top at this point. See the addendum.
+
+**The deck was also WARM**, at `warmth` +24, `rgb(163, 157, 140)`, so the bond read as tan sandstone rather than as the cool stone the direction asks for - the most obviously off-language thing in the frame after the character.
+
+**FIXED, and the coupling argument this paragraph used to make was half right.**
+`palette.bandDeckTop` `#bfbbb4` to `#BABCBD` and `bandDeckSide` `#9d968d` to `#94989B`, which moves display luma by 1.2 thousandths and only the hue, so every band assertion and every number in the bible's section 8 table survives.
+Measured after: **warmth +10**.
+
+What was right is that the design system pairs this with warming the key so the temperature comes back from the rig.
+What was wrong is treating the pair as inseparable: `91-design-critique.md` finding 3 falsifies the two-point fit that rig number came from - it predicts a neutral-albedo deck at R-B -9.9 and the shipped one measured +23, a 25-point miss - so the rig half waits for a three-point fit and the albedo half did not have to wait with it.
+The world is cooler than the destination until then, which is a knowing intermediate state.
 It is not fixed here because the fix is coupled: `90-astro-design-system.md` item 8 moves the world's warmth out of the albedo and into the rig in one commit, and doing the albedo half alone would delete a temperature axis that round 3 deliberately built.
 
 ### The falsification that came back negative, and it is the opposite of what was predicted
@@ -148,11 +174,21 @@ The gap test now has a ceiling at 0.18 so a further narrowing has to be argued w
 
 ## What is not in this pass, and why
 
-**The character's colour scheme.** Still cream with a saturated orange chest plate, orange ear pod, orange cape and blue-and-orange shoulder stripes.
-`90-astro-design-system.md` section 2 has the replacement worked out - the chroma ceiling, `hero.blue` `#2F7AD2` at debt 2.24 capped at 1.79% of frame as a trim colour, amber deleted across thirteen call sites - and it says to do it in one commit because a half-migrated palette is a world with two schemes in it.
-Direction was asked for from the critique before it is done, not after.
+**DONE after the critique landed: the character's colour scheme.**
+Chest panel to `palette.plate` `#4B5568`, which is the character's dark and the strongest value edge on the body - a drop of about 0.61 from the shell, and it did not exist before at any hue.
+Head cap, ear pods and the arm cuff to `anodised(palette.hardware)` `#AEB9C6`, which clears Filament's [170..255] floor for a metal base colour.
+Backpack to `palette.hull` `#5F6871`, one rung brighter so the two darks separate in greyscale.
+Blue spent exactly twice, the antenna to ally cyan, and the shell from `#f4f1ea` to `#EEF0F4`.
 
-**The deck's warmth.** Coupled to a light-rig change. See section 3.
+The trap named by the critique and avoided: this is not "orange becomes blue".
+`hero.blue` at debt 2.24 caps at 1.79% of frame and the character is 3 to 6% of it, so all seven amber sites could not have become blue.
+
+**DONE, against direction: the cape's colour.**
+The critique said to hold it for the commit that gives it thickness.
+Taken anyway, because leaving one warm element on an otherwise entirely neutral character makes the cape the loudest thing on the hero - worse than either end state, and worse than what shipped before this pass, where at least the chest matched it.
+Colour and thickness are separable and only one of them was directed.
+
+**The deck's warmth.** Done, albedo half only. See section 3.
 
 **The horizon card that would let the steel go back to `metalness: 1`.** See section 2.
 
@@ -166,3 +202,70 @@ Both the high and the low tier were loaded and captured; low returns null map se
 
 Draw calls go from 114 to 115 at high: the pylon masts had to leave `dressBatch` because masonry needs a different projection scale, 2.34 m against 1.6 m, and a material with no clearcoat, and a merged batch has exactly one of each.
 The struts, the collar, the catenary arcs and the pylon caps deliberately stay machined - a cable made of brick is a category error, and a cast stone shaft with a machined disc on top of it is the world rule this project has had since its first pass.
+
+---
+
+# Addendum: the two defects the critique left open
+
+Same round, after `91-design-critique.md`. Both were carried in "Still open" above.
+
+## The pylon's bright end was over the band, and the fix is a shift rather than a compression
+
+**Measured**, `hub-character`, high, a clean pylon shaft with the brick albedo bound: p5 **0.2194**, p95 **0.3912**, against a midground band of 0.20 to 0.38.
+So the bright end was 0.011 over.
+
+The obvious reading is that a diffuse cylinder is too contrasty to hold a band, which is what `materials.ts` says about this exact case: "a diffuse cylinder's p95-to-p5 LINEAR ratio under this key is 6.297 and midground permits 3.603."
+**The frame says otherwise, and the difference matters.**
+That 6.297 is the bare geometric case.
+What ships has ambient fill, `paintByFacing`'s albedo ramp and now an albedo map, and the measured ratio is `0.12678 / 0.03947 = 3.212` - inside the 3.603 the band permits.
+
+So the distribution fits and was only positioned too high, which makes the albedo the correct lever because it scales both ends together.
+`FRAME_SIDE` `#6e7e9e` to `#6a7998`, a linear scale of 0.92.
+
+**Measured after**, same framing, a box entirely inside the shaft: p5 **0.2152**, p95 **0.3682**.
+Both ends in band, with 0.015 at the bottom and 0.012 at the top.
+
+The margins are deliberately lopsided toward the dark end.
+`97-decision-shadow-end.md` closes the floor to repeated verticals by name and says nothing comparable about the ceiling, so the end with a written prohibition on it gets the larger share of the slack.
+
+This also moves the Core struts and the arc flanks, which share the constant, and that is a fix rather than a side effect: the dress-batch note records a near strut at a mean of 0.383, over the band top for the same reason and by the same amount.
+
+## The cape's thickness was REAL and did not READ, and both documents had it wrong
+
+`99-handoff.md` item 4 and `91-design-critique.md` both describe the cape as a flat zero-thickness quad still carrying round 1's F4.
+
+**Neither is true of what is built.**
+The ribbon is a closed section of eight flats with ten distinct normals and a measured rest bounding box of 0.374 x 0.720 x 0.030.
+Both descriptions were written from a screenshot, and the screenshot was right about the read and wrong about the cause - which is the same failure mode as the stale `FRAME_LIT_LUMA`, arrived at from the other direction.
+
+**Why 0.030 of real thickness read as none.**
+At `hub-character` the character spans about 200 px for a metre, so the edge is **6 screen pixels** split across four flats: two chamfers of 0.010, a 0.010 face between them, and the side.
+Each strip is 1 to 2 px and they sit at similar angles to the key, so they antialias into a single line of almost the face's own value.
+A moulded edge that cannot be resolved into more than one tone is a drawn edge.
+
+**What changed.** Thickness 0.030 to 0.045, bevel 0.010 to 0.013, and `z` from -0.108 to -0.1155 so that `z + thickness / 2` is unchanged at -0.093 and the backpack port clearance the tests pin is bit-for-bit what it was.
+
+**Measured after**, the character turned 180 degrees so the cape faces the camera:
+
+| | mean | p50 | p95 | p5-p95 |
+| --- | --- | --- | --- | --- |
+| cape face | 0.3488 | 0.3502 | 0.3580 | **0.0165** |
+| cape edge, the chamfer strip | 0.5627 | 0.6052 | 0.7331 | 0.3869 |
+
+The edge now sits **0.255 of display luma above the face** at the median and reaches 0.733, which is a bright moulded lip rather than a hairline.
+
+**Two things this does NOT fix, stated so the next round does not have to rediscover them.**
+The face's own p5-p95 is 0.0165, so it is still one flat tone - a plane at rest has one normal, and no thickness change addresses that.
+And the hem is still a square cut.
+Both are about FORM rather than about thickness, and only thickness was asked for.
+
+**A note on the vantages, because it is why this survived three rounds.**
+All six shipped vantages are front views, so the cape is a sliver in every one of them and its thickness has never been visible in a capture set.
+The measurement above was taken by turning the character with `__dev.teleport(0, 1.6, 5.0, facing + PI)` and stepping the clock by hand.
+A part that no vantage sees cannot be critiqued from a capture set, and the honest fix is a seventh vantage rather than a better eye.
+
+## Verification
+
+1033 tests, `tsc -b --noEmit` and `eslint .` clean.
+
+The cape's signed-volume pin is what caught the thickness change and it was re-derived rather than widened: the section is `0.34 * 0.045 - 4 * (0.013^2 / 2) = 0.014962` square metres over 0.72 m at a mean flare factor of about 1.05, which is 0.01131 against a measured 0.011323.

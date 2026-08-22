@@ -130,15 +130,22 @@ describe('resetProgress', () => {
     for (const lesson of LESSONS) expect(lesson.isComplete(clean)).toBe(false)
   })
 
-  it('leaves the runtime-only transition flag alone', async () => {
-    // Progress is persisted; whether an iris is closing is not, and clobbering it
-    // from a reset would desync the travel machine mid-transition.
+  it('leaves the runtime-only lock alone', async () => {
+    /*
+      Progress is persisted; whether a scene currently has the character is not,
+      and clobbering that from a reset would leave a scripted scene running with
+      the player suddenly drivable inside it.
+
+      This used to name `isTransitioning`, a flag written by `setTransitioning`
+      and read by nobody. It is now `playerLocked`, which `App` folds into
+      `inputLocked`, so the test finally covers something that runs.
+    */
     const useGameStore = await freshStore()
 
-    useGameStore.getState().setTransitioning(true)
+    useGameStore.getState().setPlayerLocked(true)
     useGameStore.getState().resetProgress()
 
-    expect(useGameStore.getState().isTransitioning).toBe(true)
+    expect(useGameStore.getState().playerLocked).toBe(true)
   })
 })
 

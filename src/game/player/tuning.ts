@@ -76,6 +76,94 @@ export const JUMP = {
   fallGravityMultiplier: 1.5,
 } as const
 
+/**
+ * The second jump, and the foot thrusters that sell it.
+ *
+ * ## Why this is one block and not two
+ *
+ * A discrete double jump and a timed hover are the same mechanism with one
+ * constant moved. Both are "a press in the air sets a vertical velocity and
+ * opens a window during which gravity is reduced"; a double jump is that window
+ * at zero and a hover is that window at a few hundred milliseconds. Building the
+ * general form costs nothing and means the choice between them is a number
+ * rather than a rewrite. See `docs/design/92-double-jump.md`.
+ *
+ * ## PROVISIONAL. Every number here is an engineering placeholder.
+ *
+ * They are internally consistent and they are not researched. They exist so the
+ * mechanism can be built and tested before the reference numbers land, and they
+ * are marked so nobody mistakes them for measurements. The one thing they are
+ * chosen to satisfy is the ratio the brief actually states - "move up higher and
+ * prolong their air time" - so the second jump has to add height AND airtime
+ * rather than only re-launching.
+ */
+export const AIR_JUMP = {
+  /**
+   * How many jumps are available after leaving the ground. 1 is a double jump.
+   *
+   * Refilled on landing only, never in the air, which is what stops a held key
+   * from becoming flight. See `stepVertical`.
+   */
+  count: 1,
+
+  /**
+   * Upward velocity the second press sets, as a fraction of `JUMP.velocity`.
+   *
+   * A fraction rather than an absolute, so retuning the first jump carries the
+   * second with it. Below 1 on purpose: a second jump that matches the first
+   * reads as a bug, because the eye expects the boost to be the smaller,
+   * cheaper move.
+   *
+   * SET rather than added. Adding to the current velocity makes the height
+   * depend on when in the arc the press landed, so a press at the apex and a
+   * press on the way down give different results from the same button - which
+   * is the class of thing players describe as "sometimes it does not work".
+   */
+  velocityFraction: 0.78,
+
+  /**
+   * How long the thrusters burn, in seconds, and therefore how long gravity is
+   * reduced.
+   *
+   * This is THE constant that decides whether the move is a double jump or a
+   * hover. At 0 it is a pure second impulse.
+   *
+   * 0.20, from the research rather than from the placeholder that shipped first.
+   * `92-double-jump.md` measured what this and `velocityFraction` produce together
+   * against the frozen `JUMP` constants:
+   *
+   *   apex, single             1.030 body heights
+   *   apex, doubled            2.087 body heights, a ratio of 2.03
+   *   second press to apex     377 ms
+   *   airtime                  0.621 s to 1.115 s, a ratio of 1.80
+   *
+   * The apex ratio is the number to carry between games, because it is the only
+   * one that is free of this project's unit scale.
+   */
+  thrustTime: 0.2,
+
+  /**
+   * Gravity multiplier while the thrusters are burning.
+   *
+   * Applied to the RISING gravity only. The fall multiplier is untouched, so the
+   * descent after the burn is the same heavy, snappy fall the first jump has and
+   * the move does not turn the character into a balloon on the way down.
+   */
+  thrustGravity: 0.45,
+
+  /**
+   * The window after leaving the ground during which the second jump is
+   * refused, in seconds.
+   *
+   * Without it a fast double tap spends both jumps inside the first few frames
+   * and the character gets one slightly higher jump instead of two, which reads
+   * as the input being eaten. It is the mirror of `JUMP.coyoteTime`: that one
+   * forgives a press slightly too late, this one forgives a press slightly too
+   * early by making it impossible rather than wasteful.
+   */
+  lockout: 0.12,
+} as const
+
 export const BODY = {
   /** Capsule half-height excluding the caps. */
   capsuleHalfHeight: 0.35,

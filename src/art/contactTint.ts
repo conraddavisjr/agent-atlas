@@ -35,5 +35,12 @@ export const CONTACT_TINT: Record<LightingVariant, string> = {
   hub: '#3d4a6b',
   /** Violet, matching the crystal hue that lights the room. */
   cave: '#2b2450',
+  /*
+    Steel blue, and darker than either. The training stage is a near-black floor
+    lit from above by one cool key, so a contact that carried any warmth at all
+    would be the only warm thing in the round - the design system's rule is that
+    the world's hue belongs in the light, and this room's light has none.
+  */
+  digital: '#232c3f',
 }
 

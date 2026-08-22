@@ -26,6 +26,13 @@ export function HUD() {
     <div style={styles.root} data-hud="">
       <div style={styles.topLeft}>
         <div style={styles.sceneTitle}>{scene.title}</div>
+        {/*
+          The subtitle, which only lesson scenes have. It sits above the lesson
+          count rather than below it because it names the ROOM, and the count is a
+          fact about progress - grouping the two identity lines together is what
+          keeps the card readable at a glance.
+        */}
+        {scene.subtitle && <div style={styles.sceneSubtitle}>{scene.subtitle}</div>}
         {stats && (
           <div style={styles.progress}>
             {stats.done} / {stats.total} lessons
@@ -99,6 +106,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   topLeft: { position: 'absolute', top: 20, left: 20, ...panel },
   sceneTitle: { fontSize: '1.05rem', fontWeight: 600, letterSpacing: '0.01em' },
+  sceneSubtitle: { fontSize: '0.86rem', opacity: 0.78, marginTop: 2 },
   progress: { fontSize: '0.78rem', opacity: 0.66, marginTop: 3 },
   topRight: {
     position: 'absolute',
