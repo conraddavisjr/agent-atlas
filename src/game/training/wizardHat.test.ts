@@ -124,21 +124,59 @@ describe('the stars sit on the cloth', () => {
     }
   })
 
-  it('faces the front, where the player is', () => {
+  it('stays off the back of the hat, where nobody would see it', () => {
     /*
-      The instructor turns to face the player and holds there for its whole eight
-      seconds. Stars on the back of the hat are stars nobody sees, so every one is
-      within a right angle of front.
+      The instructor holds its front to the player for the whole of its eight
+      seconds, so a star at 170 degrees is a star nobody sees. Not a right angle
+      though - the head turns on its way in and the sides ARE seen, which is what
+      lets the scatter carry around the cone instead of huddling on one face.
     */
-    for (const star of HAT_STARS) expect(Math.abs(star.theta)).toBeLessThan(Math.PI / 2)
+    for (const star of HAT_STARS) expect(Math.abs(star.theta)).toBeLessThan(1.4)
   })
 
-  it('scatters rather than forming a ring or a line', () => {
-    // Five at one height is a party hat again; five at one angle is a stripe.
-    const heights = new Set(HAT_STARS.map((s) => s.y))
-    const angles = new Set(HAT_STARS.map((s) => s.theta))
-    expect(heights.size).toBe(HAT_STARS.length)
-    expect(angles.size).toBe(HAT_STARS.length)
+  it('is actually SCATTERED, not a patch on the front', () => {
+    /*
+      The property "scatter" names, pinned so it cannot quietly shrink back. The
+      first set covered 99 degrees and the middle 55% of the crown, which reads as
+      a decal somebody stuck on rather than as cloth the stars are part of.
+    */
+    const angles = HAT_STARS.map((s) => s.theta)
+    const heights = HAT_STARS.map((s) => s.y)
+    expect(Math.max(...angles) - Math.min(...angles), 'the stars huddle').toBeGreaterThan(2)
+    expect(Math.max(...heights) - Math.min(...heights)).toBeGreaterThan(WIZARD_HAT.height * 0.6)
+  })
+
+  it('alternates sides as it climbs, so it is not a stripe up one face', () => {
+    // Five at one height is a party hat; five at one angle is a stripe. Sorting
+    // by height and requiring the sign to flip rules out the second directly.
+    const byHeight = [...HAT_STARS].sort((a, b) => a.y - b.y)
+    for (let i = 1; i < byHeight.length; i++) {
+      expect(
+        Math.sign(byHeight[i].theta),
+        `stars ${i - 1} and ${i} are on the same side`,
+      ).toBe(-Math.sign(byHeight[i - 1].theta))
+    }
+  })
+
+  it('never lands two stars on top of each other', () => {
+    /*
+      Hand-placed positions are hand-placed, so this is the rejection pass a
+      seeded scatter would have needed. Measured as real distance ON the cloth -
+      the arc length at each star's own radius, not the raw angle, because the
+      crown narrows and two stars 0.5 radians apart near the tip are much closer
+      together than the same pair at the brim.
+    */
+    for (let i = 0; i < HAT_STARS.length; i++) {
+      for (let j = i + 1; j < HAT_STARS.length; j++) {
+        const a = HAT_STARS[i]
+        const b = HAT_STARS[j]
+        const meanRadius = (hatRadiusAt(a.y) + hatRadiusAt(b.y)) / 2
+        const along = Math.abs(a.theta - b.theta) * meanRadius
+        const up = Math.abs(a.y - b.y)
+        const gap = Math.hypot(along, up)
+        expect(gap, `stars ${i} and ${j} overlap`).toBeGreaterThan(a.size + b.size)
+      }
+    }
   })
 
   it('gets smaller toward the tip, because the cloth does', () => {

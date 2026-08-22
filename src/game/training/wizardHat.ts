@@ -230,15 +230,27 @@ export function hatSlopeAt(y: number): number {
  * pass to stop two landing on top of each other, and five positions are five
  * positions.
  *
- * Angles cluster toward the FRONT - the instructor faces the player for the whole
- * of its eight seconds and stars on the back of the hat are stars nobody sees.
+ * ## Spread, which took a second pass
+ *
+ * The first set covered 99 degrees of the cone and the middle 55% of its height,
+ * which is a patch on the front rather than a scatter - stars in a huddle read as
+ * a decal somebody stuck on, where stars that carry on around the cone read as a
+ * night sky the hat is made of. They now cover 145 degrees and the crown from
+ * 0.14 to 0.85, and they alternate sides as they climb so no two consecutive ones
+ * sit on the same face.
+ *
+ * They still stop short of the back. The instructor holds its front to the player
+ * for the whole of its eight seconds, so a star at 170 degrees is a star nobody
+ * sees - but the head DOES turn on its way in, and the sides are seen, which is
+ * what buys the extra 45 degrees. `wizardHat.test.ts` pins the spread as well as
+ * the limit, so this cannot quietly shrink back to a patch.
  */
 export const HAT_STARS: readonly { y: number; theta: number; size: number }[] = [
-  { y: 0.2, theta: -0.5, size: 0.085 },
-  { y: 0.36, theta: 0.62, size: 0.07 },
-  { y: 0.52, theta: -0.15, size: 0.058 },
-  { y: 0.66, theta: 0.95, size: 0.045 },
-  { y: 0.78, theta: -0.78, size: 0.04 },
+  { y: 0.14, theta: -1.24, size: 0.092 },
+  { y: 0.31, theta: 0.85, size: 0.078 },
+  { y: 0.5, theta: -0.28, size: 0.062 },
+  { y: 0.68, theta: 1.3, size: 0.048 },
+  { y: 0.85, theta: -0.9, size: 0.036 },
 ]
 
 /**
