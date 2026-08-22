@@ -7,6 +7,10 @@ import {
   hatRadiusAt,
   hatSlopeAt,
 } from './wizardHat'
+import { INSTRUCTOR_HEAD } from './instructorFace'
+
+/** The top of the head the hat is worn on, which is what the brim can lift to. */
+const HEAD_TOP = INSTRUCTOR_HEAD.b
 
 describe('the silhouette is a wizard hat and not a cone', () => {
   it('narrows all the way up, without a bulge', () => {
@@ -71,6 +75,22 @@ describe('the silhouette is a wizard hat and not a cone', () => {
       second horizontal that turns a cone into a hat.
     */
     expect(WIZARD_HAT.brimRadius).toBeGreaterThan(WIZARD_HAT.radius * 1.25)
+  })
+
+  it('leans enough to read, and not so far it falls off', () => {
+    /*
+      The lean is what stops a wizard hat being a traffic cone, and it has a real
+      ceiling rather than a matter of taste: the brim lifts on its high side by
+      `brimRadius * sin(lean)`, and once that exceeds the height it is mounted at
+      the hat has left the head.
+
+      Checked against `lift` rather than against a number, so raising the lean and
+      lowering the seat - which is exactly the trade that was made here - stays
+      legal, and doing one without the other does not.
+    */
+    expect(WIZARD_HAT.lean, 'the hat barely leans').toBeGreaterThan(0.3)
+    const lift = WIZARD_HAT.brimRadius * Math.sin(WIZARD_HAT.lean)
+    expect(lift, 'the brim has lifted off the head').toBeLessThan(WIZARD_HAT.lift + HEAD_TOP)
   })
 
   it('puts the band on the cloth, not floating off it', () => {

@@ -63,8 +63,15 @@ export const WIZARD_HAT = {
   radius: 0.4,
   /** Cone height, not counting the floppy tip. */
   height: 1.06,
-  /** Where the brim sits above the head's centre. */
-  lift: 0.26,
+  /**
+   * Where the brim sits above the head's centre.
+   *
+   * Lowered from 0.26 when the lean went past 20 degrees. A leaning brim lifts on
+   * its high side by `brimRadius * sin(lean)`, which at 0.36 is 0.20 - so the hat
+   * was riding up off the crown on one side and reading as balanced on the head
+   * rather than worn on it. Seating it lower puts that lift back over the dome.
+   */
+  lift: 0.21,
   /**
    * The brim, which the first version did not really have.
    *
@@ -83,11 +90,20 @@ export const WIZARD_HAT = {
   /**
    * The permanent lean, radians.
    *
-   * A hat standing exactly upright reads as a traffic cone balanced on a ball.
-   * Every drawn wizard hat leans, and 0.22 is about 13 degrees - enough to be
-   * deliberate, not so much that it looks knocked.
+   * A hat standing exactly upright reads as a traffic cone balanced on a ball, so
+   * this was 0.22 - about 13 degrees, enough to be deliberate and not so much
+   * that it looked knocked.
+   *
+   * It reads as timid at that angle next to a metre-tall crown. 0.36 is 20.6
+   * degrees, which is where the tip clearly hangs out past the brim's own
+   * footprint and the silhouette stops being symmetrical - the point of leaning a
+   * hat at all. It costs the seat: see `lift`, which came down to pay for it.
+   *
+   * The ceiling is not taste, it is the brim. Past about 30 degrees the low edge
+   * swings down level with the eyes and the high edge lifts clear of the crown,
+   * and `wizardHat.test.ts` holds that line.
    */
-  lean: 0.22,
+  lean: 0.36,
 
   /**
    * How hard the tip lags the head's motion, in radians per metre per second.

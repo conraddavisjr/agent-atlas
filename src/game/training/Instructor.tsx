@@ -214,7 +214,7 @@ export function Instructor({ run }: { run: RefObject<TrainingState> }) {
       */}
       {([-1, 1] as const).map((side) => (
         <mesh key={side} geometry={whisker} {...moustacheHalf(side)} castShadow>
-          <meshPhysicalMaterial {...mattePlastic(MOUSTACHE_HAIR)} />
+          <meshPhysicalMaterial {...mattePlastic(palette.hull)} />
         </mesh>
       ))}
 
@@ -305,16 +305,23 @@ export function Instructor({ run }: { run: RefObject<TrainingState> }) {
  * is one prop in one mini-game.
  */
 const HAT_CLOTH = '#28356B'
-/**
- * The moustache.
- *
- * `palette.shellShadow` first, which is the hero's own shadow tone - so the
- * moustache was made of exactly the same plastic as the head it sits on and read
- * as a moulded handle rather than as hair. Pulled toward the hat's cloth instead:
- * it now belongs to the costume, which is what a wizard's beard does, and it has
- * somewhere to be dark against a pale face.
- */
-const MOUSTACHE_HAIR = '#3B4874'
+/*
+  The moustache's colour is `palette.hull`, and it took two passes to land there.
+
+  First it was `palette.shellShadow`, the hero's own shadow tone at `#d8d2c6` -
+  within a few percent of the head's own value, so the moustache read as a moulded
+  handle on the same piece of plastic rather than as hair.
+
+  Then it was a navy pulled from the hat's cloth, which fixed the value problem
+  and overcorrected on hue: the character came out blue from brim to chin, and the
+  moustache read as part of the costume rather than as part of the wizard.
+
+  `palette.hull` is the world's own neutral - a grey with a cool tilt of about
+  nine percent saturation, half the head's value and a fifth of the navy's. It
+  separates from the face without joining the hat, and being a palette entry
+  rather than a local constant is the honest form for a colour that is structural
+  rather than a costume choice.
+*/
 /** The stars: pale silver, well under the bloom threshold. Cloth, not light. */
 const HAT_STAR = '#C9D6EC'
 /** How far a star floats off the cloth, to keep it out of a z-fight. */
