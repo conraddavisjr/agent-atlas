@@ -28,6 +28,12 @@ import {
   SOLE_LIGHT,
   superellipsePoints,
   superellipsoidField,
+  FIST,
+  FIST_DIGIT,
+  FIST_TIP,
+  FIST_GRIP_CLEARANCE,
+  fistDigitCentreY,
+  fistGrip,
   superellipsoidOffset,
   superellipsoidPatch,
   superellipsoidX,
@@ -3168,5 +3174,177 @@ describe('the cape ribbon', () => {
   it('refuses a segment length that would collapse it', () => {
     expect(() => createCapeRibbon(0)).toThrow(/positive length/)
     expect(() => createCapeRibbon(-1)).toThrow(/positive length/)
+  })
+})
+
+
+/*
+  THE CLOSED HAND.
+
+  Built to the same standard as the open one and tested against it, because the
+  one thing a second hand shape can do that a first cannot is stop being the same
+  character's hand. Every assertion below is either a relation to `HAND` or a
+  measurement on the BUILT fist - none of them restate the numbers that built it.
+*/
+describe('the fist', () => {
+  const fist = () => taperedSuperellipsoid(FIST)
+  const digit = () => taperedSuperellipsoid(FIST_DIGIT)
+
+  it('is the same hand closed, not a smaller hand', () => {
+    /*
+      A closed hand does not get narrower - the palm is the palm. What changes is
+      that the fingers stop adding to its LENGTH and start adding to its DEPTH,
+      and both of those have to be true or the shape is just a shortened mitten.
+    */
+    const closed = fist().boundingBox!
+    const open = taperedSuperellipsoid(HAND).boundingBox!
+
+    expect(closed.max.x).toBeCloseTo(open.max.x, 6)
+    expect(closed.max.y).toBeLessThan(open.max.y * 0.8)
+    expect(closed.max.z).toBeGreaterThan(open.max.z)
+  })
+
+  it('keeps the knuckles on the mitten\'s own finger centrelines', () => {
+    // Two hands whose fingers came out of different places are two characters.
+    expect(FIST_DIGIT.x).toBe(FINGER.x)
+  })
+
+  it('has no corner the world forbids', () => {
+    /*
+      `00-art-bible.md`'s rule: nothing here has a 90 degree corner. A fist is
+      squarer than a mitten and this is where that stops being an argument and
+      starts being a limit - `e` at 0 IS a box.
+    */
+    for (const e of [FIST.e1, FIST.e2, FIST_DIGIT.e1, FIST_DIGIT.e2]) {
+      expect(e).toBeGreaterThan(0.2)
+      expect(e).toBeLessThan(1)
+    }
+    // And it is squarer than the mitten, which is the shape difference itself.
+    expect(FIST.e1).toBeLessThan(HAND.e1)
+  })
+
+  it('rolls ACROSS the hand rather than pointing off the end of it', () => {
+    /*
+      The difference between a folded finger and an extended one, measured on the
+      built mesh: an extended `FINGER` is longest on Y, a folded one is longest on
+      Z, because it has wrapped from the knuckle at the back to the tip at the
+      front.
+    */
+    const box = digit().boundingBox!
+    expect(box.max.z).toBeGreaterThan(box.max.y * 2)
+    expect(box.max.z).toBeGreaterThan(box.max.x * 2)
+  })
+
+  it('reaches nearly the full depth of the fist without spearing through it', () => {
+    /*
+      Short and it is a nub stuck under the palm; long and it is a bar through the
+      hand. The roll has to wrap.
+    */
+    const roll = digit().boundingBox!.max.z
+    const depth = fist().boundingBox!.max.z
+    expect(roll / depth).toBeGreaterThan(0.85)
+    expect(roll).toBeLessThan(depth)
+  })
+
+  /*
+    THE VISIBILITY PROOF, the same one the open hand's fingers get.
+
+    Every vertex of the built roll is tested against the built fist's own field. A
+    roll swallowed by the palm fails here, and so does one that has floated off
+    it, because the top of the roll has to stay inside.
+  */
+  it('stands proud of the fist rather than being swallowed by it', () => {
+    const pos = digit().getAttribute('position')
+    const centreY = fistDigitCentreY()
+    let outside = 0
+    let inside = 0
+    for (let i = 0; i < pos.count; i++) {
+      const field = superellipsoidField(
+        pos.getX(i) + FIST_DIGIT.x,
+        pos.getY(i) + centreY,
+        pos.getZ(i),
+        FIST,
+      )
+      if (field > 1) outside++
+      else inside++
+    }
+    expect(outside, 'the folded fingers are inside the fist').toBeGreaterThan(0)
+    expect(inside, 'the folded fingers have floated off the fist').toBeGreaterThan(0)
+  })
+
+  it('protrudes less than an extended finger does, because it is folded', () => {
+    /*
+      The proportion that makes it read as closed. An extended finger clears the
+      mitten by about 0.09; a folded one showing that much is not folded, it is
+      pointing. Measured against each shape's own surface at its own centreline.
+    */
+    const fistSurface = superellipsoidY(FIST_DIGIT.x, 0, FIST)
+    const folded = fistSurface + Math.abs(fistDigitCentreY() - FIST_DIGIT.b)
+
+    const handSurface = superellipsoidY(FINGER.x, 0, HAND)
+    const extended = handSurface + Math.abs(fingerCentreY() - FINGER.b)
+
+    expect(folded).toBeGreaterThan(0.02)
+    expect(folded).toBeLessThan(extended)
+  })
+
+  it('puts the fingertip on the palm side, which is what gives the fist a front', () => {
+    /*
+      Without it the fist is symmetric front to back and reads as a lump. The tip
+      has to be on +Z - the palm, by `Fist`'s stated contract - and above the
+      roll's centreline, because a finger that has curled all the way round comes
+      back up toward the heel.
+    */
+    expect(FIST_TIP.z).toBeGreaterThan(0)
+    expect(FIST_TIP.lift).toBeGreaterThan(0)
+    // Inside the roll it caps, not floating off the end of it.
+    expect(FIST_TIP.z).toBeLessThan(FIST_DIGIT.c)
+    // And it is a bump, not a third segment.
+    expect(FIST_TIP.a).toBeLessThan(FIST_DIGIT.a)
+  })
+
+  it('puts the grip point in the POCKET, not at the hand\'s centre', () => {
+    /*
+      **The assertion the whole grip constant exists for.**
+
+      A fist mounted by its centre sits beside what it is holding - the first pass
+      did exactly that, and two convincing fists floating next to a bow riser read
+      worse than the open mitten had, because a fist makes a promise a mitten does
+      not.
+
+      The pocket is below the middle of the hand and toward the palm, so both of
+      those have to be true of the published point. Measured against the BUILT
+      fist's bounding box rather than against the numbers that made it.
+    */
+    const grip = fistGrip()
+    const box = fist().boundingBox!
+
+    expect(grip.y, 'the grip is not below the centre of the hand').toBeLessThan(0)
+    expect(grip.z, 'the grip is not on the palm side').toBeGreaterThan(0)
+
+    // And inside the hand's own silhouette: a grip point outside it would put the
+    // bar in mid-air with the fist alongside, which is the failure inverted.
+    expect(Math.abs(grip.y)).toBeLessThan(Math.abs(box.min.y))
+    expect(grip.z).toBeLessThan(box.max.z)
+  })
+
+  it('rests the grip ON the folded fingers rather than inside them', () => {
+    /*
+      A bar in the pocket sits on top of the roll. Below the roll's own top and it
+      is inside the fingers; far above it and the hand is holding nothing.
+    */
+    const rollTop = fistDigitCentreY() + FIST_DIGIT.b
+    const grip = fistGrip()
+    expect(grip.y).toBeGreaterThan(rollTop)
+    expect(grip.y - rollTop).toBeCloseTo(FIST_GRIP_CLEARANCE, 12)
+    expect(FIST_GRIP_CLEARANCE).toBeLessThan(0.04)
+  })
+
+  it('leaves a real gap between the two knuckles', () => {
+    // The same thing that makes the open hand two fingers instead of one slab
+    // with a groove in it.
+    const gap = 2 * (FIST_DIGIT.x - FIST_DIGIT.a)
+    expect(gap).toBeGreaterThan(0.015)
+    expect(FIST_DIGIT.x + FIST_DIGIT.a).toBeLessThan(FIST.a)
   })
 })

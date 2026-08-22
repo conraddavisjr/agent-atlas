@@ -3,7 +3,8 @@ import { useFrame } from '@react-three/fiber'
 import { Vector3, type Group } from 'three'
 import { mattePlastic, plastic } from '@/art/materials'
 import { palette } from '@/art/palette'
-import { Hand } from '@/game/player/robotParts'
+import { Fist } from '@/game/player/robotParts'
+import { fistGrip } from '@/game/player/robotGeometry'
 import { useQuality } from '@/art/useQuality'
 import { ArrowBody } from './ArrowBody'
 import { BOW_DRAW, BOW_OFFSET, BOW_SCALE, EYE } from './stage'
@@ -27,9 +28,15 @@ import type { TrainingState } from './trainingMachine'
  * does and for the same reason. The robot itself is hidden for these beats, so
  * there is no risk of the viewmodel and the real arms disagreeing on screen.
  *
- * The hands are the REAL `Hand` component from `robotParts.tsx` rather than
- * lookalikes, which is what keeps it the character's hands and not a pair of
- * gloves: same superellipsoid, same two fingers, same shell material and sheen.
+ * The hands are `Fist` from `robotParts.tsx` - the character's own hand, closed -
+ * rather than lookalikes, which is what keeps them the character's hands and not
+ * a pair of gloves: the knuckles sit on the mitten's own finger centrelines and
+ * the material is the same `shell(palette.shellShadow)` with the same sheen gate.
+ *
+ * It is a closed hand and not the open one, and that took a second pass. `Hand`
+ * is a mitten with two fingers extended, which is right for a character standing
+ * with its arms down and wrong wrapped round a bow grip a hand's width from the
+ * lens - it reads as a paddle resting against the riser. See `FIST`.
  *
  * ## The draw cycle is the rate limit
  *
@@ -135,12 +142,26 @@ export function Bow({
       </mesh>
 
       {/*
-        The bow hand, wrapped around the grip and turned so its fingers face the
-        riser. It does not move: the whole point of a bow hand is that it is the
-        thing everything else moves relative to.
+        The bow hand, closed around the grip.
+
+        `Fist` states its own contract: fingers leave at -Y, curl toward +Z, and
+        whatever is gripped runs along X through the pocket between the roll and
+        the palm. The riser runs along Y here, so the quarter turn about Z is what
+        threads it through that pocket rather than laying the hand against it.
+
+        The inner group is the other half of that, and it was missing at first: a
+        fist mounted by its CENTRE sits beside what it is holding, because the
+        pocket is not at the centre. `fistGrip` publishes where the pocket is and
+        this shifts the hand so the pocket lands on the origin - which is where
+        the riser is.
+
+        It does not move. The whole point of a bow hand is that it is the thing
+        everything else moves relative to.
       */}
-      <group position={[0, -0.02, -0.03]} rotation={[0, 0, -Math.PI / 2]} scale={HAND_SCALE}>
-        <Hand quality={quality} />
+      <group rotation={[0, 0, Math.PI / 2]} scale={HAND_SCALE}>
+        <group position={[0, -GRIP.y, -GRIP.z]}>
+          <Fist quality={quality} />
+        </group>
       </group>
 
       {/* The string, which moves back with the draw. */}
@@ -152,21 +173,24 @@ export function Bow({
       </group>
 
       {/*
-        The drawing hand, on the string.
+        The drawing hand, hooked round the string.
 
-        Its fingers point ACROSS the string rather than back down the arrow, which
-        is the second orientation this took. Pointed at the camera the two finger
-        blocks were end-on - two grey squares beside a white line - and the whole
-        hand read as debris rather than as a grip. Across, they read as hooked
-        round the string, which is what they are doing.
+        The same quarter turn and the same grip offset as the bow hand, because
+        the string runs along Y too - so the fist closes on it the same way, and
+        the two hands hold the same bow the same way rather than each being nudged
+        into place by eye. It is the SECOND fist here, and that is right: an
+        archer's draw is fingers curled round a string, which is a closed hand by
+        any other name.
 
-        Offset below the arrow's line, because a hand centred on the nock swallows
-        it: three fingers under the arrow and the shaft resting on top is the
-        actual mechanics of a draw, and it keeps the plunger visible.
+        `fistGrip` also does the job the old hand-authored offset was doing: the
+        pocket sits below the arrow's line, so the shaft rests on the fingers
+        rather than being swallowed by a hand centred on the nock.
       */}
       <group ref={drawHand}>
-        <group position={[0, -0.05, 0]} rotation={[0, 0, -Math.PI / 2]} scale={HAND_SCALE}>
-          <Hand quality={quality} />
+        <group rotation={[0, 0, Math.PI / 2]} scale={HAND_SCALE}>
+          <group position={[0, -GRIP.y, -GRIP.z]}>
+            <Fist quality={quality} />
+          </group>
         </group>
       </group>
 
@@ -202,14 +226,20 @@ const ANCHOR: [number, number, number] = [
  * The hands, relative to the rig they are mounted in.
  *
  * Smaller than life on top of `BOW_SCALE`, which is a second licence and a
- * deliberate one. The character's hand is 0.23 across and a fist that size on the
- * end of a bow reads as a mitten - a closed hand is narrower than an open one,
- * and `Hand` is modelled open because that is how it looks hanging by the
- * character's side in third person.
+ * deliberate one: the character's hand is 0.23 across, and two of them at full
+ * size on a bow drawn this close to the lens are all you can see.
+ *
+ * Raised from 0.44 when `Hand` became `Fist`. The fist is a third shorter than
+ * the mitten - the fingers have gone from adding to its length to adding to its
+ * depth - so the same scale made it read as a smaller hand rather than as the
+ * same hand closed.
  */
-const HAND_SCALE = 0.44
+const HAND_SCALE = 0.52
 
 /** How much of a circle the limbs sweep. Just over half, so the gap is a gap. */
 const ARC = 1.15
+
+/** Where a gripped bar passes through the fist. Read once; it is pure. */
+const GRIP = fistGrip()
 
 const BOW_WOOD = '#8d6440'

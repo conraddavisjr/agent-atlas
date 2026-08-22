@@ -690,6 +690,169 @@ export function fingerCentreY(): number {
 }
 
 /**
+ * The same hand, closed.
+ *
+ * ## Why a fist is its own shape and not the mitten with the fingers rotated
+ *
+ * The obvious build is to keep `HAND` and swing the two `FINGER` blocks up
+ * against the palm. It does not work, and the reason is that `HAND` is not a
+ * palm - it is a MITTEN, a shape whose whole length assumes two fingers sticking
+ * out of the end of it. Fold those away and what is left is an oblong two thirds
+ * the length of the object, with a pair of blocks parked on the side of it. It
+ * reads as a hand holding something small, not as a hand closed around
+ * something.
+ *
+ * A real fist is shorter and deeper than the open hand it came from, because the
+ * fingers have gone from adding to its length to adding to its depth. That is
+ * what these numbers say: 0.23 wide as before, but 0.23 tall against the mitten's
+ * 0.32, and 0.21 deep against its 0.20.
+ *
+ * ## Squarer than the mitten, on purpose
+ *
+ * `e1` 0.7 and `e2` 0.78 against the mitten's 0.8 and 0.8. A closed hand has
+ * corners a relaxed one does not - the heel, the knuckle line - and the softest
+ * superellipsoid that still reads as a fist is a little harder than the softest
+ * that reads as a mitten. It stays well clear of a 90 degree corner, which the
+ * world's own rule forbids and which `ARM_BAND` states.
+ *
+ * `taperTop` 1, so the extents are exact and `superellipsoidField` is a valid
+ * inside/outside test on it. That is not decoration either: it is what lets the
+ * test prove the digits protrude from the BUILT fist rather than from the numbers
+ * that were meant to build it. This project has shipped a part fully enclosed
+ * inside another twice.
+ */
+export const FIST = {
+  a: 0.115,
+  b: 0.115,
+  c: 0.105,
+  e1: 0.7,
+  e2: 0.78,
+  taperTop: 1,
+  latSegments: 16,
+  lonSegments: 22,
+} as const
+
+/**
+ * One folded finger, as a roll lying across the heel of the fist.
+ *
+ * ## It runs along Z, which is the whole idea
+ *
+ * An extended `FINGER` is a block pointing along -Y. A folded one has wrapped
+ * through ninety degrees and more, so it now lies ACROSS the hand: its length
+ * runs from the knuckle at the back, over the bottom edge, to the fingertip
+ * pressed into the palm at the front. That is the Z axis, not the Y axis, and it
+ * is why this cannot be `FINGER` with a rotation - a rotated `FINGER` is 0.115
+ * long and 0.068 square, which lying across a 0.21 deep hand leaves the knuckle
+ * and the tip both nowhere.
+ *
+ * `c` 0.1 against the fist's own 0.105 is deliberate: the roll reaches very
+ * nearly the full depth, so it reads as wrapping the hand rather than as a nub
+ * stuck under it, but it stops short of spearing out through the front and back.
+ *
+ * ## Two of them, on the mitten's own centrelines
+ *
+ * `x` is `FINGER.x` exactly, not a number that happens to match. The open and
+ * closed hands are the same hand, and a fist whose knuckles were on different
+ * centrelines from the fingers would be a different character's hand.
+ */
+export const FIST_DIGIT = {
+  /** Half-extents. 0.072 x 0.08 x 0.2 overall - a roll, wider than it is tall. */
+  a: 0.036,
+  b: 0.04,
+  c: 0.1,
+  /** Softer than `FINGER.e1` 0.25: a folded finger presents its curve, not its corner. */
+  e1: 0.35,
+  e2: 0.4,
+  taperTop: 1,
+  latSegments: 10,
+  lonSegments: 16,
+  /** The mitten's own finger centreline. See above. */
+  x: FINGER.x,
+  /** How far the roll's top sits inside the fist's surface, at its own x. */
+  embed: 0.022,
+} as const
+
+/**
+ * Where a folded finger's centre sits, solved against the fist's own surface.
+ *
+ * The same derivation `fingerCentreY` documents and for the same reason: one
+ * derivation, shipped by the component and MEASURED by the test, rather than two
+ * that agree with each other while the part floats off the hand.
+ *
+ * Solved at `z = 0`, which is where the fist reaches its lowest point. Everywhere
+ * else along the roll the surface is higher, so the roll protrudes MORE than it
+ * does at the point it was authored against - which is the safe direction to be
+ * wrong in, because the failure it forbids is being swallowed.
+ */
+export function fistDigitCentreY(): number {
+  return -superellipsoidY(FIST_DIGIT.x, 0, FIST) + FIST_DIGIT.embed - FIST_DIGIT.b
+}
+
+/**
+ * The fingertip, pressed into the palm at the front of the roll.
+ *
+ * A small bump rather than another segment. Two-segment fingers would be the
+ * honest articulation and they would also be eight meshes on a prop the player
+ * sees at arm's length; this is the one detail that says which side of the fist
+ * is the palm, and it costs one primitive per finger.
+ *
+ * Sat a little ABOVE the roll's centreline, because a fingertip that has curled
+ * all the way round comes back up toward the heel of the hand rather than
+ * stopping level with it.
+ */
+export const FIST_TIP = {
+  a: 0.031,
+  b: 0.028,
+  c: 0.026,
+  e1: 0.5,
+  e2: 0.6,
+  taperTop: 1,
+  latSegments: 8,
+  lonSegments: 12,
+  /** Above the roll's centre, in metres. */
+  lift: 0.042,
+  /** Forward from the fist's centre: on the palm side, just inside the roll's end. */
+  z: 0.074,
+} as const
+
+/**
+ * Where the thing being gripped actually passes through the fist.
+ *
+ * ## This is the constant that makes a fist a grip rather than a shape
+ *
+ * A closed hand does not hold a bar at its own centre - it holds it in the pocket
+ * between the palm and the folded fingers, which on this hand is below the middle
+ * and toward the palm side. Mounted by its centre, as the first version was, the
+ * fist sits BESIDE what it is meant to be holding: two convincing fists floating
+ * next to a bow riser, which reads worse than the open mitten did because a fist
+ * makes a promise a mitten does not.
+ *
+ * So the part publishes the point, and callers put THAT on the grip. The
+ * alternative is every caller nudging a hand into place by eye against its own
+ * prop, which is how two hands on the same bow end up holding it differently.
+ *
+ * ## Derived, not authored
+ *
+ * `y` is the top of the folded-finger roll plus a little clearance, because that
+ * is the surface a gripped bar rests on. `z` is between the palm's own front and
+ * the fingertips - the depth of the pocket. Both move if the fist is re-shaped,
+ * which is the point: a hand-authored pair would keep pointing at where the
+ * pocket used to be.
+ */
+export const FIST_GRIP_CLEARANCE = 0.022
+
+export function fistGrip(): { y: number; z: number } {
+  return {
+    y: fistDigitCentreY() + FIST_DIGIT.b + FIST_GRIP_CLEARANCE,
+    /*
+      Half way from the palm's own centre to the front of the fingertips, which
+      is the middle of the pocket rather than the face of either side of it.
+    */
+    z: (FIST_TIP.z + FIST_TIP.c) / 2,
+  }
+}
+
+/**
  * The boot.
  *
  * A named block rather than three literals in `robotParts.tsx`, which is where they
