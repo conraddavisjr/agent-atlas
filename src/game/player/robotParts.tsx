@@ -23,6 +23,10 @@ import {
   FACE_PLATE,
   FINGER,
   fingerCentreY,
+  FIST,
+  FIST_DIGIT,
+  FIST_TIP,
+  fistDigitCentreY,
   FOOT,
   footBottomRadius,
   HAND,
@@ -263,6 +267,19 @@ const HAND_GEOMETRY = taperedSuperellipsoid(HAND)
  */
 const FINGER_GEOMETRY = taperedSuperellipsoid(FINGER)
 const FINGER_CENTRE_Y = fingerCentreY()
+
+/*
+  The closed hand, built once at module scope like every other part here.
+
+  Three geometries rather than one because the fist is three shapes - the mass,
+  the roll of folded fingers across its heel, and the tips pressed into the palm -
+  and each is instanced twice or once from a single buffer. See `FIST` in
+  `robotGeometry.ts` for why this is not `HAND` with the fingers rotated.
+*/
+const FIST_GEOMETRY = taperedSuperellipsoid(FIST)
+const FIST_DIGIT_GEOMETRY = taperedSuperellipsoid(FIST_DIGIT)
+const FIST_TIP_GEOMETRY = taperedSuperellipsoid(FIST_TIP)
+const FIST_DIGIT_CENTRE_Y = fistDigitCentreY()
 
 /**
  * The two rings on the upper arm, lathed from the same profile as the ear pods.
@@ -719,6 +736,70 @@ export function Hand({ quality }: Q) {
         >
           <meshPhysicalMaterial {...material} />
         </mesh>
+      ))}
+    </>
+  )
+}
+
+/**
+ * The same hand, closed around something.
+ *
+ * ## Why this exists rather than a pose
+ *
+ * `Hand` is a mitten with two fingers extended, and it is right for a character
+ * standing with its arms down - which is every frame of this game except one. The
+ * training round's bow is held in first person, a hand's width from the lens, and
+ * an open mitten wrapped round a bow grip reads as a paddle resting against it.
+ * Fingers do not close by rotating; the whole shape changes, and `FIST` explains
+ * the measurements.
+ *
+ * ## One material, and it is `Hand`'s
+ *
+ * Same `shell(palette.shellShadow)` and the same sheen gate. The open and closed
+ * hands are the same hand - a fist in a slightly different plastic would read as
+ * a glove, which is the exact failure `Hand`'s own header warns about for its
+ * fingers.
+ *
+ * ## Which way it faces
+ *
+ * Fingers leave at -Y and curl toward +Z, so +Z is the palm. Anything gripped
+ * runs along X, through the ring the roll and the palm make between them. That is
+ * the contract callers rotate against, and it is stated here because it is not
+ * visible in the numbers.
+ */
+export function Fist({ quality }: Q) {
+  const material = shell(palette.shellShadow, quality.sheenHero ? {} : { sheen: 0 })
+  return (
+    <>
+      <mesh geometry={FIST_GEOMETRY} castShadow receiveShadow>
+        <meshPhysicalMaterial {...material} />
+      </mesh>
+
+      {[-1, 1].map((side) => (
+        <group key={side} position={[side * FIST_DIGIT.x, FIST_DIGIT_CENTRE_Y, 0]}>
+          {/*
+            The folded finger, lying across the heel of the hand. Its centre is
+            SOLVED against the fist's own surface rather than authored, so the
+            roll cannot drift inside the mass it is supposed to be standing proud
+            of - see `fistDigitCentreY`.
+          */}
+          <mesh geometry={FIST_DIGIT_GEOMETRY} castShadow receiveShadow>
+            <meshPhysicalMaterial {...material} />
+          </mesh>
+          {/*
+            The fingertip, back up against the palm. This is the only thing that
+            says which side of a fist you are looking at, and without it the hand
+            is symmetric front to back and reads as a lump.
+          */}
+          <mesh
+            geometry={FIST_TIP_GEOMETRY}
+            position={[0, FIST_TIP.lift, FIST_TIP.z]}
+            castShadow
+            receiveShadow
+          >
+            <meshPhysicalMaterial {...material} />
+          </mesh>
+        </group>
       ))}
     </>
   )

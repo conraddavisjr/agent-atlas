@@ -43,7 +43,14 @@ export function AimPlane({
   run: RefObject<TrainingState>
   /** World point under the cursor, every move. Drives the reticle and the bow. */
   onAim: (point: [number, number, number]) => void
-  /** Plank index, or null for a miss into open space. */
+  /**
+   * A shot was loosed. `plank` is null for a miss into open space.
+   *
+   * Misses are reported now, and used not to be. An arrow into the dark used to
+   * cost nothing and produce nothing - the bow simply stayed drawn while the
+   * player clicked - which made a near miss indistinguishable from a click the
+   * game had not noticed. Every loose is an arrow.
+   */
   onShoot: (plank: number | null, point: [number, number, number]) => void
 }) {
   /*

@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { cameraBlend, cameraPose } from './cameraDirector'
+import { cameraBlend, cameraPose, firstPerson } from './cameraDirector'
 import { PHASES } from './trainingMachine'
-import { CAMERA_BACK, CAMERA_DAMPING, CAMERA_UP, PLAYER_AT, STAGE_FOV } from './stage'
+import {
+  CAMERA_BACK,
+  CAMERA_DAMPING,
+  CAMERA_UP,
+  EYE,
+  FIRST_PERSON_FOV,
+  PLAYER_AT,
+  STAGE_FOV,
+} from './stage'
 
 describe('every phase has a camera to be seen from', () => {
   it('returns a finite pose for all of them', () => {
@@ -15,18 +23,40 @@ describe('every phase has a camera to be seen from', () => {
     }
   })
 
-  it('always stands BEHIND the player, which is the brief', () => {
+  it('stands behind the player for every THIRD-person beat', () => {
     /*
       "You're able to see the back of the avatar's head." The player faces +Z -
       `headingVector(0)` is `(0, 0, 1)` and `PlayerController` seeds facing to
-      zero - so every camera in this round is at LESSER z than the player, and
-      above them. A pose that crept in front would show the robot's face and
-      quietly lose the one composition note the brief was explicit about.
+      zero - so a third-person camera in this round is at LESSER z than the
+      player, and above them. A pose that crept in front would show the robot's
+      face and quietly lose the one composition note the brief was explicit
+      about.
+
+      The first-person beats are exempt by construction: the camera is AT the
+      head, slightly in front of it, and the character is hidden. That exemption
+      is exactly what `firstPerson` names, which is why this iterates against it
+      rather than against a hand-written list that could disagree with the poses.
     */
     for (const phase of PHASES) {
+      if (firstPerson(phase)) continue
       const pose = cameraPose(phase)
       expect(pose.position[2], `${phase} z`).toBeLessThan(PLAYER_AT[2])
       expect(pose.position[1], `${phase} y`).toBeGreaterThan(PLAYER_AT[1])
+    }
+  })
+
+  it('puts the first-person beats at the eye, and only those', () => {
+    /*
+      `firstPerson` and `cameraPose` are two switches over the same phase list and
+      they have to agree EXACTLY. A phase that gets the eye pose without being
+      declared first person leaves the character drawn with the near plane inside
+      its skull; one declared first person without the pose deletes the hero from
+      a third-person shot. Both look like rendering faults rather than like a
+      missing case, so the agreement is pinned rather than trusted.
+    */
+    for (const phase of PHASES) {
+      const atEye = cameraPose(phase).position === EYE
+      expect(atEye, phase).toBe(firstPerson(phase))
     }
   })
 
@@ -38,19 +68,31 @@ describe('every phase has a camera to be seen from', () => {
     }
   })
 
-  it('keeps the field of view fixed across the whole round', () => {
+  it('uses exactly two lenses, and they line up with the two viewpoints', () => {
     /*
-      Deliberate. A round that changes fov between beats is a round that appears
-      to change lens, and the distance moves are doing that job already. Pinned so
-      a later "just zoom in a bit" is a decision rather than a drift.
+      It used to be one, and the argument for that was good: a round that changes
+      fov between beats appears to change lens, and the distance moves were doing
+      that job already.
+
+      There are two now because there are two viewpoints. Every third-person beat
+      keeps `STAGE_FOV`, so nothing about the conversation or the reading has
+      changed; the first-person beats widen, because a shooting view wants more
+      peripheral than a conversation does and because the widening punctuates the
+      move to the eye. What is pinned is that there is no THIRD value - a later
+      "just zoom in a bit" has to be a decision rather than a drift.
     */
-    for (const phase of PHASES) expect(cameraPose(phase).fov, phase).toBe(STAGE_FOV)
+    for (const phase of PHASES) {
+      const expected = firstPerson(phase) ? FIRST_PERSON_FOV : STAGE_FOV
+      expect(cameraPose(phase).fov, phase).toBe(expected)
+    }
+    expect(FIRST_PERSON_FOV).toBeGreaterThan(STAGE_FOV)
   })
 
   it('never puts the camera further than a room away from the player', () => {
     // A pose that ran away would frame the round from across the map and nobody
     // would notice until they saw it.
     for (const phase of PHASES) {
+      if (firstPerson(phase)) continue
       const pose = cameraPose(phase)
       const dz = pose.position[2] - PLAYER_AT[2]
       const dy = pose.position[1] - PLAYER_AT[1]
@@ -69,8 +111,9 @@ describe('the poses are a small set, on purpose', () => {
     */
     const groups = [
       ['instructorIn', 'speech1', 'speech2', 'instructorOut'],
-      ['cubeIn', 'reading', 'turning'],
-      ['arming', 'aiming', 'rejecting', 'accepting'],
+      ['dioramaIn', 'reading', 'swapping'],
+      ['cubeIn', 'question'],
+      ['arming', 'aiming', 'firing', 'rejecting', 'reloading', 'accepting', 'celebrating'],
     ] as const
 
     for (const group of groups) {
@@ -81,15 +124,22 @@ describe('the poses are a small set, on purpose', () => {
     }
   })
 
-  it('does not swing through the celebration pose on a miss', () => {
+  it('does not move the camera at all during the shooting', () => {
     /*
-      The failure this design avoids. `rejecting` returns to `aiming`, so if the
-      blend had assumed phase-list order it would have travelled through
-      `accepting` and `celebrating` on every wrong answer - a camera lurch as
-      punishment for missing.
+      The failure this design avoids. The quiz loop runs
+      `aiming -> firing -> rejecting -> reloading -> aiming`, so a director that
+      assumed phase-list order would travel through `accepting` and `celebrating`
+      on every wrong answer - a camera lurch as punishment for missing.
+
+      Now that all seven quiz beats share one pose the lurch is unreachable rather
+      than merely avoided, which is worth pinning: somebody giving the
+      celebration its own pull-back would reintroduce exactly that swing on every
+      miss, because a miss passes through `rejecting` on its way back.
     */
-    expect(cameraPose('rejecting')).toEqual(cameraPose('aiming'))
-    expect(cameraPose('celebrating')).not.toEqual(cameraPose('aiming'))
+    const aiming = cameraPose('aiming')
+    for (const phase of ['firing', 'rejecting', 'reloading', 'accepting', 'celebrating'] as const) {
+      expect(cameraPose(phase), phase).toEqual(aiming)
+    }
   })
 })
 

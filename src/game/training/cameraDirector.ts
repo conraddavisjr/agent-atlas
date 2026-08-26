@@ -2,7 +2,11 @@ import {
   CAMERA_BACK,
   CAMERA_UP,
   CUBE_AT,
+  DIORAMA_AT,
+  EYE,
+  FIRST_PERSON_FOV,
   INSTRUCTOR_HOME,
+  PLANK_AT,
   PLAYER_AT,
   STAGE_FOV,
 } from './stage'
@@ -81,53 +85,70 @@ export function cameraPose(phase: Phase): CameraPose {
     case 'instructorOut':
       return overShoulder([INSTRUCTOR_HOME[0] * 0.55, INSTRUCTOR_HOME[1], INSTRUCTOR_HOME[2]])
 
-    case 'cubeIn':
+    case 'dioramaIn':
     case 'reading':
-    case 'turning':
+    case 'swapping':
       /*
-        Slightly lifted and pulled back for the cube, which is 2.1 m across and
-        needs the room. The lift also keeps the player's head below the cube's
-        bottom edge rather than overlapping it, so the two read as separate
+        BACK for the diorama, because the subject changed shape.
+
+        The cube was a 2.1 m square and this pose was framed for it: lifted a
+        little and pulled back half a metre. The diorama is a 6.5 m band, three
+        times as wide and shorter, so the same pose crops its outer two stations
+        on any window narrower than 16:9.
+
+        `DIORAMA_BACK` is derived from that rather than chosen - see
+        `dioramaSafeWidth`, which asks how much of this stage survives a SQUARE
+        window, and `diorama.test.ts`, which fails if a station or a label falls
+        outside it. Aiming a little above the anchor keeps the player's own head
+        below the stage rather than overlapping it, so the two read as separate
         objects at separate depths.
+      */
+      return overShoulder(
+        [DIORAMA_AT[0], DIORAMA_AT[1] + DIORAMA_AIM_LIFT, DIORAMA_AT[2]],
+        DIORAMA_UP,
+        DIORAMA_BACK,
+      )
+
+    case 'cubeIn':
+    case 'question':
+      /*
+        Back to the cube's own pose for the question. It is a 2.1 m square again,
+        so the framing the reading used to have is the framing it wants - and
+        re-using it exactly is what stops the camera twitching a few centimetres
+        when the board arrives.
       */
       return overShoulder(CUBE_AT, 0.55, 0.5)
 
     case 'arming':
     case 'aiming':
+    case 'firing':
     case 'rejecting':
+    case 'reloading':
     case 'accepting':
-      /*
-        BACK for the quiz, not in.
-
-        The instinct is to push in - the planks are the smallest thing the round
-        asks anyone to look at. The frame says otherwise: the player's own robot
-        stands between the camera and the targets, and moving closer makes it
-        bigger faster than it makes the planks bigger, because it is half the
-        distance away. Closing in filled a third of the frame with the back of a
-        head.
-
-        Further back and lifted instead, so the three planks and the bow are all in
-        shot with the robot low and small underneath them.
-
-        The lookAt is NOT `PLANK_AT` any more, and that is the whole reason this
-        pose was re-derived. Once the cube rises to `CUBE_QUIZ_AT` the beat is a
-        tall one - question at 6.35, bottom plank at 1.1 - and centring on the
-        planks alone pushed the question off the top of the frame. Aiming at 3.35
-        splits the difference: from 7 m back that puts the cube's top edge 15
-        degrees up and the bottom plank 13 down, inside a 20-degree half-fov, with
-        the robot's head at 17.5 and therefore just barely in shot.
-      */
-      return overShoulder([0, QUIZ_EYELINE, 3.0], 0.7, 2.0)
-
     case 'celebrating':
       /*
-        Pull back for the confetti. A burst that leaves the frame immediately is
-        a burst nobody sees, and this is the round's one moment of spectacle.
+        FIRST PERSON, from `arming` all the way through the celebration.
 
-        Same eyeline as the aim, so the win is a pull-back from the shot rather
-        than a cut to somewhere else.
+        Over the shoulder this was a bow floating beside a robot's hand with the
+        plunger tip four pixels of red somewhere below the targets, and the thing
+        the player had to do - line a point up with a circle - was the one thing
+        the framing did not show. Aiming wants the archer's sight line.
+
+        `overShoulder` is not used here and could not be: it is defined as an
+        offset BEHIND `PLAYER_AT`, and this is the opposite of behind. The camera
+        sits at the eye and looks level at the middle plank, which is why
+        `PLANK_AT[1]` is `EYE[1]` - a column centred above the eye would make the
+        easy, level shot the wrong one.
+
+        The whole quiz shares this pose, celebration included. A cut back to third
+        person for the confetti was the alternative, and it loses the one thing
+        first person bought: the burst comes at YOU.
       */
-      return overShoulder([0, QUIZ_EYELINE, 3.0], 1.0, 3.0)
+      return {
+        position: EYE,
+        lookAt: [PLANK_AT[0], PLANK_AT[1], PLANK_AT[2]],
+        fov: FIRST_PERSON_FOV,
+      }
 
     case 'exiting':
       // Hold whatever we were looking at. The iris is closing over this.
@@ -136,16 +157,65 @@ export function cameraPose(phase: Phase): CameraPose {
 }
 
 /**
- * What the camera centres on during the quiz.
+ * How the diorama's pose differs from the cube's, in metres.
  *
- * Between the risen cube and the plank column rather than on either, so both fit
- * a 40-degree frame. Named rather than inlined because the aim and the
- * celebration have to share it exactly - a celebration that re-centred would tilt
- * the camera at the moment the confetti fires.
+ * ## Derived, and the first attempt was derived from the wrong thing
+ *
+ * 3.4 back put the camera 12 m from the stage, where a square window shows 8.7 m
+ * of width. That satisfies the safe-width test - a 6.75 m stage fits inside 8.7 -
+ * and it looks nothing like right, because "fits" is not "fills". The diorama sat
+ * in the middle third of the frame with two metres of empty floor either side and
+ * read as a model on a shelf rather than as the thing being taught.
+ *
+ * The number that matters is the distance at which the stage nearly fills a
+ * SQUARE window, because that is the narrowest a player can present: 6.75 m of
+ * stage wants 9.5 m of range, which is 0.9 back from the camera's own rest pose.
+ * A 16:9 window then gives it 70% of the width, which is a diorama taking the
+ * stage.
+ *
+ * `diorama.test.ts` still holds the ceiling - nothing may fall outside a square
+ * window - and this comment holds the floor, which is a judgement rather than an
+ * assertion.
  */
-const QUIZ_EYELINE = 3.35
+export const DIORAMA_BACK = 0.9
+export const DIORAMA_UP = 0.55
+export const DIORAMA_AIM_LIFT = 0.35
 
 /** Smoothing weight for one frame. `FollowCamera`'s formula, not a second one. */
 export function cameraBlend(damping: number, dt: number): number {
   return 1 - Math.exp(-damping * dt)
+}
+
+/**
+ * Whether this beat is drawn from inside the character's head.
+ *
+ * The same phase set `cameraPose` gives the eye pose to, stated once so the two
+ * cannot drift. They must agree exactly: a phase that gets the first-person pose
+ * without the character being hidden puts the near plane inside a skull, and one
+ * that hides the character without the pose deletes the hero from a third-person
+ * shot. Both failures look like a rendering bug rather than like a missing case.
+ */
+export function firstPerson(phase: Phase): boolean {
+  switch (phase) {
+    case 'arming':
+    case 'aiming':
+    case 'firing':
+    case 'rejecting':
+    case 'reloading':
+    case 'accepting':
+    case 'celebrating':
+      return true
+    case 'arriving':
+    case 'instructorIn':
+    case 'speech1':
+    case 'speech2':
+    case 'instructorOut':
+    case 'dioramaIn':
+    case 'reading':
+    case 'swapping':
+    case 'cubeIn':
+    case 'question':
+    case 'exiting':
+      return false
+  }
 }

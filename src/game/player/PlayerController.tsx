@@ -51,6 +51,7 @@ export function PlayerController({
   endInputFrame,
   spawn,
   cosmetics,
+  hidden,
   playerRef,
   contactTint,
   inputLocked,
@@ -62,6 +63,15 @@ export function PlayerController({
   endInputFrame: () => void
   spawn: [number, number, number]
   cosmetics: Partial<Record<SocketName, string>>
+  /**
+   * Draw the character or not. See `gameStore.playerHidden` for what it is for.
+   *
+   * A prop rather than a store read inside this component, matching how
+   * `inputLocked` arrives: `App` owns the translation from store state to what
+   * the controller does, and this file already has more responsibilities than
+   * anything else in the project.
+   */
+  hidden: boolean
   /** Exposed so the camera can follow without prop-drilling per frame. */
   playerRef: React.RefObject<Group | null>
   /** The contact blob's centre tint, from the scene's light rig. */
@@ -705,7 +715,21 @@ export function PlayerController({
         enabledRotations={[false, false, false]}
       >
         <CapsuleCollider args={[BODY.capsuleHalfHeight, BODY.capsuleRadius]} />
-        <group ref={visualRef} position={[0, -(BODY.capsuleHalfHeight + BODY.capsuleRadius), 0]}>
+        {/*
+          `visible` on the VISUAL group only, never on the body.
+
+          The collider, the kinematic controller and the whole animation pipeline
+          keep running while the character is hidden - three skips the draw for an
+          invisible subtree and nothing else changes. Unmounting `RobotModel`
+          instead would dispose the cape ribbon and every geometry the rig owns
+          and rebuild them on the way back, which is a stall in the middle of
+          whatever beat asked for the character to reappear.
+        */}
+        <group
+          ref={visualRef}
+          position={[0, -(BODY.capsuleHalfHeight + BODY.capsuleRadius), 0]}
+          visible={!hidden}
+        >
           <RobotModel anim={anim} cosmetics={cosmetics} rt={rtRef} pose={poseRef} ground={groundRef} />
         </group>
         </RigidBody>

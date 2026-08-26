@@ -1,7 +1,7 @@
 import { useEffect, type CSSProperties } from 'react'
 import { useGameStore } from '@/state/gameStore'
 import { useTrainingStore } from '@/game/training/trainingStore'
-import { INSTRUCTOR_LINES } from '@/game/training/cards'
+import { CARDS, INSTRUCTOR_LINES, QUIZ } from '@/game/training/cards'
 import { CARD_COUNT } from '@/game/training/trainingMachine'
 import { LAYER } from './layers'
 
@@ -80,7 +80,25 @@ export function TrainingHUD() {
     machine ignores an advance mid-turn anyway, and a control that silently does
     nothing is worse than one that says it cannot.
   */
-  const reading = phase === 'reading' || phase === 'turning'
+  const reading = phase === 'dioramaIn' || phase === 'reading' || phase === 'swapping'
+  /*
+    The question beat: the board has dropped in and is waiting to be read. It
+    reuses the reader chrome - the counter and the button - and only their labels
+    change, because it IS the last step of the same sequence.
+  */
+  const question = phase === 'cubeIn' || phase === 'question'
+  /*
+    The shooting beats. The question moves to the HUD for them, because the cube
+    it was written on has left: from inside the character's head there is nowhere
+    to put a 2.1 m board that is not in front of the targets.
+  */
+  /** Beats whose animation the Next button cannot cut short. */
+  const busy = phase === 'swapping' || phase === 'cubeIn'
+  const shooting =
+    phase === 'aiming' ||
+    phase === 'firing' ||
+    phase === 'rejecting' ||
+    phase === 'reloading'
 
   return (
     <div style={styles.root}>
@@ -92,6 +110,28 @@ export function TrainingHUD() {
       )}
 
       {reading && (
+        /*
+          THE CARD ITSELF, which used to be printed on the cube.
+
+          The paragraph moved here when the diorama took the stage: a 6.5 m band
+          of illustration and a 2.1 m board of text cannot both own the middle of
+          the frame, and of the two it is the illustration that cannot be read
+          anywhere else. The same panel already carries the quiz question during
+          the shooting for the same reason.
+
+          `pointerEvents: 'none'`, and it matters more than it looks: the aim
+          plane is a scene object read through r3f's pointer events, so any DOM
+          element over the canvas that accepts the pointer is a dead zone. This
+          one is gone by the time the bow appears, but the rule is cheaper to keep
+          than to remember.
+        */
+        <div style={styles.card}>
+          <div style={styles.cardHeading}>{CARDS[Math.min(card, CARD_COUNT - 1)].heading}</div>
+          <div style={styles.cardBody}>{CARDS[Math.min(card, CARD_COUNT - 1)].body}</div>
+        </div>
+      )}
+
+      {(reading || question) && (
         <div style={styles.reader}>
           {/*
             The progress bar counts the quiz as the last step, so it is full when
@@ -104,16 +144,38 @@ export function TrainingHUD() {
           </div>
           <div style={styles.readerRow}>
             <span style={styles.counter}>
-              {Math.min(card + 1, CARD_COUNT)} of {CARD_COUNT}
+              {question ? 'The test' : `${Math.min(card + 1, CARD_COUNT)} of ${CARD_COUNT}`}
             </span>
+            {/*
+              Disabled while an animation the press cannot interrupt is running.
+              The machine ignores an advance during a change-over or an arrival
+              anyway, and a control that silently does nothing is worse than one
+              that says it cannot.
+            */}
             <button
-              style={{ ...styles.next, opacity: phase === 'turning' ? 0.45 : 1 }}
-              disabled={phase === 'turning'}
+              style={{ ...styles.next, opacity: busy ? 0.45 : 1 }}
+              disabled={busy}
               onClick={requestAdvance}
             >
-              {card + 1 >= CARD_COUNT ? 'Take the test' : 'Next'} &rsaquo;
+              {question ? 'Take up the bow' : 'Next'} &rsaquo;
             </button>
           </div>
+        </div>
+      )}
+
+      {shooting && (
+        /*
+          The question, carried through the shooting.
+
+          Not decoration and not a second copy: from the first-person camera the
+          cube that asked it is gone, and a quiz whose question is only legible
+          before you pick up the bow is a memory test. It sits at the top of the
+          frame, clear of the plank column in the middle and of the bow in the
+          lower left.
+        */
+        <div style={styles.question}>
+          <span style={styles.questionMark}>?</span>
+          {QUIZ.question}
         </div>
       )}
 
@@ -165,6 +227,75 @@ const styles: Record<string, CSSProperties> = {
     marginBottom: 6,
   },
   line: { fontSize: '1.02rem', lineHeight: 1.45 },
+  /**
+   * The question banner during the shooting.
+   *
+   * Top-centre, which is the one part of a first-person frame nothing else
+   * wants: the plank column owns the middle, the bow owns the lower left, and
+   * the reticle can be anywhere between them.
+   *
+   * `pointerEvents: 'none'` matters more here than on the other panels. The aim
+   * plane is a scene object read through r3f's pointer events, so any DOM element
+   * over the canvas that accepts the pointer is a dead zone the player's aim
+   * silently stops working in - and they would read that as the game hanging.
+   */
+  /**
+   * The reading card, top-centre.
+   *
+   * Wide enough for a 300-character paragraph at a comfortable measure without
+   * running the full width of a large monitor - `CARD_BODY_LIMIT` caps the copy
+   * and 620 px puts that at about six lines. Above the diorama rather than beside
+   * it, because the stage is the widest thing in the frame and has no side to
+   * spare.
+   */
+  card: {
+    position: 'absolute',
+    top: 24,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    ...panel,
+    width: 620,
+    maxWidth: 'calc(100vw - 48px)',
+    pointerEvents: 'none',
+  },
+  cardHeading: {
+    fontSize: 11,
+    letterSpacing: 1.6,
+    color: '#7f97bd',
+    marginBottom: 6,
+  },
+  cardBody: {
+    fontSize: 14,
+    lineHeight: 1.55,
+    color: '#e4ecfa',
+  },
+  question: {
+    position: 'absolute',
+    /*
+      Above the headline rather than over it. `HEADLINE_AT` puts `WHAT IS AI?`
+      about a third of the way down a first-person frame, and a banner at 92 sat
+      squarely across it - two pieces of text competing at the top of the same
+      shot.
+    */
+    top: 24,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    ...panel,
+    maxWidth: 520,
+    display: 'flex',
+    gap: 10,
+    alignItems: 'baseline',
+    fontSize: 14,
+    lineHeight: 1.45,
+    color: '#dce7f8',
+    pointerEvents: 'none',
+    textAlign: 'center',
+  },
+  questionMark: {
+    fontSize: 15,
+    fontWeight: 700,
+    color: '#7fb0ff',
+  },
   reader: {
     position: 'absolute',
     bottom: 44,

@@ -40,11 +40,12 @@ import type { TrainingState } from "./trainingMachine";
  * the environment is allowed in" - and a glowing headline would read as a thing
  * the player had earned rather than as a sign on a wall.
  *
- * ## It follows the cube up, and moving it beats fading it
+ * ## It climbs out of the way, and moving it beats fading it
  *
  * The headline is a sign at the back of the stage, and a sign that dissolves when
- * the lesson starts is a sign that was never really there. So it rides `cubeRise`
- * to `HEADLINE_QUIZ_Y` instead, staying behind the board as the board climbs.
+ * the lesson starts is a sign that was never really there. So it rises instead -
+ * see `headlineLift`, which raises it for the teaching and for the quiz and
+ * leaves it low only for the arrival, when it is the whole point of the frame.
  *
  * The alternative was fading it out, and it was rejected on cost as much as on
  * taste: troika's opacity lives in `fillOpacity` / `outlineOpacity`, which need a
