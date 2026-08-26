@@ -4,8 +4,10 @@ import type { Group } from 'three'
 import { SPECIMEN_AT, WORD_PITCH, stationX } from './stage'
 import { CARD_STATIONS } from './dioramaCopy'
 import { stationLift } from './diorama'
+import type { LiveCue } from './specimen'
 import {
   FORM_COUNT,
+  FORM_CROSS,
   formCue,
   formOffset,
   formScale,
@@ -59,7 +61,7 @@ export function TeachingStage({ run }: { run: RefObject<TrainingState> }) {
   const group = useRef<Group>(null)
   const forms = useRef<(Group | null)[]>([])
   /** Per-form cue, read by the station components on their own frame. */
-  const cues = useRef(Array.from({ length: FORM_COUNT }, () => ({ lit: 0, local: 0 })))
+  const cues = useRef<LiveCue[]>(Array.from({ length: FORM_COUNT }, () => ({ lit: 0, local: 0 })))
   const words = useRef<(Group | null)[]>([])
   const captions = useRef<(Group | null)[]>([])
 
@@ -89,6 +91,7 @@ export function TeachingStage({ run }: { run: RefObject<TrainingState> }) {
     component that did not ask for one.
   */
   const card = useTrainingStore((s) => s.card)
+  const requestForm = useTrainingStore((s) => s.requestForm)
   const stations = CARD_STATIONS[card] ?? CARD_STATIONS[0]
 
   /*
@@ -186,11 +189,42 @@ export function TeachingStage({ run }: { run: RefObject<TrainingState> }) {
 
       if (reading) heldLocal.current = local
 
-      const next = presence * (reading ? stage : 1)
+      /*
+        **The presence is rate-limited, and that is what makes the words
+        clickable without a pop.**
+
+        Clicking a key word writes `elapsed` straight to the top of that form's
+        window, which is the whole mechanism - `formCue` is a pure function of the
+        clock, so moving the clock IS selecting a form. But it means the form that
+        was showing goes from whatever it was to zero between one frame and the
+        next, and a 3.7 m machine vanishing on a frame boundary is the pop this
+        round has spent a lot of effort not having.
+
+        Clamping the change to the rate a normal change-over already uses costs
+        nothing in the ordinary case - the scheduled fades move at exactly this
+        rate, so the limit never binds - and turns any jump in the clock into the
+        same fade the player has already seen eleven times. It covers the dev
+        harness's `seek` for free, which is the other way this clock moves.
+      */
+      const target = presence * (reading ? stage : 1)
+      const was = applied.current[i] < 0 ? target : applied.current[i]
+      const step = delta / (FORM_CROSS / 2)
+      const next = Math.abs(target - was) <= step ? target : was + Math.sign(target - was) * step
+
       if (next !== applied.current[i]) {
         applied.current[i] = applyPresence(node, next)
       }
-      cues.current[i] = { lit: next, local }
+      /*
+        **Mutated in place, never replaced, and that distinction is the whole
+        bug this line used to have.**
+
+        A station reads its cue inside its OWN `useFrame`. If this assigned a new
+        object each frame, the station would go on reading the one it was handed
+        at render time - and `TeachingStage` renders about twice a round. See the
+        note on `Form` below.
+      */
+      cues.current[i].lit = next
+      cues.current[i].local = local
     }
 
     /*
@@ -222,6 +256,12 @@ export function TeachingStage({ run }: { run: RefObject<TrainingState> }) {
           key={i}
           ref={(node) => {
             forms.current[i] = node
+            /*
+              For `__dev.specimen()`, which reports each form's clock so a frozen
+              station says so rather than being inferred from a bounding box that
+              did not move. The round does not read this.
+            */
+            if (node) node.userData.cue = cues.current[i]
           }}
         >
           {/*
@@ -255,6 +295,32 @@ export function TeachingStage({ run }: { run: RefObject<TrainingState> }) {
           >
             <StationLabel text={station.label} size={0.22} colour="#dce7f8" letterSpacing={0.06} />
           </group>
+
+          {/*
+            **The hit target, and it is a plane rather than the text itself.**
+
+            troika raycasts against its own glyph geometry, so clicking a word
+            would mean clicking the strokes of a letter and missing between them.
+            A plate the size of the word is what a person is aiming at anyway.
+
+            `opacity 0` rather than `visible={false}`, because three's raycaster
+            skips invisible objects outright - an invisible hit target is not a hit
+            target. `depthWrite` off so a fully transparent plate cannot punch a
+            hole in the exhibit behind it, which is the same trap `formPresence.ts`
+            documents for the fade.
+          */}
+          <mesh
+            position={[0, 0.02, 0.02]}
+            onClick={(e) => {
+              e.stopPropagation()
+              requestForm(i)
+            }}
+            onPointerOver={() => setCursor('pointer')}
+            onPointerOut={() => setCursor('auto')}
+          >
+            <planeGeometry args={[WORD_PITCH * 0.86, 0.44]} />
+            <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+          </mesh>
         </group>
       ))}
 
@@ -279,6 +345,18 @@ export function TeachingStage({ run }: { run: RefObject<TrainingState> }) {
       ))}
     </group>
   )
+}
+
+/**
+ * The pointer, so a clickable word says it is clickable.
+ *
+ * Written straight onto the canvas rather than held in React state: a hover is
+ * not worth a re-render of the exhibit, and `Bow.tsx` and the totems already take
+ * the same shortcut for the same reason.
+ */
+function setCursor(value: string) {
+  const canvas = document.querySelector('canvas')
+  if (canvas) canvas.style.cursor = value
 }
 
 /* ------------------------------------------------------------------------- */
@@ -348,22 +426,48 @@ const LABEL_Z = -0.62
  *
  * A switch rather than an array of components, so a card with the wrong number of
  * forms fails to compile rather than rendering two thirds of a lesson.
+ *
+ * ## It hands over the cue OBJECT, and it used to hand over its values
+ *
+ * **This was a real bug and it had been shipping since the diorama was built.**
+ * The old version read `cues.current[index]` here, in the component body, and
+ * spread the result into props:
+ *
+ *     const cue = cues.current?.[index] ?? { lit: 0, local: 0 }
+ *     return <Fed lit={cue.lit} local={cue.local} />
+ *
+ * A component body runs on RENDER. `TeachingStage` renders when the card changes
+ * and at essentially no other time, because everything else it does is a frame
+ * write through a ref - which is the whole point of the design. So each station
+ * was handed the numbers that existed at mount, `lit: 0` and `local: 0`, and kept
+ * them for the life of the round.
+ *
+ * **Nothing animated.** The books never moved along the belt, the traveller never
+ * left the shelf, the candidate bars never filled. Every one of them held its
+ * `local = 0` pose, which for most of them is a plausible-looking still frame -
+ * a belt with books on it, a shelf, a list of words - so it looked like a diorama
+ * that had been drawn rather than one that had stopped. Nothing threw, nothing
+ * logged, and a screenshot of it is indistinguishable from a screenshot of it
+ * working.
+ *
+ * It surfaced because `__dev.specimen()` reported byte-identical bounds for the
+ * same form at 2.0 s and at 4.2 s, which is the kind of thing only a measurement
+ * says out loud.
+ *
+ * The fix is to pass the cue object itself. `TeachingStage` mutates it in place
+ * every frame and the station reads it inside its own `useFrame`, so the values
+ * are live without a single re-render.
  */
 function Form({
   index,
   cues,
 }: {
   index: number
-  cues: RefObject<{ lit: number; local: number }[]>
+  cues: RefObject<LiveCue[]>
 }) {
-  const cue = cues.current?.[index] ?? { lit: 0, local: 0 }
-  /*
-    `lit` is the form's presence now, where it used to be a separate dim/bright
-    ramp with a floor under it. A form that is not on stage is not drawn at all,
-    so there is no dim state left to floor and the two ideas collapsed into one.
-  */
-  const props = { lit: cue.lit, local: cue.local }
-  if (index === 0) return <Fed {...props} />
-  if (index === 1) return <Fetched {...props} />
-  return <Guessed {...props} />
+  const cue = cues.current?.[index]
+  if (!cue) return null
+  if (index === 0) return <Fed cue={cue} />
+  if (index === 1) return <Fetched cue={cue} />
+  return <Guessed cue={cue} />
 }

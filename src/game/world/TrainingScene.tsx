@@ -31,7 +31,9 @@ import { QUIZ } from '@/game/training/cards'
 import { Headline } from '@/game/training/Headline'
 import { Instructor } from '@/game/training/Instructor'
 import { instructorVisible } from '@/game/training/instructorPath'
+import { FORM_DWELL } from '@/game/training/specimen'
 import { useTrainingStore } from '@/game/training/trainingStore'
+import { preload, reset as resetVoice, speak, stop as stopVoice, unlock } from '@/audio/voice'
 import {
   initialTrainingState,
   stepTraining,
@@ -107,9 +109,11 @@ export function TrainingScene() {
 
   const run = useRef<TrainingState>(initialTrainingState())
   /** Sequence numbers last acted on. See `trainingStore` for why they are counters. */
-  const seen = useRef({ advance: 0, bail: 0 })
+  const seen = useRef({ advance: 0, bail: 0, form: 0 })
   /** Latched, so the exit can only ever be requested once. */
   const left = useRef(false)
+  /** The phase the voice last acted on, so a line is spoken once per beat. */
+  const spoke = useRef<Phase>('arriving')
   /** Latched too. The completion is written once, on the frame the win lands. */
   const recorded = useRef(false)
   /** The live aim point, shared by the bow, the reticle and the shot. */
@@ -149,6 +153,27 @@ export function TrainingScene() {
   useEffect(() => {
     resetRound()
     run.current = initialTrainingState()
+
+    /*
+      **The audio question, asked once, before anything else happens.**
+
+      `'unset'` means this player has never been offered sound - not that they
+      declined it - so they get the card. A returning player who said yes gets an
+      `unlock()` attempt instead: the E press at the totem was their gesture, and
+      `App.tsx` has already taken it, so this is only the decode.
+
+      A returning player who said no gets neither, and the mute toggle in the HUD
+      is their way back. Without that toggle a single click would be permanent and
+      undiscoverable.
+    */
+    resetVoice()
+    const preference = useGameStore.getState().audio
+    if (preference === 'unset') {
+      useTrainingStore.getState().openGate()
+    } else if (preference === 'on') {
+      unlock()
+      void preload()
+    }
     /*
       Seeded from the store AFTER the reset, not from zero.
 
@@ -159,7 +184,7 @@ export function TrainingScene() {
       its own first card.
     */
     const counters = useTrainingStore.getState()
-    seen.current = { advance: counters.advanceSeq, bail: counters.bailSeq }
+    seen.current = { advance: counters.advanceSeq, bail: counters.bailSeq, form: counters.formSeq }
     left.current = false
     recorded.current = false
     pendingShot.current = null
@@ -185,6 +210,8 @@ export function TrainingScene() {
       setPlayerLocked(false)
       setPlayerHidden(false)
       cameraFrame.override = null
+      // Or the wizard carries on talking over the island he just sent you back to.
+      stopVoice()
       if (import.meta.env.DEV) devRound.seek = null
     }
   }, [resetRound, setPlayerLocked, setPlayerHidden])
@@ -195,7 +222,19 @@ export function TrainingScene() {
       back, and an unclamped one would run the whole round's script in a single
       step - the wizard would arrive, speak twice and leave between two frames.
     */
-    const dt = Math.min(delta, 1 / 20)
+    let dt = Math.min(delta, 1 / 20)
+
+    /*
+      **The gate holds the round by handing the machine a delta of zero.**
+
+      Not a new phase and not a new field on `TrainingInput`. `stepTraining` is
+      pure and reads `bail` before it reads any timer, so a zero delta freezes
+      `elapsed` exactly as wanted AND leaves Escape working - which is the one
+      thing a player stuck behind a dialog must be able to do. One line here, no
+      change to the machine, and it is testable:
+      `stepTraining(s, { bail: true, ... }, 0).phase === 'exiting'`.
+    */
+    if (useTrainingStore.getState().gateOpen) dt = 0
 
     /*
       Edges, by comparing sequence numbers rather than by consuming a flag.
@@ -208,6 +247,28 @@ export function TrainingScene() {
     const bail = store.bailSeq !== seen.current.bail
     seen.current.advance = store.advanceSeq
     seen.current.bail = store.bailSeq
+
+    /*
+      **Clicking a key word rewinds the exhibit to that form.**
+
+      The three words were always a progress indicator - all present, one lit, so
+      a reader can see the whole argument and their place in it. Making them
+      clickable turns the indicator into a control, which is what a reader who
+      missed the middle one actually wants.
+
+      It writes `elapsed` because `elapsed` is what drives the cycle: `formCue`
+      is a pure function of it, so putting the clock at the top of a form's window
+      IS selecting that form. Nothing else has to know.
+
+      Only while reading. During the change-over between cards, or the arrival, the
+      clock means something else and a jump would fight it.
+    */
+    if (store.formSeq !== seen.current.form) {
+      seen.current.form = store.formSeq
+      if (run.current.phase === 'reading') {
+        run.current = { ...run.current, elapsed: store.formWanted * FORM_DWELL }
+      }
+    }
 
     /*
       A shot is consumed here rather than dispatched from the pointer handler.
@@ -226,6 +287,27 @@ export function TrainingScene() {
       dt,
     )
     publish(run.current.phase, run.current.card)
+
+    /*
+      The voice, on the phase EDGE.
+
+      One `speak()` when a speech beat begins and one `stop()` when it ends, with
+      no synchronisation loop between them - the audio clock and the round's
+      accumulated `elapsed` will drift by a few milliseconds over five seconds and
+      nothing here is lip-synced, so there is nothing to correct.
+
+      The stop matters more than the start. `speech1` and `speech2` both advance on
+      `input.advance` as well as on their timers, so a player who presses Skip
+      leaves a wizard talking over the diorama's arrival unless something cuts him
+      off. That is the most likely thing a player does to a preamble.
+    */
+    if (run.current.phase !== spoke.current) {
+      const previous = spoke.current
+      spoke.current = run.current.phase
+      if (previous === 'speech1' || previous === 'speech2') stopVoice()
+      if (run.current.phase === 'speech1') speak(0)
+      if (run.current.phase === 'speech2') speak(1)
+    }
 
     /*
       Hidden for the first-person beats, and driven from the phase rather than

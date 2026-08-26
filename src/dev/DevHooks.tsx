@@ -8,6 +8,7 @@ import { useGameStore } from '@/state/gameStore'
 import { LESSONS } from '@/state/lessons'
 import { VANTAGES, type Vantage } from './vantages'
 import { SPECIMEN_NAME } from '@/game/training/specimen'
+import { voiceReport } from '@/audio/voice'
 
 /**
  * The screenshot and measurement harness, exposed on `window.__dev`.
@@ -749,6 +750,16 @@ export function DevHooks() {
      * the bottom of a fall, is inside the answer. That is the measurement
      * `FORM_FRAME` claims to hold, and the one that catches it drifting.
      */
+    /*
+      A form's live cue, found by walking up from its group.
+
+      The stage hangs it on the group as `userData.cue` purely so this can read
+      it - the round itself passes the object down through props and never needs
+      to look it up.
+    */
+    const cueOf = (node: Object3D): { lit: number; local: number } | null =>
+      (node.userData?.cue as { lit: number; local: number } | undefined) ?? null
+
     const specimen = () => {
       let group: Object3D | null = null
       scene.traverse((o) => {
@@ -773,6 +784,25 @@ export function DevHooks() {
         box.union(formBox)
         forms.push({
           index,
+          /*
+            **The clock, and it is here because its absence hid a real bug.**
+
+            Every station on this stage was frozen: `TeachingStage` read the cue
+            in its component body and spread the values into props, and that body
+            runs on RENDER, which happens about twice a round. So each form held
+            the `local = 0` pose it was mounted with, forever. Nothing threw,
+            nothing logged, and the still frame it produced - a belt with books on
+            it, a shelf, a list of words - is indistinguishable from a working one
+            in any screenshot.
+
+            What said it out loud was this reporter returning byte-identical
+            bounds for the same form at two different times. Now it reports the
+            clock directly, so the next person does not have to infer it from a
+            bounding box: a `local` that is not advancing between two calls is a
+            form that has stopped.
+          */
+          local: +(cueOf(child)?.local ?? -1).toFixed(3),
+          lit: +(cueOf(child)?.lit ?? -1).toFixed(3),
           worldMinY: +formBox.min.y.toFixed(3),
           worldMaxY: +formBox.max.y.toFixed(3),
           height: +(formBox.max.y - formBox.min.y).toFixed(3),
@@ -929,6 +959,15 @@ export function DevHooks() {
       frameStats,
       framing,
       specimen,
+      /**
+       * What the voice is actually doing, as one of six named states.
+       *
+       * A blocked context, a 404, a corrupt file, a declined gate, a muted tab
+       * and a player with the volume down all present to the eye as silence. This
+       * project's defects are the ones that report nothing and an audio path is
+       * unusually good at reporting nothing, so this never answers with a boolean.
+       */
+      audio: voiceReport,
       sample,
       pinDpr,
       progress,

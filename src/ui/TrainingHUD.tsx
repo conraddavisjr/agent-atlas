@@ -2,6 +2,7 @@ import { useEffect, type CSSProperties } from 'react'
 import { useGameStore } from '@/state/gameStore'
 import { useTrainingStore } from '@/game/training/trainingStore'
 import { CARDS, INSTRUCTOR_LINES, QUIZ } from '@/game/training/cards'
+import { decline, preload, unlock } from '@/audio/voice'
 import { CARD_COUNT } from '@/game/training/trainingMachine'
 import { LAYER } from './layers'
 
@@ -43,6 +44,8 @@ export function TrainingHUD() {
   const card = useTrainingStore((s) => s.card)
   const requestAdvance = useTrainingStore((s) => s.requestAdvance)
   const requestBail = useTrainingStore((s) => s.requestBail)
+  const audio = useGameStore((s) => s.audio)
+  const setAudio = useGameStore((s) => s.setAudio)
 
   useEffect(() => {
     if (!playerLocked) return
@@ -105,7 +108,7 @@ export function TrainingHUD() {
       {speaking !== null && (
         <div style={styles.dialogue}>
           <div style={styles.speaker}>THE INSTRUCTOR</div>
-          <div style={styles.line}>{INSTRUCTOR_LINES[speaking]}</div>
+          <div style={styles.line}>{INSTRUCTOR_LINES[speaking].shown}</div>
           {/*
             **The speech beats have always been skippable and nothing ever said
             so.**
@@ -205,6 +208,36 @@ export function TrainingHUD() {
         cannot recover from without reloading, and `Portal.tsx` refuses the same
         thing by never locking the return gate.
       */}
+      {/*
+        The mute, and the escape hatch from a permanent decision.
+
+        A player who takes `Continue in silence` at the gate has that remembered,
+        which means the gate never appears for them again - so without this the
+        choice is one click and undiscoverable forever. It is also just the
+        control anybody wants when a voice starts talking in an open-plan office.
+
+        Turning it ON from here is a click, and a click is a user gesture, so this
+        is also a second reliable unlock path for a browser that refused the
+        first one.
+      */}
+      <button
+        style={styles.sound}
+        onClick={() => {
+          if (audio === 'on') {
+            decline()
+            setAudio('off')
+          } else {
+            unlock()
+            setAudio('on')
+            void preload()
+          }
+        }}
+        aria-label={audio === 'on' ? 'Mute the instructor' : 'Let the instructor speak'}
+        title={audio === 'on' ? 'Mute the instructor' : 'Let the instructor speak'}
+      >
+        {audio === 'on' ? 'Sound on' : 'Sound off'}
+      </button>
+
       <button style={styles.exit} onClick={requestBail}>
         Esc to leave
       </button>
@@ -370,6 +403,19 @@ const styles: Record<string, CSSProperties> = {
     fontSize: '0.74rem',
     cursor: 'pointer',
     fontFamily: 'inherit',
+  },
+  sound: {
+    pointerEvents: 'auto',
+    position: 'absolute',
+    top: 18,
+    /* Left of `Esc to leave`, which keeps its corner. */
+    right: 132,
+    ...panel,
+    padding: '8px 14px',
+    fontSize: '0.78rem',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    color: 'inherit',
   },
   exit: {
     pointerEvents: 'auto',

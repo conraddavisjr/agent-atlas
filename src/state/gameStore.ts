@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { useShallow } from 'zustand/react/shallow'
 import { INITIAL_PROGRESS } from './lessons'
-import type { ProgressState } from './types'
+import type { AudioPreference, ProgressState } from './types'
 
 /**
  * Persisted schema version.
@@ -12,7 +12,15 @@ import type { ProgressState } from './types'
  * adding versioning retroactively means the first generation of saves has no
  * version to migrate from.
  */
-const SCHEMA_VERSION = 1
+/*
+  2 adds `audio`, the first setting this game has had.
+
+  The migration is what this number has existed for since the first commit: a
+  save written before the gate existed has no preference, and the merge onto
+  `freshProgress()` gives it `'unset'`, which is exactly right - that player has
+  not been asked, so they get asked.
+*/
+const SCHEMA_VERSION = 2
 const STORAGE_KEY = 'agent-atlas-progress'
 /** The key used before the project was renamed to Agent Atlas. */
 const LEGACY_STORAGE_KEY = 'ai-academy-progress'
@@ -104,6 +112,7 @@ type GameStore = ProgressState & {
   setPlayerLocked: (value: boolean) => void
   setPlayerHidden: (value: boolean) => void
   travelTo: (sceneId: string, spawnId: string) => void
+  setAudio: (audio: AudioPreference) => void
 
   /**
    * Wipe progression back to the start.
@@ -162,6 +171,8 @@ export const useGameStore = create<GameStore>()(
       travelTo: (sceneId, spawnId) =>
         set({ currentSceneId: sceneId, currentSpawnId: spawnId, activeTotemId: null }),
 
+      setAudio: (audio) => set({ audio }),
+
       resetProgress: () => set(freshProgress()),
     }),
     {
@@ -178,6 +189,7 @@ export const useGameStore = create<GameStore>()(
         currentSceneId: state.currentSceneId,
         currentSpawnId: state.currentSpawnId,
         lessonData: state.lessonData,
+        audio: state.audio,
       }),
 
       /**
@@ -192,6 +204,13 @@ export const useGameStore = create<GameStore>()(
           // Pre-versioning saves, if any ever existed, get merged onto defaults.
           state = { ...freshProgress(), ...state }
         }
+
+        /*
+          A save from before the audio gate has no preference, and the defensive
+          merge below gives it `'unset'` rather than `'off'`. That is the whole
+          decision: a returning player has not declined sound, they were never
+          offered it, so they get the card once like everybody else.
+        */
 
         // Defensive merge: a save written by a newer build, or hand-edited local
         // storage, must never leave a required field undefined. Fresh defaults, so
@@ -219,6 +238,7 @@ export function useProgress(): ProgressState {
       currentSceneId: state.currentSceneId,
       currentSpawnId: state.currentSpawnId,
       lessonData: state.lessonData,
+      audio: state.audio,
     })),
   )
 }

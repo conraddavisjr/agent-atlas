@@ -316,6 +316,13 @@ export const PLANK_AT: [number, number, number] = [0, EYE[1], 6.2]
  * are authored upward from their own base plane, so 2.05 stays the base plane
  * and `SPECIMEN_HEIGHT` grows upward from it into the empty band above.
  *
+ * Y came DOWN 9 cm after the first frame with the specimen in it, which is about
+ * 15 screen pixels at this camera - one metre projects to roughly 174 px on a 934
+ * px frame. The exhibit and its nameplate sit closer to the reader chrome that
+ * carries the Next button, which leaves more clear air above the specimen and
+ * tightens the whole composition toward the bottom of the frame where the reader
+ * is already looking.
+ *
  * Z came FORWARD, from 3.6 to 3.0, together with `DIORAMA_BACK` going to zero in
  * `cameraDirector.ts`. Between them the range drops from 9.5 m to 8.0 m. That
  * does not by itself make the specimen bigger - see the note in `specimen.ts` on
@@ -324,7 +331,7 @@ export const PLANK_AT: [number, number, number] = [0, EYE[1], 6.2]
  * `reading` all share one camera Z and the teaching act has no camera move in it
  * at all beyond a lift and a re-aim.
  */
-export const SPECIMEN_AT: [number, number, number] = [0, 2.05, 3.0]
+export const SPECIMEN_AT: [number, number, number] = [0, 1.96, 3.0]
 
 /**
  * How far apart the three stations stand, centre to centre.
@@ -403,6 +410,42 @@ export function dioramaSafeWidth(cameraZ: number, fovDegrees = STAGE_FOV): numbe
 export function stationX(index: number, pitch: number = STATION_PITCH): number {
   return (1 - index) * pitch
 }
+
+/**
+ * Where a prompt word sits inside the guessing form, so the sentence reads left
+ * to right ON SCREEN.
+ *
+ * **Descending x, which is the opposite of what anybody writes first.** `+X` is
+ * screen left here, so the FIRST word takes the HIGHEST x. Laid out the obvious
+ * way, `YOUR ROYAL` renders as `ROYAL YOUR` - which is exactly what shipped, and
+ * which is the sixth time this stage's axis inversion has caught the feature out.
+ *
+ * It lives here beside `stationX` rather than in `Guessed.tsx` for two reasons:
+ * it is the same class of decision, and a component file that also exports
+ * constants cannot be fast-refreshed. Both of them are functions rather than
+ * literals so that the inversion is asserted rather than typed at a mount point,
+ * which is the only thing that has ever caught it.
+ */
+export function promptX(index: number): number {
+  return PROMPT_START - index * PROMPT_STEP
+}
+
+const PROMPT_START = 0.92
+const PROMPT_STEP = 0.34
+
+/**
+ * How many words the prompt has, which is what sets where the blank is.
+ *
+ * A constant rather than `PROMPT.length` because `stage.ts` holds positions and
+ * `dioramaCopy.ts` holds words, and a layout file importing copy is the wrong
+ * direction. `dioramaCopy.test.ts` asserts the two agree, so adding a third
+ * prompt word fails a test rather than quietly putting the blank inside the
+ * sentence.
+ */
+export const PROMPT_WORDS = 2
+
+/** One step past the last prompt word, which is where a guess has to land. */
+export const BLANK_X = PROMPT_START - PROMPT_WORDS * PROMPT_STEP
 
 /** The headline, standing large behind everything. */
 export const HEADLINE = 'WHAT IS AI?'

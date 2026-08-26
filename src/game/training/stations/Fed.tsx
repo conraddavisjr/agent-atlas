@@ -1,44 +1,55 @@
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
-import { Matrix4, Quaternion, Vector3, type InstancedMesh } from 'three'
-import { GLOW, emissive, mattePlastic, shell } from '@/art/materials'
+import { Matrix4, Quaternion, Vector3, type Group, type InstancedMesh } from 'three'
+import { mattePlastic, shell } from '@/art/materials'
 import { palette } from '@/art/palette'
-import { kerb, mergeProp, slab, trace } from '@/art/geometry'
+import { kerb, mergeProp, slab } from '@/art/geometry'
 import { assertDrawable } from '@/game/world/hubLayout'
-import { MACHINE_SCALE, machineIntake, teachingMachineGeometry } from '../teachingMachine'
-import { FED_STREAMS } from '../dioramaCopy'
-import { loop, pointAlong, stationGlow } from '../diorama'
+import { MACHINE_SCALE, teachingMachineGeometry } from '../teachingMachine'
+import { BOOK_SUBJECTS } from '../dioramaCopy'
+import { loop } from '../diorama'
+import type { LiveCue } from '../specimen'
 import { StationLabel } from './StationLabel'
 
 /**
- * Station one: a machine being fed nearly everything ever written.
+ * Form one: a machine being fed nearly everything ever written.
  *
- * ## The label falling off the stream is the whole station
+ * ## The belt says it, and the streams used to say it twice
  *
- * The paragraph says "a machine that read very nearly everything, **and was told
- * what none of it means**". The reading is easy to draw and the second half is
- * the part that matters, so it is the part that moves: each stream carries a
- * subject - SCIENCE, PHILOSOPHY - and the label drops away at the intake while
- * the stream itself carries on in. The words go in; the meaning does not.
+ * This station had two illustrations of one idea stacked on top of each other: a
+ * conveyor of books running into the hopper, and five glowing data streams arcing
+ * in from above with subject labels riding them. The streams were the older idea
+ * and they were the ones doing the arguing - each carried a subject that was
+ * stripped off at the intake, so the words went in and the meaning did not.
  *
- * Without that, this is a picture of a machine being taught, which is the
- * opposite of what the card claims.
+ * They are gone and the belt has taken the argument over. Three reasons, in order
+ * of weight:
  *
- * ## Cost
+ * **They collided with themselves.** Five paths converging on one intake put five
+ * labels into a space about a label and a half wide. At the old station size that
+ * was a detail nobody could read; at the specimen's it was the most obvious thing
+ * in the frame. Fixing it means fanning them wide enough that they stop reading
+ * as one machine being fed.
  *
- * Three draw calls for the geometry: the machine merged into one, the belt and
- * its rails merged into a second, and all five streams merged into a third.
- * `mergeProp` is the house answer for a static multi-part prop, and the streams
- * are static - what moves along them is a separate instanced batch of dots, which
- * is the other half of the same rule: "instancing stays the right tool for the
- * numerous, identical, uniformly scaled small stuff".
+ * **They cost the whole top of the composition.** The streams reached local y 1.12
+ * where the machine tops out at about half that, so two thirds of this form's
+ * height was carrying decoration. Deleting them is what gives the exhibit its
+ * vertical room back.
  *
- * The books are one more instanced batch. The labels are troika text and cost
- * what they cost.
+ * **A book is a better drawing of "read" than a glowing dot is.** The paragraph
+ * says the machine "read very nearly everything". A labelled book going into a
+ * hopper is that sentence, and it needs no legend.
+ *
+ * ## One book per subject, mounted once
+ *
+ * Each book keeps its own label for the life of the round and rides the belt on a
+ * staggered offset, so the queue cycles without a single piece of text ever being
+ * rewritten. That matters: `text` is the one property on troika's syncable list
+ * this stage actually uses, so a label that changed as a book recycled would be a
+ * glyph re-layout every second for no reason.
  */
-export function Fed({ lit, local }: { lit: number; local: number }) {
+export function Fed({ cue }: { cue: LiveCue }) {
   const books = useRef<InstancedMesh>(null)
-  const dots = useRef<InstancedMesh>(null)
   const labels = useRef<(Group | null)[]>([])
 
   const machine = useMemo(
@@ -47,19 +58,25 @@ export function Fed({ lit, local }: { lit: number; local: number }) {
   )
 
   /*
-    The belt: a deck and two rails, merged. It runs in from the right of the
-    station toward the machine at its centre - `+X` is screen left here, so a belt
-    that feeds from `-X` is a belt the player watches travel toward them and then
-    inward, which is the direction reading goes.
+    The belt: a deck and two rails, merged. It runs in from the player's right
+    toward the machine at the centre - `+X` is screen LEFT on this stage, so a belt
+    that feeds from `-X` is one the eye follows in the direction it reads.
   */
   const belt = useMemo(
     () =>
       assertDrawable(
         mergeProp([
-          { geometry: slab(BELT_LENGTH, 0.05, 0.26, 0.02), position: [-BELT_LENGTH / 2 - 0.2, BELT_Y, 0] },
+          {
+            geometry: slab(BELT_LENGTH, 0.05, 0.26, 0.02),
+            position: [BELT_START + BELT_LENGTH / 2, BELT_Y, 0],
+          },
           ...[-1, 1].map((side) => ({
             geometry: kerb(BELT_LENGTH, 0.05, 0.03),
-            position: [-BELT_LENGTH / 2 - 0.2, BELT_Y + 0.05, side * 0.13] as [number, number, number],
+            position: [BELT_START + BELT_LENGTH / 2, BELT_Y + 0.05, side * 0.13] as [
+              number,
+              number,
+              number,
+            ],
           })),
         ]),
         'the feed belt',
@@ -67,97 +84,72 @@ export function Fed({ lit, local }: { lit: number; local: number }) {
     [],
   )
 
-  /*
-    The five streams, merged into one geometry.
-
-    Each is a `trace` - `geometry.ts` calls that "a circuit trace", which is
-    exactly what a line of data arriving somewhere is - swept from its own start
-    point to the machine's intake. They fan in from above and behind so the
-    machine is being fed from the world rather than from off-screen left.
-  */
-  const streams = useMemo(
-    () => assertDrawable(mergeProp(streamPaths().map((points) => ({ geometry: trace(points, 0.014, 24) }))), 'the data streams'),
-    [],
-  )
-
   useFrame(() => {
-    const glow = stationGlow(lit)
+    /* Read live, every frame. See `LiveCue` for why these are not props. */
+    const { lit, local } = cue
 
-    /*
-      The books, queued along the belt. One `loop` per index with a staggered
-      offset gives a queue rather than a pulse - see `diorama.ts`, which explains
-      why that helper does fractional arithmetic instead of a modulo.
-    */
-    if (books.current) {
-      for (let i = 0; i < BOOK_COUNT; i++) {
-        const t = loop(local, BELT_PERIOD, i / BOOK_COUNT)
-        scratch.position.set(BELT_START + (BELT_END - BELT_START) * t, BELT_Y + 0.14, 0)
+    for (let i = 0; i < BOOK_SUBJECTS.length; i++) {
+      /*
+        One `loop` per index with a staggered offset gives a queue rather than a
+        pulse - see `diorama.ts` for why that helper does fractional arithmetic
+        rather than a modulo, which matters because a seeked round can hand it a
+        negative and a book at -0.3 along a belt is a book behind the camera.
+      */
+      const t = loop(local, BELT_PERIOD, i / BOOK_SUBJECTS.length)
+      const x = BELT_START + (BELT_END - BELT_START) * t
+
+      /*
+        Swallowed rather than stopped. The book shrinks to nothing over the last
+        tenth of the belt, so it vanishes INTO the hopper rather than through its
+        far wall - which is what makes the machine look like it is eating instead
+        of like the belt is clipping.
+      */
+      const swallow = Math.min(1, (1 - t) / SWALLOW_AT)
+
+      if (books.current) {
+        scratch.position.set(x, BELT_Y + 0.14, 0)
         /*
-          They tumble a little as they ride, which is the difference between a
-          belt carrying things and a texture scrolling. The rate is irrational
-          against the belt's own period so the queue never falls into lockstep.
+          A little tumble as they ride, which is the difference between a belt
+          carrying things and a texture scrolling. The rate is irrational against
+          the belt's own period so the queue never falls into lockstep.
         */
         scratch.quaternion.setFromAxisAngle(TUMBLE_AXIS, t * Math.PI * 1.7 + i)
-        // Shrunk to nothing at the very end, so a book vanishes INTO the hopper
-        // rather than through its far wall.
-        const swallow = Math.min(1, (1 - t) / 0.12)
         scratch.scale.setScalar(swallow)
         scratch.matrix.compose(scratch.position, scratch.quaternion, scratch.scale)
         books.current.setMatrixAt(i, scratch.matrix)
       }
-      books.current.instanceMatrix.needsUpdate = true
-    }
 
-    /* The dots travelling each stream, three to a stream. */
-    if (dots.current) {
-      const paths = streamPaths()
-      let n = 0
-      for (let s = 0; s < paths.length; s++) {
-        for (let d = 0; d < DOTS_PER_STREAM; d++) {
-          const t = loop(local, STREAM_PERIOD, s * 0.17 + d / DOTS_PER_STREAM)
-          const [x, y, z] = pointAlong(paths[s], t)
-          scratch.position.set(x, y, z)
-          scratch.quaternion.identity()
-          scratch.scale.setScalar(0.4 + lit * 0.6)
-          scratch.matrix.compose(scratch.position, scratch.quaternion, scratch.scale)
-          dots.current.setMatrixAt(n++, scratch.matrix)
-        }
-      }
-      dots.current.instanceMatrix.needsUpdate = true
-    }
+      const label = labels.current[i]
+      if (label) {
+        /*
+          **Staggered onto two heights, and this is a fix rather than a flourish.**
 
-    /*
-      **The labels fall off at the intake.**
+          Five titles evenly spaced along the belt gave each about 0.66 m of room
+          and `ENGINEERING` renders 0.67 m wide, so the row came out as
+          ENGINEERINGPHILOSOPHYMATHEMATICS - touching, which reads as one long
+          nonsense word. Shrinking the type alone would have fixed it by making
+          the titles hard to read again, which is the thing this whole pass was
+          for.
 
-      Each one rides its own stream to a point short of the machine and then drops
-      away, and this is the station's whole argument - see the header. A position
-      write rather than a fade because the subject is being STRIPPED OFF, which is
-      a thing that happens in space; the form as a whole fades, and its labels
-      fade with it, but this particular gesture is a fall.
-    */
-    for (let s = 0; s < labels.current.length; s++) {
-      const group = labels.current[s]
-      if (!group) continue
-      const t = loop(local, STREAM_PERIOD, s * 0.17)
-      const path = streamPaths()[s]
-      if (t < LABEL_RELEASE) {
-        const [x, y, z] = pointAlong(path, t)
-        group.position.set(x, y, z)
-        group.visible = lit > 0.05
-      } else {
-        // Released: it keeps the x and z it had and falls, so it reads as the
-        // subject being stripped off rather than as a label teleporting away.
-        const fall = (t - LABEL_RELEASE) / (1 - LABEL_RELEASE)
-        const [x, y, z] = pointAlong(path, LABEL_RELEASE)
-        group.position.set(x, y - fall * fall * LABEL_FALL, z)
-        group.visible = lit > 0.05 && fall < 0.85
+          Alternating the height doubles the horizontal room each title has
+          without touching its size, and it costs a little of the vertical space
+          this form has to spare - it is the shortest of the three.
+        */
+        label.position.set(x, BELT_Y + LABEL_LIFT + (i % 2) * LABEL_STAGGER, 0)
+        /*
+          **The subject goes before the book does, and that is the whole second
+          half of the paragraph.**
+
+          "A machine that read very nearly everything, and was told what none of it
+          means." The book is what the hopper gets; the subject is what it does
+          not. The two vanishing together would read as the whole thing going in,
+          which is the opposite claim.
+        */
+        label.visible = lit > 0.05 && t < SUBJECT_LOST_AT
       }
     }
-
-    if (streamMaterial.current) streamMaterial.current.emissiveIntensity = glow
+    if (books.current) books.current.instanceMatrix.needsUpdate = true
   })
-
-  const streamMaterial = useRef<{ emissiveIntensity: number } | null>(null)
 
   return (
     <group>
@@ -165,37 +157,43 @@ export function Fed({ lit, local }: { lit: number; local: number }) {
         <meshPhysicalMaterial {...shell(palette.shell)} />
       </mesh>
 
+      {/*
+        Matte, not emissive. The belt is a surface, not a light - and
+        `emissiveIntensityFor` refuses `palette.plate` outright, because at linear
+        luminance 0.09 normalising it to the bloom threshold would need an
+        intensity of 16 and render as blown-out white. That guardrail is the art
+        bible's section 1 speaking, and it caught this on the first frame.
+      */}
       <mesh geometry={belt} castShadow receiveShadow>
         <meshPhysicalMaterial {...mattePlastic(palette.plate)} />
       </mesh>
 
-      <mesh geometry={streams}>
-        <meshPhysicalMaterial
-          ref={streamMaterial as never}
-          {...emissive(palette.visor, GLOW.source)}
-        />
-      </mesh>
-
-      {/* The books on the belt. One buffer, one draw, `BOOK_COUNT` of them. */}
-      <instancedMesh ref={books} args={[undefined, undefined, BOOK_COUNT]} castShadow frustumCulled={false}>
-        <boxGeometry args={[0.13, 0.17, 0.05]} />
-        <meshPhysicalMaterial {...mattePlastic(palette.bandTrim)} />
+      {/* The books. One buffer, one draw, one per subject. */}
+      <instancedMesh
+        ref={books}
+        args={[undefined, undefined, BOOK_SUBJECTS.length]}
+        castShadow
+        frustumCulled={false}
+      >
+        <boxGeometry args={[0.15, 0.2, 0.06]} />
+        {/*
+          `hardware` rather than `bandTrim`. The books were the belt's own colour,
+          which in a room this dark meant a dark box on a dark deck: the thing the
+          whole form is about was the least visible thing in the frame. A pale
+          spine separates them from the surface carrying them, which is what a
+          book on a conveyor actually looks like.
+        */}
+        <meshPhysicalMaterial {...mattePlastic(palette.hardware)} />
       </instancedMesh>
 
-      {/* The data travelling the streams. */}
-      <instancedMesh ref={dots} args={[undefined, undefined, FED_STREAMS.length * DOTS_PER_STREAM]} frustumCulled={false}>
-        <sphereGeometry args={[0.028, 8, 6]} />
-        <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
-      </instancedMesh>
-
-      {FED_STREAMS.map((name, i) => (
+      {BOOK_SUBJECTS.map((subject, i) => (
         <group
-          key={name}
+          key={subject}
           ref={(node) => {
             labels.current[i] = node
           }}
         >
-          <StationLabel text={name} size={STREAM_LABEL_SIZE} colour="#a9c4ea" />
+          <StationLabel text={subject} size={SUBJECT_SIZE} colour="#a9c4ea" />
         </group>
       ))}
     </group>
@@ -203,28 +201,6 @@ export function Fed({ lit, local }: { lit: number; local: number }) {
 }
 
 /* ------------------------------------------------------------------------- */
-
-type Group = import('three').Group
-
-/**
- * Where each stream starts, and the arc it takes to the intake.
- *
- * Fanned across the top of the station rather than gathered, so five of them read
- * as five sources rather than as one thick cable. The middle control point lifts
- * each one so the set arcs in - a straight line from a corner reads as a girder.
- *
- * Rebuilt on demand rather than memoised because it is five arrays of three
- * triples and it is called once per frame by things that need the same numbers;
- * caching it would mean a module-level mutable that the seek hook could stale.
- */
-function streamPaths(): [number, number, number][][] {
-  return FED_STREAMS.map((_, i) => {
-    const spread = (i - (FED_STREAMS.length - 1) / 2) / ((FED_STREAMS.length - 1) / 2)
-    const start: [number, number, number] = [spread * 0.62, 1.12, 0.42]
-    const mid: [number, number, number] = [spread * 0.4, 0.88, 0.18]
-    return [start, mid, machineIntake(MACHINE_SCALE)]
-  })
-}
 
 /** Scratch objects, allocated once. `Confetti.tsx`'s rule: no garbage per frame. */
 const scratch = {
@@ -235,73 +211,47 @@ const scratch = {
 }
 const TUMBLE_AXIS = new Vector3(0.3, 0.8, 0.5).normalize()
 
-const BELT_LENGTH = 0.95
+/**
+ * How long the belt is, and where it starts.
+ *
+ * Longer than it was, and the length is set by the LABELS rather than by the
+ * machine. Five books need five titles that do not touch, and `MATHEMATICS` is
+ * about 0.33 wide at `SUBJECT_SIZE` - so the spacing has to clear that. This is
+ * what makes the belt 1.75 where it was 0.95, back when the books were unlabelled
+ * and the streams did the naming.
+ *
+ * It is also the number that sets this form's ASPECT, which is why it is not just
+ * "as long as looks nice". The exhibit fits a 2.46 by 4.2 box; a belt long enough
+ * for six titles made the form 2.57 wide by 0.72 tall, so it hit the width limit
+ * and was drawn two thirds the height of its neighbours. Every book added here
+ * costs height.
+ */
+const BELT_START = -1.8
+const BELT_END = -0.05
+const BELT_LENGTH = BELT_END - BELT_START
 const BELT_Y = 0.34
-const BELT_START = -1.05
-const BELT_END = -0.12
-/**
- * The internal cycles, retimed for a form that now holds the stage for 2.5 s.
- *
- * These were built for a stage where all three stations stayed lit for as long
- * as the player cared to read, so their periods were free. They are not any
- * more: a form is only readable while it is fully present, so its argument has
- * to land inside `FORM_WINDOW`, which is 2.05 s.
- *
- * At the old 2.9 s stream period the first subject label was released at 2.09 s,
- * which cleared the window by four hundredths of a second - true, and true by
- * luck rather than by design. At 1.8 the releases fall at 1.30, 1.63 and 1.94 s,
- * so three of them are seen on every appearance.
- */
-const BELT_PERIOD = 2.2
-const BOOK_COUNT = 7
-
-const STREAM_PERIOD = 1.8
-const DOTS_PER_STREAM = 3
-/** How far along a stream a subject label survives before it is stripped off. */
-const LABEL_RELEASE = 0.72
 
 /**
- * How far a released label falls before it is taken off screen, in metres.
+ * How long one book takes to travel the whole belt, in seconds.
  *
- * ## It was 1.6, and at the specimen's scale that put five words on the caption
+ * Five books staggered across it means one is swallowed every `BELT_PERIOD / 5`,
+ * so this is really a choice about how often the machine eats. At 4.2 that is
+ * every 0.84 s - often enough to read as continuous feeding, slow enough that a
+ * title can be read on the way past.
  *
- * The label is released at about local y 0.771 and stays visible to `fall` 0.85,
- * so at 1.6 it reached **-0.385** - well below the machine's own base plane. At
- * the three-station scale of 0.74 that was 28 cm below the stage and landed on
- * empty floor. At the specimen's 2.2 it is 85 cm below the base plane, which is
- * exactly where the key words and the caption now sit: SCIENCE, MATHEMATICS,
- * PHILOSOPHY, ENGINEERING and HISTORY raining through the nameplate on a 1.8 s
- * loop.
- *
- * 0.55 brings the lowest point to 0.374, which is above the base plane, so the
- * form's swept box no longer extends below the thing it stands on. The gesture
- * is unchanged in kind - the subject is still stripped off at the intake and
- * still drops away, which `Fed.tsx`'s header calls the whole station - it just
- * does it inside its own frame.
- *
- * Moving the nameplate instead was the alternative and it is the wrong trade:
- * the words are below the specimen precisely because the base plane is the one
- * edge of this composition that never moves.
+ * It has to be at most `FORM_WINDOW`, or a book that enters at the far end never
+ * reaches the hopper inside the time the form is on stage. See `specimen.ts`.
  */
-const LABEL_FALL = 0.55
+const BELT_PERIOD = 4.2
 
-/**
- * How large a subject label is drawn, in the form's own units.
- *
- * ## Sized against the caption now, not against the station
- *
- * 0.07 was chosen when a station was 3% of the frame and its labels were about
- * five pixels of cap - too small to read, and too small for anyone to notice that
- * five of them overlap where the streams converge. At the specimen's scale the
- * same number draws them at 0.148 m, the same size as the caption underneath the
- * whole exhibit, and the overlap became the most obvious thing in the frame.
- *
- * These are subordinate: they name what is going in, where the caption names what
- * the picture means. 0.05 puts them at about 0.106 m, two thirds of the caption
- * and twice their old rendered size, which is the hierarchy the picture wants.
- *
- * **This is legibility, not composition.** The five streams still converge into a
- * space too small for five words, and the honest fix is to re-author the fan now
- * that it owns a frame rather than a third of one. That is the next pass.
- */
-const STREAM_LABEL_SIZE = 0.05
+/** How far above the belt a subject rides. Clear of the book, not floating free. */
+const LABEL_LIFT = 0.32
+/** How far every second title sits above its neighbours. See the frame body. */
+const LABEL_STAGGER = 0.17
+const SUBJECT_SIZE = 0.05
+
+/** The last tenth of the belt, over which a book shrinks into the hopper. */
+const SWALLOW_AT = 0.1
+
+/** Where along the belt the subject is lost. See the note at the visibility write. */
+const SUBJECT_LOST_AT = 0.82

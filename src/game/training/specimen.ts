@@ -59,10 +59,21 @@ export const FORM_COUNT = 3
 /**
  * How long each form holds the stage, in seconds.
  *
- * The brief's number. It is a DWELL rather than the stagger it replaced -
- * nothing accumulates any more, because there is only ever one form on stage.
+ * A DWELL rather than the stagger it replaced - nothing accumulates any more,
+ * because there is only ever one form on stage.
+ *
+ * **Five, and it was two and a half.** Two and a half was the number asked for
+ * before anyone had watched it at the specimen's size, and at that size it turned
+ * out to be a slideshow: the eye needs a moment to find a form that has just
+ * arrived before it can start reading it, and the form's own argument then has to
+ * play out inside what is left. Five gives each form a full pass of its animation
+ * with room to watch it twice.
+ *
+ * A full pass of a card is now 15 s against a 300-character paragraph that takes
+ * about 17 s to read, so the picture still finishes with the words rather than
+ * leaving a reader waiting on a diagram.
  */
-export const FORM_DWELL = 2.5
+export const FORM_DWELL = 5
 
 /**
  * How long the change-over takes, in seconds, out and in together.
@@ -95,6 +106,24 @@ export type FormCue = {
    * written to prevent. Resetting means every appearance plays the argument from
    * the beginning.
    */
+  local: number
+}
+
+/**
+ * What a form is handed about itself, every frame, and it is a LIVE object.
+ *
+ * The stage keeps one of these per form and mutates it in place; the station
+ * holds the reference and reads it inside its own `useFrame`. That indirection
+ * is not ceremony - passing the numbers as props instead means each station is
+ * frozen at whatever they were when the stage last rendered, which is about twice
+ * a round. See `Form` in `TeachingStage.tsx`, where that cost a real bug that
+ * shipped: nothing on this stage animated, and every still frame of it looked
+ * exactly like a working one.
+ */
+export type LiveCue = {
+  /** How present the form is, 0 to 1. Its own animations dim with it. */
+  lit: number
+  /** Seconds since this form last came on stage. */
   local: number
 }
 
@@ -282,18 +311,23 @@ export type FormFrame = {
  */
 export const FORM_FRAME: readonly FormFrame[] = [
   /*
-    FED. It argues when the first subject label is stripped off at the intake, at
-    `LABEL_RELEASE` 0.72 of `STREAM_PERIOD` 1.8.
+    FED. It argues when a titled book has ridden the belt and been swallowed
+    without its subject - six books staggered over a 4.2 s belt means one arrives
+    every 0.7 s, so a couple of them is well inside a second and a half.
   */
-  { minY: 0, maxY: 1.165, width: 1.79, centreX: -0.255, argueAt: 1.3 },
-  /* FETCHED. It argues when the stepped route completes, at `SLOW_PERIOD`. */
-  { minY: 0, maxY: 1.21, width: 1.5, centreX: -0.1, argueAt: 1.9 },
+  { minY: 0, maxY: 0.718, width: 2.22, centreX: -0.8, argueAt: 1.4 },
   /*
-    GUESSED. Its machine stands at 0.36 and nothing it draws is below 0.34, which
-    is why the scale divides by the extent rather than by the top. It argues when
-    the winner locks, at `LOCK_AT` 0.62 of `CYCLE` 2.2.
+    FETCHED. It argues when BOTH errands have been shown - the straight grab and
+    the same job done step by step - which is two `ROUTE_PERIOD`s. The paragraph
+    names two things and a viewer who saw one of them learned half a sentence.
   */
-  { minY: 0.3425, maxY: 1.0623, width: 1.46, centreX: -0.224, argueAt: 1.37 },
+  { minY: 0, maxY: 1.21, width: 1.5, centreX: -0.1, argueAt: 4.2 },
+  /*
+    GUESSED. Its machine stands ON the base plane now, where it used to be mounted
+    at 0.36 and float most of a metre above the nameplate. It argues when the
+    winning word has landed in the blank and finished the sentence, at `LANDED_AT`.
+  */
+  { minY: 0, maxY: 1.002, width: 1.913, centreX: 0.047, argueAt: 3.0 },
 ]
 
 /**

@@ -6,71 +6,61 @@ import { palette } from '@/art/palette'
 import { mergeProp, trace } from '@/art/geometry'
 import { assertDrawable } from '@/game/world/hubLayout'
 import { teachingMachineGeometry } from '../teachingMachine'
+import { BLANK_X, promptX } from '../stage'
 import { CANDIDATES, PROMPT } from '../dioramaCopy'
-import { loop } from '../diorama'
+import { loop, stationGlow } from '../diorama'
+import type { LiveCue } from '../specimen'
 import { StationLabel } from './StationLabel'
 
 /**
- * Station three: two words in, five candidates, one lands.
+ * Form three: two words, a blank, and the machine filling it in.
  *
- * ## The bars are the argument
+ * ## The sentence has to read as a sentence
  *
- * The paragraph's claim is not that the machine picks a word, it is that it picks
- * *uncannily well*. A picture of one word appearing shows the first and not the
- * second. So every candidate is drawn with the weight it actually carried, and
- * `dioramaCopy.ts` puts a real rival at a quarter of the winner's share -
+ * It did not. `+X` is screen LEFT on this stage - the camera sits at negative Z
+ * looking toward positive Z - and the prompt was laid out with ascending x, so
+ * `YOUR ROYAL` rendered as `ROYAL YOUR`. That inversion has now caught this
+ * feature out six times: the headline rendered mirrored, the cube opened on the
+ * quiz face, all three plank verdicts showed before a shot, the hat's tip flopped
+ * out of sight, the moustache curled the wrong way, and this. So the row derives
+ * from `promptX`, which is a function with a test on it rather than a sign typed
+ * at a mount point - exactly what `stationX` exists to be.
+ *
+ * ## The blank is the illustration
+ *
+ * This used to draw a fan of weighted candidates and light one up in place. That
+ * shows the machine RANKING words, which is true and is not the claim: the
+ * paragraph says it guesses "what comes next", and a guess needs somewhere to go.
+ *
+ * So the prompt ends in an empty slot with a rule under it, the candidates wait
+ * below carrying the weight each of them actually had, and when the machine
+ * decides, the winner leaves the list and flies into the slot. The sentence
+ * completes itself in front of you, which is the sentence being taught.
+ *
+ * ## The rival is doing real work
+ *
+ * `dioramaCopy.ts` puts `HIGHNESS` at a quarter of the winner's weight on purpose:
  * "a fan whose right answer is the only sensible entry teaches that guessing is
- * easy, which is the opposite of what the paragraph says."
+ * easy, which is the opposite of what the paragraph says". Watching a genuine
+ * runner-up lose is what makes the choice look like a choice, and it is why the
+ * losers keep their bars after the winner has gone.
  *
  * ## The winner is its own mesh, and that is a documented constraint
  *
  * `LessonTotem.tsx` records it: "three applies an instance colour to the diffuse
  * term only, **never to emission**. So one batch cannot hold both states." The
- * four losers are one instanced batch; the winner is a single mesh that can be
+ * losers are one instanced batch; the winner is a single mesh that can be
  * emissive. Two draw calls, and the alternative is five.
- *
- * ## The winner steps forward rather than brightening alone
- *
- * The lock moves the winning word toward the viewer and brightens its bar,
- * because a thing that wins should do something rather than merely become more
- * of what it was.
- *
- * This used to carry a note saying text on this stage could never fade, because
- * troika's opacity needs a `sync()`. That claim was never measured and it is
- * false - see `formPresence.ts` - and the specimen now fades this whole station
- * in and out on every change-over. The step forward stays because it is the
- * better gesture for a lock, not because a fade was unavailable.
  */
-export function Guessed({ lit, local }: { lit: number; local: number }) {
+export function Guessed({ cue }: { cue: LiveCue }) {
   const losers = useRef<InstancedMesh>(null)
   const winnerBar = useRef<Mesh>(null)
   const winnerWord = useRef<Group>(null)
   const spark = useRef<Mesh>(null)
+  const railMaterial = useRef<{ emissiveIntensity: number } | null>(null)
 
   const machine = useMemo(
     () => assertDrawable(teachingMachineGeometry(0.38), 'the guessing machine'),
-    [],
-  )
-
-  /* The rail the prompt words ride in on, and the fan's spine. */
-  const rails = useMemo(
-    () =>
-      assertDrawable(
-        mergeProp([
-          { geometry: trace(RAIL, 0.01, 12) },
-          ...CANDIDATES.map((_, i) => ({
-            geometry: trace(
-              [
-                [0.06, MACHINE_Y + 0.34, 0.1],
-                [FAN_X, candidateY(i), 0.1],
-              ],
-              0.007,
-              8,
-            ),
-          })),
-        ]),
-        'the guess rails',
-      ),
     [],
   )
 
@@ -78,24 +68,52 @@ export function Guessed({ lit, local }: { lit: number; local: number }) {
   const winner = sorted[0]
   const rest = useMemo(() => sorted.slice(1), [sorted])
 
+  /*
+    The feed from the machine to the blank, and the rule under the blank itself.
+
+    One merged geometry, because neither moves - what moves is the word that lands
+    on it. Both are `trace`, which `geometry.ts` calls "a circuit trace", and a
+    line carrying a word out of a machine is exactly that.
+  */
+  const rails = useMemo(
+    () =>
+      assertDrawable(
+        mergeProp([{ geometry: trace(FEED, 0.01, 16) }, { geometry: trace(RULE, 0.012, 8) }]),
+        'the guess rails',
+      ),
+    [],
+  )
+
   useFrame(() => {
+    /* Read live, every frame. See `LiveCue` for why these are not props. */
+    const { lit, local } = cue
+
     /*
-      The cycle, as one clock: the prompt arrives, the fan fills, the winner
-      locks, everything clears. Derived from `local` rather than tracked in a ref
-      so a seeked round is never caught between two of its own steps.
+      One clock, four moments: the candidates fill, one is chosen, it travels, and
+      it sits in the sentence. Derived from `local` rather than tracked in a ref so
+      a seeked round is never caught between two of its own steps.
     */
     const t = loop(local, CYCLE)
-    const filling = Math.min(1, Math.max(0, (t - FAN_AT) / (LOCK_AT - FAN_AT)))
-    const locked = t > LOCK_AT ? Math.min(1, (t - LOCK_AT) / 0.12) : 0
+    const filling = clamp01((t - FILL_AT) / (CHOOSE_AT - FILL_AT))
+    const chosen = clamp01((t - CHOOSE_AT) / (FLY_AT - CHOOSE_AT))
+    const raw = clamp01((t - FLY_AT) / (LANDED_AT - FLY_AT))
+    /* Eased, so the word accelerates out of the list and settles into the slot. */
+    const flight = raw * raw * (3 - 2 * raw)
 
     if (losers.current) {
       for (let i = 0; i < rest.length; i++) {
-        const height = rest[i].weight * BAR_SCALE * filling
-        scratch.position.set(FAN_X - BAR_LENGTH / 2, candidateY(i + 1), 0.1)
+        /*
+          Scaled on X because the bar lies along it: a weight is a LENGTH here,
+          which reads at this size where a height would not.
+
+          The losers keep their bars after the choice is made. A list that emptied
+          would say the machine had one option; a list that stays says it had five
+          and preferred one.
+        */
+        const length = rest[i].weight * BAR_SCALE * filling
+        scratch.position.set(BAR_X - length / 2, candidateY(i + 1), 0.1)
         scratch.quaternion.identity()
-        // Scaled on X because the bar lies along it: a weight is a LENGTH here,
-        // which reads at this size where a height would not.
-        scratch.scale.set(Math.max(0.001, height), 1, 1)
+        scratch.scale.set(Math.max(0.001, length), 1, 1)
         scratch.matrix.compose(scratch.position, scratch.quaternion, scratch.scale)
         losers.current.setMatrixAt(i, scratch.matrix)
       }
@@ -103,65 +121,91 @@ export function Guessed({ lit, local }: { lit: number; local: number }) {
     }
 
     if (winnerBar.current) {
-      const height = winner.weight * BAR_SCALE * filling
-      winnerBar.current.scale.set(Math.max(0.001, height), 1, 1)
-      winnerBar.current.position.set(FAN_X - BAR_LENGTH / 2, candidateY(0), 0.1)
+      const length = winner.weight * BAR_SCALE * filling
+      winnerBar.current.scale.set(Math.max(0.001, length), 1, 1)
+      winnerBar.current.position.set(BAR_X - length / 2, candidateY(0), 0.1)
+      winnerBar.current.visible = lit > 0.05
     }
 
-    /* The lock: the winning word steps toward the viewer, which is -Z here. */
     if (winnerWord.current) {
-      winnerWord.current.position.set(FAN_X + 0.34, candidateY(0), 0.1 - locked * 0.14)
-      winnerWord.current.visible = lit > 0.05
+      /*
+        **The flight, and it is the whole form.**
+
+        From its own row in the list to the blank at the end of the sentence. It
+        lifts toward the viewer on the way - `-Z` here - so it passes in FRONT of
+        the list rather than through it, which is what stops the journey reading as
+        a word being deleted in one place and drawn in another.
+      */
+      const z = 0.1 - Math.sin(flight * Math.PI) * 0.16
+      winnerWord.current.position.set(
+        WORD_X + (BLANK_X - WORD_X) * flight,
+        candidateY(0) + (PROMPT_Y - candidateY(0)) * flight,
+        z,
+      )
+      winnerWord.current.visible = lit > 0.05 && filling > 0.02
     }
 
     if (spark.current) {
-      spark.current.visible = lit > 0.05 && locked > 0 && locked < 1
-      const s = locked * (1 - locked) * 4
-      spark.current.scale.setScalar(0.02 + s * 0.14)
-      spark.current.position.set(FAN_X + 0.34, candidateY(0), -0.06)
+      /* The moment of choosing, before the word moves. A flash on its own row. */
+      spark.current.visible = lit > 0.05 && chosen > 0 && chosen < 1
+      const s = chosen * (1 - chosen) * 4
+      spark.current.scale.setScalar(0.02 + s * 0.16)
+      spark.current.position.set(WORD_X, candidateY(0), -0.04)
     }
+
+    if (railMaterial.current) railMaterial.current.emissiveIntensity = stationGlow(lit)
   })
 
   return (
     <group>
-      <mesh geometry={machine} position={[-0.52, MACHINE_Y, 0]} castShadow receiveShadow>
+      <mesh geometry={machine} position={[MACHINE_X, 0, 0]} castShadow receiveShadow>
         <meshPhysicalMaterial {...shell(palette.shell)} />
       </mesh>
 
       <mesh geometry={rails}>
-        <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
+        <meshPhysicalMaterial
+          ref={railMaterial as never}
+          {...emissive(palette.visor, GLOW.source)}
+        />
       </mesh>
 
-      {/* The prompt: the short run-up the machine gets. */}
+      {/*
+        The prompt, laid out with `promptX` so it reads left to right ON SCREEN.
+        Written the obvious way it renders backwards; see the header.
+      */}
       {PROMPT.map((word, i) => (
-        <group key={word} position={[-0.86 + i * 0.32, MACHINE_Y + 0.62, 0.1]}>
-          <StationLabel text={word} size={0.052} colour="#dce7f8" />
+        <group key={word} position={[promptX(i), PROMPT_Y, 0.1]}>
+          <StationLabel text={word} size={PROMPT_SIZE} colour="#dce7f8" />
         </group>
       ))}
 
-      {/* The four that lost. One batch; see the header for why the winner is not. */}
-      <instancedMesh ref={losers} args={[undefined, undefined, Math.max(1, rest.length)]} frustumCulled={false}>
-        <boxGeometry args={[BAR_LENGTH, 0.035, 0.02]} />
+      {/* The losers' bars. One batch; see the header for why the winner is not. */}
+      <instancedMesh
+        ref={losers}
+        args={[undefined, undefined, Math.max(1, rest.length)]}
+        frustumCulled={false}
+      >
+        <boxGeometry args={[1, 0.035, 0.02]} />
         <meshPhysicalMaterial {...mattePlastic(palette.bandFrame)} />
       </instancedMesh>
       {rest.map((c, i) => (
-        <group key={c.word} position={[FAN_X + 0.34, candidateY(i + 1), 0.1]}>
-          <StationLabel text={c.word} size={0.042} colour="#8ea4c6" />
+        <group key={c.word} position={[WORD_X, candidateY(i + 1), 0.1]}>
+          <StationLabel text={c.word} size={CANDIDATE_SIZE} colour="#8ea4c6" />
         </group>
       ))}
 
       <mesh ref={winnerBar}>
-        <boxGeometry args={[BAR_LENGTH, 0.045, 0.024]} />
+        <boxGeometry args={[1, 0.045, 0.024]} />
         <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
       </mesh>
       <group ref={winnerWord}>
-        <StationLabel text={winner.word} size={0.048} colour="#e8f0ff" />
+        <StationLabel text={winner.word} size={PROMPT_SIZE} colour="#e8f0ff" />
       </group>
 
       {/*
-        The lock's spark. `emissiveRaw` rather than `emissive`, deliberately below
-        the normalisation the bloom budget uses - this is a flash on a diagram,
-        and `00-art-bible.md` keeps tier A for ally blue and reward gold.
+        The choice's spark. `emissiveRaw` rather than `emissive`, deliberately
+        below the normalisation the bloom budget uses - this is a flash on a
+        diagram, and `00-art-bible.md` keeps tier A for ally blue and reward gold.
       */}
       <mesh ref={spark} visible={false}>
         <sphereGeometry args={[1, 8, 6]} />
@@ -172,6 +216,8 @@ export function Guessed({ lit, local }: { lit: number; local: number }) {
 }
 
 /* ------------------------------------------------------------------------- */
+
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v))
 
 /** Where a candidate sits, top to bottom in weight order. */
 function candidateY(rank: number): number {
@@ -185,53 +231,55 @@ const scratch = {
   scale: new Vector3(),
 }
 
-const MACHINE_Y = 0.36
-const RAIL: [number, number, number][] = [
-  [-0.86, MACHINE_Y + 0.62, 0.1],
-  [-0.52, MACHINE_Y + 0.5, 0.1],
-  [0.06, MACHINE_Y + 0.34, 0.1],
+/** The sentence, along the top. `promptX` and `BLANK_X` live in `stage.ts`. */
+const PROMPT_Y = 0.96
+const PROMPT_SIZE = 0.062
+
+/** The rule under the blank. Present before the word is, because it is a waiting slot. */
+const RULE: [number, number, number][] = [
+  [BLANK_X + 0.17, PROMPT_Y - 0.075, 0.1],
+  [BLANK_X - 0.17, PROMPT_Y - 0.075, 0.1],
 ]
 
 /*
-  The label sizes came down with the specimen's arrival, for the reason `Fed.tsx`
-  spells out at `STREAM_LABEL_SIZE`: sized for a station at 3% of the frame, they
-  drew at the caption's own size once one form owned the frame. The RATIO between
-  prompt, candidate and winner is unchanged, which is what carries the hierarchy.
+  The machine sits at screen RIGHT, past the end of the sentence, and feeds the
+  blank from below. Reading order does the work: the eye takes the prompt left to
+  right, arrives at the empty slot, and the feed line points back at what is about
+  to fill it.
 */
-const FAN_X = 0.02
-const FAN_TOP = 1.02
-const FAN_PITCH = 0.16
-const BAR_LENGTH = 0.34
-/** A weight of 1 would draw a bar this many times its own length. */
-const BAR_SCALE = 1
+const MACHINE_X = -0.72
+const FEED: [number, number, number][] = [
+  [MACHINE_X, 0.62, 0.1],
+  [MACHINE_X + 0.18, 0.85, 0.1],
+  [BLANK_X - 0.2, PROMPT_Y - 0.075, 0.1],
+]
+
+/** The candidate list, under the sentence it is competing to finish. */
+const FAN_TOP = 0.6
+const FAN_PITCH = 0.14
+const WORD_X = 0.86
+const BAR_X = 0.56
+const CANDIDATE_SIZE = 0.042
+/** A weight of 1 would draw a bar this many units long. */
+const BAR_SCALE = 0.5
 
 /**
- * The cycle, in seconds, and where its two moments fall inside it.
+ * The cycle, and where its four moments fall inside it.
  *
- * ## 5.2 would have meant this station never resolved, ever
+ * A form holds the stage for `FORM_DWELL` and is fully readable for
+ * `FORM_WINDOW`, 4.55 s, so fill-choose-fly-land has to complete inside that or
+ * the player watches a list build to nothing.
  *
- * The lock is at `LOCK_AT` 0.62 of the cycle, so at 5.2 it landed at **3.22 s**.
- * A form now holds the stage for `FORM_DWELL` 2.5 and is fully readable for
- * `FORM_WINDOW` 2.05. The player would have watched the fan fill and fade away
- * unresolved, three times a round, every round - and the lock is not decoration,
- * it is the entire argument. The paragraph's claim is not that the machine picks
- * a word, it is that it picks uncannily WELL, and the picture of that is one
- * candidate winning.
+ * **That has happened here before.** At a 5.2 s cycle the winner locked at 3.22 s
+ * against a 2.05 s window, so the fan filled and faded away unresolved on every
+ * appearance, and nothing reported it. `specimen.test.ts` now asserts `argueAt`
+ * against the window so it cannot happen quietly again.
  *
- * Nothing would have thrown, nothing would have logged, and a screenshot taken
- * at any moment would have shown a station that looked like it was still
- * thinking.
- *
- * At 2.2 the fan fills from 0.48 to 1.36 s, locks at 1.36, and holds the lock
- * for the remaining 0.84 - so the resolution is seen and then dwelt on.
+ * At 4.2 the word is in the sentence at 3.0 s with 1.2 s left to read it, which
+ * is the moment the form exists for and therefore the one that gets the hold.
  */
-const CYCLE = 2.2
-const FAN_AT = 0.22
-const LOCK_AT = 0.62
-
-/*
-  The bars are plain boxes rather than `slab`, and that is the one place on this
-  stage the kit is deliberately not used. A bar chart's whole job is that its
-  lengths are comparable, and a bevel that eats 12% of a short bar and 2% of a
-  long one is a chart that misreports its own numbers.
-*/
+const CYCLE = 4.2
+const FILL_AT = 0.35
+const CHOOSE_AT = 1.6
+const FLY_AT = 2.0
+const LANDED_AT = 3.0

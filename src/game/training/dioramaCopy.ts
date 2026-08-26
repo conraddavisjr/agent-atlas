@@ -41,7 +41,25 @@ export const CAPTION_LIMIT = 42
  * look up, and the one trick underneath. `cards.test.ts` already pins that the
  * paragraph says all three.
  */
-export const FED_STREAMS: readonly string[] = [
+/**
+ * What is written on the books going into the hopper.
+ *
+ * These used to be `FED_STREAMS`, riding five glowing traces that have since been
+ * deleted - see `Fed.tsx`. They are titles on a conveyor now, which is the same
+ * claim drawn with one illustration instead of two.
+ *
+ * Five, and the number is a composition constraint rather than a taste. Each one
+ * needs a length of belt wide enough that its title clears its neighbour's, and
+ * the belt's length sets this form's aspect: at six the exhibit came out 2.57
+ * wide by 0.72 tall, which fits the frame by being drawn small. Five is what buys
+ * back the height.
+ *
+ * They are deliberately unalike - a science, a formal discipline, a humanity, a
+ * craft and a record - because the claim is BREADTH. A list of five neighbouring
+ * fields reads as a curriculum; five that have nothing to do with each other
+ * reads as "very nearly everything ever written".
+ */
+export const BOOK_SUBJECTS: readonly string[] = [
   'SCIENCE',
   'MATHEMATICS',
   'PHILOSOPHY',

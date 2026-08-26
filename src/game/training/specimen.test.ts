@@ -27,7 +27,7 @@ const at = (phase: Phase, elapsed = 0, over: Partial<TrainingState> = {}): Train
 })
 
 /** Every 20 ms over four full passes, which is twelve appearances of each form. */
-const SWEEP = Array.from({ length: 1500 }, (_, i) => i * 0.02)
+const SWEEP = Array.from({ length: 3000 }, (_, i) => i * 0.02)
 
 describe('the change-over shows one form at a time', () => {
   it('never draws two forms at once', () => {
@@ -120,7 +120,13 @@ describe('the cadence leaves room to read', () => {
       past ten seconds and the reader has finished the paragraph and is waiting on
       a diagram. A 300-character card is about 17 s of reading at 200 wpm.
     */
-    expect(specimenRunTime()).toBeLessThan(10)
+    /*
+      The ceiling moved with the dwell: it was 10 s against three 2.5 s frames and
+      is 18 against three 5 s ones. What it is protecting is unchanged - a pass
+      that outlasts the paragraph beside it leaves the reader waiting on a picture
+      - and a 300-character card is about 17 s of reading at 200 wpm.
+    */
+    expect(specimenRunTime()).toBeLessThan(18)
   })
 
   it('gives every form time to finish its own argument', () => {
