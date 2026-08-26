@@ -2,7 +2,7 @@ import {
   CAMERA_BACK,
   CAMERA_UP,
   CUBE_AT,
-  DIORAMA_AT,
+  SPECIMEN_AT,
   EYE,
   FIRST_PERSON_FOV,
   INSTRUCTOR_HOME,
@@ -89,24 +89,31 @@ export function cameraPose(phase: Phase): CameraPose {
     case 'reading':
     case 'swapping':
       /*
-        BACK for the diorama, because the subject changed shape.
+        FORWARD for the specimen, and the previous note is why the question keeps
+        coming back: this pose is re-derived every time the subject changes shape.
+        It was framed for a 2.1 m cube, then pulled back for a 6.75 m band of
+        three stations, and the subject is now a single object 3.7 m wide.
 
-        The cube was a 2.1 m square and this pose was framed for it: lifted a
-        little and pulled back half a metre. The diorama is a 6.5 m band, three
-        times as wide and shorter, so the same pose crops its outer two stations
-        on any window narrower than 16:9.
+        `SPECIMEN_BACK` is 0, so the reading camera stands at the round's own rest
+        distance - the same place the wizard's speech pose stands. That is worth
+        more than the framing: `speech2`, `instructorOut`, `dioramaIn` and
+        `reading` now share one camera Z, so the whole teaching act has no camera
+        travel in it at all, only a lift and a re-aim.
 
-        `DIORAMA_BACK` is derived from that rather than chosen - see
-        `dioramaSafeWidth`, which asks how much of this stage survives a SQUARE
-        window, and `diorama.test.ts`, which fails if a station or a label falls
-        outside it. Aiming a little above the anchor keeps the player's own head
-        below the stage rather than overlapping it, so the two read as separate
-        objects at separate depths.
+        It is also what rules out one of the headline's possible exits. A camera
+        that does not travel cannot leave a sign behind, so the sign has to move
+        itself - see `headlineLift`.
+
+        Note what pulling in does NOT buy. Apparent size is a fraction of the
+        frame, and the constraint that binds the specimen is the band between the
+        HUD reading card and the robot's head, which is a fraction and therefore
+        invariant under dollying. The specimen is big because it is drawn big; the
+        camera is here for the depth separation and the calm.
       */
       return overShoulder(
-        [DIORAMA_AT[0], DIORAMA_AT[1] + DIORAMA_AIM_LIFT, DIORAMA_AT[2]],
-        DIORAMA_UP,
-        DIORAMA_BACK,
+        [SPECIMEN_AT[0], SPECIMEN_AT[1] + SPECIMEN_AIM_LIFT, SPECIMEN_AT[2]],
+        SPECIMEN_UP,
+        SPECIMEN_BACK,
       )
 
     case 'cubeIn':
@@ -157,7 +164,7 @@ export function cameraPose(phase: Phase): CameraPose {
 }
 
 /**
- * How the diorama's pose differs from the cube's, in metres.
+ * How the specimen's pose differs from the cube's, in metres.
  *
  * ## Derived, and the first attempt was derived from the wrong thing
  *
@@ -177,9 +184,29 @@ export function cameraPose(phase: Phase): CameraPose {
  * window - and this comment holds the floor, which is a judgement rather than an
  * assertion.
  */
-export const DIORAMA_BACK = 0.9
-export const DIORAMA_UP = 0.55
-export const DIORAMA_AIM_LIFT = 0.35
+export const SPECIMEN_BACK = 0
+export const SPECIMEN_UP = 0.55
+/**
+ * How far above the specimen's base the camera aims, in metres.
+ *
+ * This is the number that sets the PITCH, and the pitch is chosen to put the top
+ * of the robot's head at about 81% of the frame - low enough to leave the whole
+ * band above it for the specimen and its nameplate, high enough that the head is
+ * still in shot, which is the round's one explicit composition note.
+ *
+ * From `(0, 3.25, -5.0)` the crown at roughly y 1.85 sits `atan(1.40 / 5.00)` =
+ * 15.6 degrees below horizontal. Wanting it at 81% of a 40 degree frame is
+ * `atan(tan(20 deg) * 31/50)` = 12.8 degrees below the axis, so the axis has to
+ * be 2.8 degrees below horizontal, and at the specimen's 8.0 m range that is an
+ * aim height of 2.86 - which is `SPECIMEN_AT[1]` plus 0.81.
+ *
+ * **The crown height is inferred, not measured.** `stage.ts` gives the eye at
+ * 1.62 and says the head "sits around 1.6", which is a centre. The composition
+ * survives the uncertainty - at 1.75 the crown lands at 84%, at 1.95 at 79%, and
+ * the nameplate's lowest line is clear of both - but `__dev.framing()` answers it
+ * exactly and should be run before anyone trusts this paragraph.
+ */
+export const SPECIMEN_AIM_LIFT = 0.81
 
 /** Smoothing weight for one frame. `FollowCamera`'s formula, not a second one. */
 export function cameraBlend(damping: number, dt: number): number {

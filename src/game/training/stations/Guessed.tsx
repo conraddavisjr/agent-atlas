@@ -29,12 +29,17 @@ import { StationLabel } from './StationLabel'
  * four losers are one instanced batch; the winner is a single mesh that can be
  * emissive. Two draw calls, and the alternative is five.
  *
- * ## Nothing fades
+ * ## The winner steps forward rather than brightening alone
  *
- * The winner LIFTS toward the viewer and its bar brightens. Text on this stage
- * never fades, for the reason `Headline.tsx` gives: troika's opacity needs a
- * `sync()` to take effect, so a fade is a text re-sync every frame for its
- * length, where moving a group is a matrix write.
+ * The lock moves the winning word toward the viewer and brightens its bar,
+ * because a thing that wins should do something rather than merely become more
+ * of what it was.
+ *
+ * This used to carry a note saying text on this stage could never fade, because
+ * troika's opacity needs a `sync()`. That claim was never measured and it is
+ * false - see `formPresence.ts` - and the specimen now fades this whole station
+ * in and out on every change-over. The step forward stays because it is the
+ * better gesture for a lock, not because a fade was unavailable.
  */
 export function Guessed({ lit, local }: { lit: number; local: number }) {
   const losers = useRef<InstancedMesh>(null)
@@ -130,7 +135,7 @@ export function Guessed({ lit, local }: { lit: number; local: number }) {
       {/* The prompt: the short run-up the machine gets. */}
       {PROMPT.map((word, i) => (
         <group key={word} position={[-0.86 + i * 0.32, MACHINE_Y + 0.62, 0.1]}>
-          <StationLabel text={word} size={0.07} colour="#dce7f8" />
+          <StationLabel text={word} size={0.052} colour="#dce7f8" />
         </group>
       ))}
 
@@ -141,7 +146,7 @@ export function Guessed({ lit, local }: { lit: number; local: number }) {
       </instancedMesh>
       {rest.map((c, i) => (
         <group key={c.word} position={[FAN_X + 0.34, candidateY(i + 1), 0.1]}>
-          <StationLabel text={c.word} size={0.055} colour="#8ea4c6" />
+          <StationLabel text={c.word} size={0.042} colour="#8ea4c6" />
         </group>
       ))}
 
@@ -150,7 +155,7 @@ export function Guessed({ lit, local }: { lit: number; local: number }) {
         <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
       </mesh>
       <group ref={winnerWord}>
-        <StationLabel text={winner.word} size={0.062} colour="#e8f0ff" />
+        <StationLabel text={winner.word} size={0.048} colour="#e8f0ff" />
       </group>
 
       {/*
@@ -187,6 +192,12 @@ const RAIL: [number, number, number][] = [
   [0.06, MACHINE_Y + 0.34, 0.1],
 ]
 
+/*
+  The label sizes came down with the specimen's arrival, for the reason `Fed.tsx`
+  spells out at `STREAM_LABEL_SIZE`: sized for a station at 3% of the frame, they
+  drew at the caption's own size once one form owned the frame. The RATIO between
+  prompt, candidate and winner is unchanged, which is what carries the hierarchy.
+*/
 const FAN_X = 0.02
 const FAN_TOP = 1.02
 const FAN_PITCH = 0.16
@@ -194,8 +205,27 @@ const BAR_LENGTH = 0.34
 /** A weight of 1 would draw a bar this many times its own length. */
 const BAR_SCALE = 1
 
-/** The cycle, in seconds, and where its two moments fall inside it. */
-const CYCLE = 5.2
+/**
+ * The cycle, in seconds, and where its two moments fall inside it.
+ *
+ * ## 5.2 would have meant this station never resolved, ever
+ *
+ * The lock is at `LOCK_AT` 0.62 of the cycle, so at 5.2 it landed at **3.22 s**.
+ * A form now holds the stage for `FORM_DWELL` 2.5 and is fully readable for
+ * `FORM_WINDOW` 2.05. The player would have watched the fan fill and fade away
+ * unresolved, three times a round, every round - and the lock is not decoration,
+ * it is the entire argument. The paragraph's claim is not that the machine picks
+ * a word, it is that it picks uncannily WELL, and the picture of that is one
+ * candidate winning.
+ *
+ * Nothing would have thrown, nothing would have logged, and a screenshot taken
+ * at any moment would have shown a station that looked like it was still
+ * thinking.
+ *
+ * At 2.2 the fan fills from 0.48 to 1.36 s, locks at 1.36, and holds the lock
+ * for the remaining 0.84 - so the resolution is seen and then dwelt on.
+ */
+const CYCLE = 2.2
 const FAN_AT = 0.22
 const LOCK_AT = 0.62
 

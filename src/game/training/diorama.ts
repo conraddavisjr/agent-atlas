@@ -1,104 +1,33 @@
 import { GLOW } from '@/art/materials'
 import {
-  DIORAMA_AT,
   HEADLINE_AT,
-  HEADLINE_QUIZ_Y,
-  STATION_HEIGHT,
-  STATION_PITCH,
-  stationX,
+  HEADLINE_AWAY_Y,
 } from './stage'
 import { DURATIONS, type TrainingState } from './trainingMachine'
 
 /**
- * The diorama's arithmetic: when each station lights, and on what clock it runs.
+ * What survives of the diorama: the shared helpers its forms still use.
  *
- * ## The one seam this file exists to protect
+ * ## What left, and where it went
  *
- * There are two reasonable ways to pace three illustrated stations. They can play
- * in SEQUENCE, lighting one after another so the stage reads like a sentence
- * being spoken; or they can play in CHORUS, all three animating for the whole
- * card so the player looks wherever they like. Which is better is a question
- * about an audience, not about code, and it is exactly the kind of question that
- * gets answered after somebody has watched it.
+ * The pacing seam - `stationCue`, `DIORAMA_MODE`, `STATION_STAGGER`,
+ * `STATION_FADE`, `dioramaRunTime` - is gone to `specimen.ts`. It existed
+ * because "three illustrated stations" has two reasonable pacings, sequence and
+ * chorus, and which one is better is a question about an audience rather than
+ * about code. One specimen has one pacing, so the seam protects nothing and a
+ * seam that protects nothing is a place for two files to disagree.
  *
- * So the choice lives in ONE function body. `stationCue` is the only thing in the
- * project that knows about the sequence at all: every station component reads a
- * `lit` and a `local` and knows nothing else. Switching modes is editing
- * `DIORAMA_MODE` - no component is touched, no phase is added, and
- * `diorama.test.ts` holds the properties that must be true of both.
+ * `swapDip` and `SWAP_DEPTH` left with it. They sank the whole stage 1.9 m on a
+ * card change, "below the plinth, so the swap is not seen", which worked while
+ * there was a plinth to sink behind. There is not, and 1.9 m of sink leaves a
+ * 2.46 m object fully in frame and apparently standing on the floor. The card
+ * change now uses the same fade every other change-over uses.
  *
- * ## Why the components get a clock rather than a phase
- *
- * A station handed "you are station 2 and we are 4.1 seconds into the card" would
- * have to know the stagger to work out its own progress, and three copies of that
- * arithmetic is three chances to disagree with the fourth in this file. Handed a
- * local clock that starts at zero when it lights, a station animates from t=0 and
- * is correct under either mode, at any stagger, forever.
+ * What is left is the arithmetic the forms themselves call: a glow ramp, a lift,
+ * a looping ramp, a stepped walk, and a point along a polyline. Those are used
+ * identically by one specimen and by three stations, and none of them knows
+ * anything about pacing.
  */
-
-/** How many stations a card's diorama has. Three, which is the shape of both cards. */
-export const STATION_COUNT = 3
-
-/**
- * Which pacing ships.
- *
- * `'sequence'` today. Flip this one token for chorus - see the header, and see
- * `stationCue`, which is the only reader.
- */
-export const DIORAMA_MODE: 'sequence' | 'chorus' = 'sequence'
-
-/**
- * How long after the card opens each station lights, in seconds.
- *
- * 2.6 puts the third at 5.2 and fully lit by 5.75, which is inside the time it
- * takes to read the paragraph the diorama is illustrating - the two should land
- * together rather than the picture waiting on the words or the reverse.
- */
-export const STATION_STAGGER = 2.6
-
-/** How long a station takes to come up, in seconds. */
-export const STATION_FADE = 0.55
-
-/**
- * How dim an unlit station is, as a fraction of a lit one.
- *
- * Not zero. A station that goes fully dark reads as missing rather than as
- * waiting, and the player then discovers a third of the stage arriving late as a
- * surprise instead of as an order. A quarter-lit station is clearly present and
- * clearly not yet the point.
- */
-export const DIM_FLOOR = 0.28
-
-export type StationCue = {
-  /** 0 dim, 1 lit. Components map this through `stationGlow` and `stationLift`. */
-  lit: number
-  /** Seconds since this station lit, and 0 before. Its animation's own clock. */
-  local: number
-}
-
-/**
- * When a station is lit and how far into its own animation it is.
- *
- * `local` is clamped at zero rather than running negative, so a station that has
- * not lit yet sits on the first frame of its loop rather than somewhere in the
- * middle of it. The alternative - letting every station share the card's clock -
- * means the third one lights half way through its own gesture, which reads as
- * having missed something.
- */
-export function stationCue(index: number, elapsed: number): StationCue {
-  if (DIORAMA_MODE === 'chorus') return { lit: 1, local: Math.max(0, elapsed) }
-
-  const start = index * STATION_STAGGER
-  const since = elapsed - start
-  if (since <= 0) return { lit: 0, local: 0 }
-  return { lit: Math.min(1, since / STATION_FADE), local: since }
-}
-
-/** When the last station has finished coming up, in seconds. The card's own beat. */
-export function dioramaRunTime(): number {
-  if (DIORAMA_MODE === 'chorus') return STATION_FADE
-  return (STATION_COUNT - 1) * STATION_STAGGER + STATION_FADE
-}
 
 /**
  * A station's emissive strength, from its cue.
@@ -115,14 +44,22 @@ export function stationGlow(lit: number): number {
 }
 
 /**
- * How far a station rises when it lights, in metres.
+ * How far the lit key word stands above its two dim neighbours, in metres.
  *
- * The lift is doing a job that opacity would normally do, and it is doing it
- * because opacity cannot. `Headline.tsx` records why: troika's `fillOpacity`
- * needs a `sync()` to take effect, so fading a label is a text re-sync every
- * frame for the length of the fade, where "moving a `<group>` is a matrix write".
- * The same argument applies to every label on this stage, so nothing here fades -
- * it rises and it brightens.
+ * ## It is no longer standing in for a fade, and the difference matters
+ *
+ * This used to carry a note saying that opacity was unavailable on this stage,
+ * because troika's `fillOpacity` needs a `sync()` and a fade would therefore be
+ * a text re-layout every frame. **That was never measured and it is false** -
+ * see `StationLabel.tsx`, which now carries the evidence. Opacity is a uniform
+ * write, the specimen fades, and the labels fade with it.
+ *
+ * The lift survives on its own merits, which are better than the ones it had.
+ * All three key words are on screen at once and exactly one of them is the
+ * point; a colour change alone says which, and a colour change plus 9 cm of
+ * elevation says it at a glance without either being loud. At the reading
+ * camera's 7.4 m that is 0.7 degrees, about 14 px on a 900 px window - readable
+ * as a difference, too small to read as a jump.
  */
 export function stationLift(lit: number): number {
   return Math.min(1, Math.max(0, lit)) * STATION_RISE
@@ -145,57 +82,6 @@ export function loop(local: number, period: number, offset = 0): number {
   const t = local / period + offset
   return t - Math.floor(t)
 }
-
-/** Where a station stands, in world space. */
-export function stationAt(index: number): [number, number, number] {
-  return [stationX(index), DIORAMA_AT[1], DIORAMA_AT[2]]
-}
-
-/**
- * How large a station's contents are drawn, relative to how they are authored.
- *
- * ## Authored at a metre, shown at three quarters
- *
- * Each station is modelled at roughly its own slot's width, which is the natural
- * way to build one and the wrong way to show three. Side by side at full size
- * they touch, and touching is worse than crowded: the belt of station one runs
- * into the shelf of station two and the eye reads a single cluttered machine shop
- * instead of three separate claims.
- *
- * A scale rather than smaller authoring, because the numbers inside a station are
- * about each other - a belt against a hopper, a bar against its neighbour - and
- * re-deriving all of them against a gutter would be doing the same arithmetic
- * twice. `diorama.test.ts` checks the product against the box.
- */
-export const STATION_SCALE = 0.74
-
-/**
- * The box a station's readable content has to stay inside.
- *
- * Half-extents about the station's own centre. The width is half the pitch minus
- * a gutter, so two neighbours cannot touch; the height is the stage's own.
- */
-export const STATION_BOX = {
-  halfWidth: STATION_PITCH / 2 - 0.12,
-  halfHeight: STATION_HEIGHT / 2,
-} as const
-
-/**
- * How far the stage sinks during a change-over, in metres.
- *
- * Down and back up across the beat, so it meets both ends at exactly zero -
- * `sin(t * PI)` is the same out-and-back curve `plankSpin` uses for a plank that
- * has to come home square, and for the same reason: a stage left a few
- * centimetres low sits wrong for the rest of the round and every subsequent swap
- * compounds it.
- */
-export function swapDip(elapsed: number, duration = 0.7): number {
-  const t = Math.min(1, Math.max(0, elapsed / duration))
-  return Math.sin(t * Math.PI) * SWAP_DEPTH
-}
-
-/** How deep the change-over goes. Below the plinth, so the swap is not seen. */
-export const SWAP_DEPTH = 1.9
 
 /**
  * A stepped walk along a path: move, stop, move, stop.
@@ -241,37 +127,72 @@ export function pointAlong(
 }
 
 /**
- * Where the headline stands, given the round's state.
+ * Where the headline stands, given the round's state, and whether it is drawn.
  *
- * ## It has three heights now, and it used to have two
+ * ## Two implementations used to disagree, and only one of them ran
  *
- * The sign was tied to the cube's withdrawal: low while the cube did the reading,
- * high once the cube left for the quiz. The cube stopped doing the reading, so
- * that rule left it low for the whole of the teaching - and at the diorama's own
- * camera the words run straight through the stations, which is the same collision
- * the plank labels had before the quiz pose was re-derived.
+ * This function has always argued that the sign's height must be "a function of
+ * what is on stage rather than of what one object is doing" - and then
+ * `Headline.tsx` drove the sign from `cubeRise`, which is what one object is
+ * doing, and never called this at all. Two answers to one question, one of them
+ * dead, disagreeing across six phases. The dead one had the reasoning attached,
+ * so the live one went and this is now the only implementation. `Headline.tsx`
+ * calls it.
  *
- * So it is a function of what is on stage rather than of what one object is
- * doing: down for the arrival, when it is the point of the frame; up for the
- * teaching and the question and the shooting, when something else is.
+ * ## Three heights became two, and then a disappearance
+ *
+ * The sign's job is the arrival: a player dropped into a room they did not build
+ * gets one glance that says why they are there. From the first reading card
+ * onward the HUD's scene card says the same words in DOM, in a band the specimen
+ * now needs, so the sign leaves.
+ *
+ * It leaves on `instructorOut` rather than on `dioramaIn`, and that is the whole
+ * of the design: the sign belongs to the introduction, the wizard belongs to the
+ * introduction, and they pack up together in one gesture. `dioramaIn` then keeps
+ * its own beat for the specimen's arrival instead of doing two things at once.
+ *
+ * A rise rather than a fade or a fall. A fall reads as a sign coming off its
+ * mounting, and nothing in a world of deliberately manufactured objects falls
+ * over. A cut is not available either: `cameraDirector` now holds the same
+ * camera Z from `speech2` through `reading`, so there is no camera move to hide
+ * a disappearance behind - the frame is continuous across the beat and a 12 m
+ * sign blinking out of a held shot is a jump cut.
  */
 export function headlineLift(state: TrainingState): number {
-  if (state.phase === 'arriving' || state.phase === 'instructorIn') return HEADLINE_AT[1]
-  if (state.phase === 'speech1' || state.phase === 'speech2' || state.phase === 'instructorOut') {
-    return HEADLINE_AT[1]
+  switch (state.phase) {
+    case 'arriving':
+    case 'instructorIn':
+    case 'speech1':
+    case 'speech2':
+      return HEADLINE_AT[1]
+    case 'instructorOut': {
+      const t = Math.min(1, state.elapsed / (DURATIONS.instructorOut ?? 1.0))
+      // Eased, so it accelerates away rather than sliding at a constant rate.
+      const eased = t * t * (3 - 2 * t)
+      return HEADLINE_AT[1] + (HEADLINE_AWAY_Y - HEADLINE_AT[1]) * eased
+    }
+    default:
+      return HEADLINE_AWAY_Y
   }
-  // `dioramaIn` eases it up on the same beat the stage arrives, so the sign
-  // clears rather than jumps.
-  if (state.phase === 'dioramaIn') {
-    const t = Math.min(1, state.elapsed / (DURATIONS.dioramaIn ?? 1.1))
-    return HEADLINE_AT[1] + (HEADLINE_QUIZ_Y - HEADLINE_AT[1]) * t
-  }
-  return HEADLINE_QUIZ_Y
 }
 
-/** Whether the diorama is on stage at all, for a phase. */
-export function dioramaVisible(state: TrainingState): boolean {
-  return (
-    state.phase === 'dioramaIn' || state.phase === 'reading' || state.phase === 'swapping'
-  )
+/**
+ * Whether the headline is drawn at all.
+ *
+ * Bookkeeping rather than staging: by the time this goes false the sign has
+ * already left the frame under its own power, so nobody sees it stop being
+ * drawn. It exists so that a 12 m board with a runtime-fetched font is not
+ * sitting in the scene graph for the whole of the quiz being culled every frame.
+ */
+export function headlineVisible(state: TrainingState): boolean {
+  switch (state.phase) {
+    case 'arriving':
+    case 'instructorIn':
+    case 'speech1':
+    case 'speech2':
+    case 'instructorOut':
+      return true
+    default:
+      return false
+  }
 }

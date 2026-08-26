@@ -148,3 +148,22 @@ export const CORRECTION_STOPS: readonly string[] = [
  */
 export const CONFIDENCE_READING = '99%'
 export const CONFIDENCE_NOTE = 'sure ≠ right'
+
+/**
+ * The two cards' station copy, indexed by card.
+ *
+ * A total mapping rather than two loose constants, because the thing that goes
+ * wrong here has already gone wrong once: `TeachingStage` mapped over
+ * `CARD_0_STATIONS` unconditionally and never read the card index, so card 1's
+ * words as well as its illustration came from card 0. Two exports that a caller
+ * has to remember to switch between is how that happens; an array the caller
+ * indexes by the card it already has is how it stops.
+ *
+ * The words are now correct for both cards. **The illustrations are not** - card
+ * 1 still shows card 0's three forms - and that gap is deliberate, loud in DEV,
+ * and recorded in `TeachingStage.tsx`.
+ */
+export const CARD_STATIONS: readonly (readonly [Station, Station, Station])[] = [
+  CARD_0_STATIONS,
+  CARD_1_STATIONS,
+]

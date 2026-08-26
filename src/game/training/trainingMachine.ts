@@ -89,7 +89,21 @@ export const DURATIONS: Partial<Record<Phase, number>> = {
   arriving: 0.9,
   instructorIn: 1.3,
   speech1: 2.6,
-  speech2: 3.2,
+  /*
+    5.3, and it was 3.2, and 3.2 was shorter than the time it takes to read the
+    sentence it puts on screen.
+
+    The line is "Two short scrolls, then one question. You will answer it with an
+    arrow." - thirteen words, which at 200 wpm is about 3.9 seconds of reading.
+    The beat was 3.2. It has been showing a subtitle for four fifths of the time
+    a reader needs, since the round shipped, with no audio involved at all.
+
+    That is what "PROVISIONAL, all of them. They are paced by ear" above bought:
+    they were paced by the ear of somebody who already knew the line. 5.3 gives
+    1.4x the read time, which is the same ratio `speech1`'s 2.6 already gives its
+    own eight words.
+  */
+  speech2: 5.3,
   instructorOut: 1.0,
   dioramaIn: 1.1,
   swapping: 0.7,

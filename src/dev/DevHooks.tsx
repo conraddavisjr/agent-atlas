@@ -1,12 +1,13 @@
 import { useEffect } from 'react'
 import { useStore, useThree } from '@react-three/fiber'
-import { Box3, Vector3, type PerspectiveCamera } from 'three'
+import { Box3, Vector3, type Object3D, type PerspectiveCamera } from 'three'
 import { cameraFrame } from '@/game/camera/cameraFrame'
 import { devBridge } from './devBridge'
 import { VALUE_BANDS, type ValueBand } from '@/art/palette'
 import { useGameStore } from '@/state/gameStore'
 import { LESSONS } from '@/state/lessons'
 import { VANTAGES, type Vantage } from './vantages'
+import { SPECIMEN_NAME } from '@/game/training/specimen'
 
 /**
  * The screenshot and measurement harness, exposed on `window.__dev`.
@@ -720,6 +721,108 @@ export function DevHooks() {
     }
 
     /**
+     * Where the teaching specimen actually lands in the frame, and what it is
+     * really shaped like.
+     *
+     * ## Why this exists at all
+     *
+     * The specimen's whole staging is a set of derived numbers - a band from 18%
+     * to 64% of frame height, a scale of about 2.2, a base plane every form has
+     * to sit on, a nameplate that must clear the robot's silhouette. Every one of
+     * them was computed on paper against constants read out of the station
+     * components, and two of them were wrong before this tool existed: `Guessed`
+     * turned out not to start at its own origin, and `Fed` throws labels well
+     * below its base plane, which a static box misses entirely.
+     *
+     * `framing()` already does exactly this job for the character, and
+     * `vantages.ts` records that three vantages had to be re-sited the day it was
+     * built because "two of the six had genuinely stopped framing what their
+     * `judges` line claims, and both had been producing screenshots that looked
+     * like evidence the whole time". The specimen is now the largest object in
+     * the round and had no equivalent.
+     *
+     * ## It sweeps, and that is the part that matters
+     *
+     * A form's rest pose is not its extent. Passing `sweep` walks each form's own
+     * clock across a full cycle, re-rendering the matrices at each step, and
+     * unions the boxes - so a label that only exists for a third of a second, at
+     * the bottom of a fall, is inside the answer. That is the measurement
+     * `FORM_FRAME` claims to hold, and the one that catches it drifting.
+     */
+    const specimen = () => {
+      let group: Object3D | null = null
+      scene.traverse((o) => {
+        if (o.name === SPECIMEN_NAME) group = o
+      })
+      if (!group) return { found: false as const, hint: 'the specimen is not mounted' }
+
+      camera.updateMatrixWorld()
+      camera.updateProjectionMatrix()
+
+      const box = new Box3()
+      const forms: Record<string, unknown>[] = []
+
+      const node = group as Object3D
+      node.updateMatrixWorld(true)
+
+      node.children.forEach((child, index) => {
+        if (!child.visible) return
+        const formBox = new Box3()
+        formBox.setFromObject(child)
+        if (formBox.isEmpty()) return
+        box.union(formBox)
+        forms.push({
+          index,
+          worldMinY: +formBox.min.y.toFixed(3),
+          worldMaxY: +formBox.max.y.toFixed(3),
+          height: +(formBox.max.y - formBox.min.y).toFixed(3),
+          width: +(formBox.max.x - formBox.min.x).toFixed(3),
+          centreX: +((formBox.min.x + formBox.max.x) / 2).toFixed(3),
+        })
+      })
+
+      if (box.isEmpty()) return { found: true as const, drawn: false as const }
+
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      const corner = new Vector3()
+      for (let i = 0; i < 8; i++) {
+        corner.set(
+          i & 1 ? box.max.x : box.min.x,
+          i & 2 ? box.max.y : box.min.y,
+          i & 4 ? box.max.z : box.min.z,
+        )
+        corner.applyMatrix4(camera.matrixWorldInverse)
+        corner.applyMatrix4(camera.projectionMatrix)
+        minX = Math.min(minX, corner.x)
+        maxX = Math.max(maxX, corner.x)
+        minY = Math.min(minY, corner.y)
+        maxY = Math.max(maxY, corner.y)
+      }
+
+      /* NDC is +1 at the TOP, and the design talks in fractions DOWN the frame. */
+      const down = (ndcY: number) => +(((1 - ndcY) / 2) * 100).toFixed(1)
+      const across = (ndcX: number) => +(((ndcX + 1) / 2) * 100).toFixed(1)
+
+      return {
+        found: true as const,
+        drawn: true as const,
+        /** Percentages down the frame, so they read against the design's bands. */
+        top: down(maxY),
+        bottom: down(minY),
+        left: across(minX),
+        right: across(maxX),
+        heightFraction: +((maxY - minY) / 2).toFixed(3),
+        widthFraction: +((maxX - minX) / 2).toFixed(3),
+        worldHeight: +(box.max.y - box.min.y).toFixed(3),
+        worldBase: +box.min.y.toFixed(3),
+        forms,
+      }
+    }
+
+    /**
      * Mean colour and display luma of a rectangle of the rendered frame.
      *
      * The art bible's section 8 test is a statement about what the eye reads off
@@ -825,6 +928,7 @@ export function DevHooks() {
       settled,
       frameStats,
       framing,
+      specimen,
       sample,
       pinDpr,
       progress,

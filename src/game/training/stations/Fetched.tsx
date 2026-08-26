@@ -148,5 +148,20 @@ const SLOW_PATH: [number, number, number][] = [
   [0.44, 0.6, 0.12],
 ]
 
-const FAST_PERIOD = 1.9
-const SLOW_PERIOD = 5.6
+/**
+ * The two routes' periods, retimed for the 2.05 s window a form now gets.
+ *
+ * At 5.6 the stepped route never completed a single crawl inside a dwell, so the
+ * station's whole point - that one way is a grab and the other is a procedure -
+ * was only ever half shown.
+ *
+ * 1.9 rather than 2.2, because this is the one form whose argument IS its full
+ * period: `steppedAlong` completes at the end of the loop, so the route arriving
+ * and the cycle ending are the same instant. At 2.2 it landed 0.15 s outside the
+ * readable window and the crawl faded out one step short of its shelf.
+ *
+ * The RATIO is what the station actually argues, and it is preserved: 2.44 to 1
+ * against the old 2.95 to 1. Still unmistakably slower, and now visible.
+ */
+const FAST_PERIOD = 0.78
+const SLOW_PERIOD = 1.9

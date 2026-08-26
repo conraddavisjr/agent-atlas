@@ -106,6 +106,24 @@ export function TrainingHUD() {
         <div style={styles.dialogue}>
           <div style={styles.speaker}>THE INSTRUCTOR</div>
           <div style={styles.line}>{INSTRUCTOR_LINES[speaking]}</div>
+          {/*
+            **The speech beats have always been skippable and nothing ever said
+            so.**
+
+            `stepTraining` advances `speech1` and `speech2` on `input.advance` as
+            well as on their timers, "so a player who reads faster than the wizard
+            talks is not held hostage by it" - and the only way to reach that was
+            a Right Arrow nobody is told about. Every other waiting beat in this
+            round has a visible `Next` and this one had a keyboard secret.
+
+            It matters more now than it did: `speech2` grew from 3.2 s to 5.3 s
+            because 3.2 was shorter than the time it takes to read its own
+            subtitle, and it will grow again when the wizard is given a voice. A
+            preamble that gets longer needs its exit shown, not hidden.
+          */}
+          <button style={styles.skip} onClick={requestAdvance}>
+            Skip &rsaquo;
+          </button>
         </div>
       )}
 
@@ -333,6 +351,23 @@ const styles: Record<string, CSSProperties> = {
     padding: '8px 18px',
     fontSize: '0.86rem',
     fontWeight: 600,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  skip: {
+    /*
+      Quieter than `next`. This is an escape from something the player might be
+      enjoying, where `Next` is the way forward through something they have
+      finished - so it reads as an offer rather than as the thing to press.
+    */
+    pointerEvents: 'auto',
+    marginTop: 10,
+    background: 'transparent',
+    border: '1px solid rgba(210, 226, 255, 0.25)',
+    borderRadius: 8,
+    color: 'rgba(226, 236, 255, 0.75)',
+    padding: '5px 13px',
+    fontSize: '0.74rem',
     cursor: 'pointer',
     fontFamily: 'inherit',
   },

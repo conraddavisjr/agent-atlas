@@ -130,9 +130,10 @@ export function Fed({ lit, local }: { lit: number; local: number }) {
       **The labels fall off at the intake.**
 
       Each one rides its own stream to a point short of the machine and then drops
-      away, and this is the station's whole argument - see the header. It is a
-      position write rather than a fade for the reason `Headline.tsx` gives:
-      troika's opacity needs a `sync()` per frame, and moving a group is a matrix.
+      away, and this is the station's whole argument - see the header. A position
+      write rather than a fade because the subject is being STRIPPED OFF, which is
+      a thing that happens in space; the form as a whole fades, and its labels
+      fade with it, but this particular gesture is a fall.
     */
     for (let s = 0; s < labels.current.length; s++) {
       const group = labels.current[s]
@@ -148,7 +149,7 @@ export function Fed({ lit, local }: { lit: number; local: number }) {
         // subject being stripped off rather than as a label teleporting away.
         const fall = (t - LABEL_RELEASE) / (1 - LABEL_RELEASE)
         const [x, y, z] = pointAlong(path, LABEL_RELEASE)
-        group.position.set(x, y - fall * fall * 1.6, z)
+        group.position.set(x, y - fall * fall * LABEL_FALL, z)
         group.visible = lit > 0.05 && fall < 0.85
       }
     }
@@ -194,7 +195,7 @@ export function Fed({ lit, local }: { lit: number; local: number }) {
             labels.current[i] = node
           }}
         >
-          <StationLabel text={name} size={0.07} colour="#a9c4ea" />
+          <StationLabel text={name} size={STREAM_LABEL_SIZE} colour="#a9c4ea" />
         </group>
       ))}
     </group>
@@ -238,10 +239,69 @@ const BELT_LENGTH = 0.95
 const BELT_Y = 0.34
 const BELT_START = -1.05
 const BELT_END = -0.12
-const BELT_PERIOD = 3.4
+/**
+ * The internal cycles, retimed for a form that now holds the stage for 2.5 s.
+ *
+ * These were built for a stage where all three stations stayed lit for as long
+ * as the player cared to read, so their periods were free. They are not any
+ * more: a form is only readable while it is fully present, so its argument has
+ * to land inside `FORM_WINDOW`, which is 2.05 s.
+ *
+ * At the old 2.9 s stream period the first subject label was released at 2.09 s,
+ * which cleared the window by four hundredths of a second - true, and true by
+ * luck rather than by design. At 1.8 the releases fall at 1.30, 1.63 and 1.94 s,
+ * so three of them are seen on every appearance.
+ */
+const BELT_PERIOD = 2.2
 const BOOK_COUNT = 7
 
-const STREAM_PERIOD = 2.9
+const STREAM_PERIOD = 1.8
 const DOTS_PER_STREAM = 3
 /** How far along a stream a subject label survives before it is stripped off. */
 const LABEL_RELEASE = 0.72
+
+/**
+ * How far a released label falls before it is taken off screen, in metres.
+ *
+ * ## It was 1.6, and at the specimen's scale that put five words on the caption
+ *
+ * The label is released at about local y 0.771 and stays visible to `fall` 0.85,
+ * so at 1.6 it reached **-0.385** - well below the machine's own base plane. At
+ * the three-station scale of 0.74 that was 28 cm below the stage and landed on
+ * empty floor. At the specimen's 2.2 it is 85 cm below the base plane, which is
+ * exactly where the key words and the caption now sit: SCIENCE, MATHEMATICS,
+ * PHILOSOPHY, ENGINEERING and HISTORY raining through the nameplate on a 1.8 s
+ * loop.
+ *
+ * 0.55 brings the lowest point to 0.374, which is above the base plane, so the
+ * form's swept box no longer extends below the thing it stands on. The gesture
+ * is unchanged in kind - the subject is still stripped off at the intake and
+ * still drops away, which `Fed.tsx`'s header calls the whole station - it just
+ * does it inside its own frame.
+ *
+ * Moving the nameplate instead was the alternative and it is the wrong trade:
+ * the words are below the specimen precisely because the base plane is the one
+ * edge of this composition that never moves.
+ */
+const LABEL_FALL = 0.55
+
+/**
+ * How large a subject label is drawn, in the form's own units.
+ *
+ * ## Sized against the caption now, not against the station
+ *
+ * 0.07 was chosen when a station was 3% of the frame and its labels were about
+ * five pixels of cap - too small to read, and too small for anyone to notice that
+ * five of them overlap where the streams converge. At the specimen's scale the
+ * same number draws them at 0.148 m, the same size as the caption underneath the
+ * whole exhibit, and the overlap became the most obvious thing in the frame.
+ *
+ * These are subordinate: they name what is going in, where the caption names what
+ * the picture means. 0.05 puts them at about 0.106 m, two thirds of the caption
+ * and twice their old rendered size, which is the hierarchy the picture wants.
+ *
+ * **This is legibility, not composition.** The five streams still converge into a
+ * space too small for five words, and the honest fix is to re-author the fan now
+ * that it owns a frame rather than a third of one. That is the next pass.
+ */
+const STREAM_LABEL_SIZE = 0.05
