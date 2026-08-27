@@ -251,7 +251,29 @@ export function TrainingHUD() {
 }
 
 const panel: CSSProperties = {
-  background: 'rgba(12, 20, 38, 0.72)',
+  /*
+    **0.92, and it was 0.72, and the difference is what makes the read-along
+    legal rather than merely visible.**
+
+    The card text is 14 px, which is under WCAG's large-text threshold, so every
+    word - highlighted, faded or plain - has to hold 4.5:1 under SC 1.4.3. The
+    panel is translucent over a live 3D scene, so its effective background is
+    whatever the diorama is doing behind it, and the worst case is a bright frame.
+
+    Computed for `#e4ecfa` over this panel over a white scene:
+
+      panel 0.72   text 1.00 -> 6.21    0.72 -> 4.12 FAIL   0.55 -> 3.10 FAIL
+      panel 0.92   text 1.00 -> 12.60   0.72 -> 7.24        0.55 -> 4.86
+
+    At 0.72 the entire fade budget was 0.80 opacity, which is not a fade anybody
+    can see - so the clause dimming shipped in the previous commit was failing AA
+    on any bright frame. At 0.92 the floor drops to 0.55 and a real fade fits
+    inside the standard.
+
+    It also removes the scene dependence, which matters on its own: 14 px text
+    over a moving background is a legibility problem with or without a highlight.
+  */
+  background: 'rgba(12, 20, 38, 0.92)',
   backdropFilter: 'blur(9px)',
   border: '1px solid rgba(150, 190, 255, 0.18)',
   borderRadius: 14,
@@ -499,7 +521,7 @@ function ReadAlong({ card, segment, word }: { card: number; segment: number; wor
           )
         })
         return (
-          <span key={index} style={{ opacity: active === -1 || isActive ? 1 : 0.72 }}>
+          <span key={index} style={{ opacity: active === -1 || isActive ? 1 : CLAUSE_DIM }}>
             {rendered}
             {index < segments.length - 1 ? ' ' : ''}
           </span>
@@ -517,6 +539,30 @@ function ReadAlong({ card, segment, word }: { card: number; segment: number; wor
  * fifth - enough to follow, not enough to read as a marker.
  */
 const TRAIL = [0.98, 0.9, 0.84, 0.8]
+
+/**
+ * How far the clauses that are not being read fall back.
+ *
+ * **This is the part of the read-along that carries the learning**, and it is
+ * worth being clear that the word window is not. The two studies that test
+ * synchronised highlighting against no highlighting - Keelor 2023 on children
+ * with reading difficulties, Brown 2021 on adults with aphasia - both find no
+ * comprehension difference, and Brown found readers simply PREFER having one. So
+ * the trail is an engagement feature and should not be asked to do more.
+ *
+ * The clause is different, because it is the only thing on screen that says which
+ * sentence the picture belongs to. Each card is three clauses and each clause has
+ * one form; dimming the other two is a three-step signal that carries the
+ * correspondence the whole diorama exists to teach.
+ *
+ * 0.58 against a 0.92 panel is 5.24:1 on the worst frame, comfortably AA. It has
+ * to stay readable rather than disappear: Schotter, Tran and Rayner (2014) found
+ * that preventing readers from looking BACK hurts comprehension - and not only on
+ * ambiguous sentences - so a clause that has been read must remain re-readable.
+ * That is also why a spoken word returns to full strength rather than staying
+ * marked or dimming further.
+ */
+const CLAUSE_DIM = 0.58
 
 /**
  * A microphone, drawn rather than typed.

@@ -578,7 +578,7 @@ export const VOICE = {
       "file": "/voice/card-1-1.mp3",
       "card": 1,
       "index": 1,
-      "duration": 4.725,
+      "duration": 4.85,
       "words": [
         {
           "text": "Then",
@@ -618,40 +618,50 @@ export const VOICE = {
         {
           "text": "to",
           "start": 2.025,
-          "end": 2.15
+          "end": 2.125
         },
         {
-          "text": "answer",
-          "start": 2.15,
-          "end": 2.475
+          "text": "do",
+          "start": 2.125,
+          "end": 2.263
+        },
+        {
+          "text": "as",
+          "start": 2.263,
+          "end": 2.375
         },
         {
           "text": "you",
-          "start": 2.475,
-          "end": 2.675
+          "start": 2.375,
+          "end": 2.5
+        },
+        {
+          "text": "ask",
+          "start": 2.5,
+          "end": 2.85
         },
         {
           "text": "rather",
-          "start": 2.675,
-          "end": 3.013
+          "start": 2.85,
+          "end": 3.163
         },
         {
           "text": "than",
-          "start": 3.013,
-          "end": 3.175
+          "start": 3.163,
+          "end": 3.325
         },
         {
           "text": "ramble",
-          "start": 3.175,
-          "end": 3.55
+          "start": 3.325,
+          "end": 3.7
         },
         {
           "text": "on.",
-          "start": 3.55,
-          "end": 4.625
+          "start": 3.7,
+          "end": 4.75
         }
       ],
-      "hash": "c3fd2e4128039e76"
+      "hash": "4ecba54636529b03"
     },
     {
       "file": "/voice/card-1-2.mp3",

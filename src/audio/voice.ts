@@ -158,18 +158,40 @@ export function preload(): Promise<void> {
         }
         if (import.meta.env.DEV && Math.abs(buffer.duration - line.duration) > 0.03) {
           /*
-            **The assertion that catches the worst kind of stale bake:** the file
-            is present, decodes fine, and is the wrong take - re-rendered at a
-            different speed or in a different voice while the manifest was not
-            regenerated. Every beat in the round is then timed for audio that no
-            longer exists, and nothing else would ever say so.
+            **Two different failures land here and they have opposite remedies,
+            which is why the message says both.**
 
-            mp3 carries encoder delay and padding, so a few milliseconds of head
-            silence is expected and 30 ms is the tolerance rather than a bug.
+            The one this was written for is a stale bake: the file is present,
+            decodes fine, and is the wrong take - re-rendered at a different speed
+            or in a different voice while the manifest was not regenerated. Every
+            beat in the round is then timed for audio that no longer exists.
+
+            The one it will actually catch first is a DECODER difference, and the
+            original comment here had the number wrong. It said mp3 padding was "a
+            few milliseconds"; the real figure for these files is **64 ms**, and
+            the arithmetic is worth writing down because it is not obvious. At
+            24 kHz these are MPEG-2 LSF frames, which carry **576** samples each
+            rather than the 1152 of MPEG-1: `card-0-0.mp3` is 236 frames, so a
+            decoder that ignores the Xing gapless tag returns
+            `236 * 576 / 24000` = 5.664 s where the tag says 5.600.
+
+            So the tolerance and the padding are cleanly separated - 0 ms if the
+            tag is honoured, 64 ms if it is not, with 30 ms between them - and
+            this is by accident a precise gapless-support detector with no false
+            positives. What it must not do is send somebody to re-run the bake,
+            because re-baking would produce a byte-identical file and the
+            assertion would fire again.
           */
+          const drift = buffer.duration - line.duration
           console.error(
-            `[voice] ${line.file} is ${buffer.duration.toFixed(3)}s but the manifest says ` +
-              `${line.duration}s. Re-run \`npm run bake:voice\`.`,
+            `[voice] ${line.file} decoded to ${buffer.duration.toFixed(3)}s but the manifest ` +
+              `says ${line.duration}s.\n` +
+              (Math.abs(drift - 0.064) < 0.02
+                ? '  This browser is ignoring the mp3 gapless tag, so every word timing in ' +
+                  'this clip will run about 46 ms late. It is a decoder difference, NOT a ' +
+                  'stale bake - re-running `npm run bake:voice` would change nothing.'
+                : '  The file and the manifest disagree by more than mp3 padding explains. ' +
+                  'This is a stale bake: run `npm run bake:voice`.'),
           )
         }
         into[index] = { buffer }

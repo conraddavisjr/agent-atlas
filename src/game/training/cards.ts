@@ -185,7 +185,25 @@ export const CARDS: readonly Card[] = [
           'trillion times over, until the guessing turned uncanny.',
       },
       {
-        shown: 'Then we trained it again, by hand, to answer you rather than ramble on.',
+        /*
+          **`to answer you` was the one dated phrase in the round, and this is the
+          third time this file has been corrected for the same reason.**
+
+          `93-copy-review.md` cut "it does not look things up" because a reader
+          would falsify it within a minute of using an assistant that searches. The
+          same test applied here in 2026 and this sentence half-failed it: a
+          beginner's first contact with AI is now often watching it operate a
+          browser or drive an application, not reading a reply. The claim was not
+          false, it was incomplete - it describes an assistant that stops at the
+          answer, and the reader's assistant does not stop at the answer.
+
+          `do as you ask` covers answering and acting in one clause, keeps the
+          contrast with "ramble on", and is strictly more accurate about what
+          post-training does: instruction-following, not question-answering. That
+          last point is why this is worth changing even for a reader who has never
+          seen an agent.
+        */
+        shown: 'Then we trained it again, by hand, to do as you ask rather than ramble on.',
       },
       {
         shown:
