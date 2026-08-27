@@ -7,9 +7,27 @@
  * than stored, so there is exactly one source of truth and no way for saved data
  * to disagree with the rules.
  */
+/**
+ * Whether the player wants the instructor to speak.
+ *
+ * `'unset'` is a real state and not a synonym for `'off'`: it is what raises the
+ * gate, and it is the difference between a player who has not been asked and one
+ * who said no.
+ */
+export type AudioPreference = 'on' | 'off' | 'unset'
+
 export type ProgressState = {
   /** Lesson ids the player has finished. */
   completedLessons: string[]
+  /**
+   * The game's first SETTING, as opposed to progress.
+   *
+   * `partialize` persists only progress on the stated grounds that "transition
+   * and proximity state are per-session, and persisting them would restore the
+   * player mid-transition on reload". A preference is neither of those, and it
+   * has to survive a reload or the gate asks every single time.
+   */
+  audio: AudioPreference
   /** Where the player was when they last closed the tab. */
   currentSceneId: string
   currentSpawnId: string

@@ -307,16 +307,31 @@ export const PLANK_RADIUS = 0.31
 export const PLANK_AT: [number, number, number] = [0, EYE[1], 6.2]
 
 /**
- * The diorama: a wide, shallow stage of three stations that acts out a card.
+ * The specimen: one large model that becomes each of a card's three forms.
  *
  * ## The anchor
  *
- * Where the cube used to stand, at the same depth, because that is the distance
- * the reading camera was already framed for. It sits LOWER than the cube did -
- * the cube was a 2.1 m square whose middle had to clear the player's head, and
- * this is a 2.5 m band whose bottom does.
+ * Y is unchanged from the three-station diorama it replaced, and that is the
+ * whole reason this change is a Z and a scale rather than a re-layout: the forms
+ * are authored upward from their own base plane, so 2.05 stays the base plane
+ * and `SPECIMEN_HEIGHT` grows upward from it into the empty band above.
+ *
+ * Y came DOWN 9 cm after the first frame with the specimen in it, which is about
+ * 15 screen pixels at this camera - one metre projects to roughly 174 px on a 934
+ * px frame. The exhibit and its nameplate sit closer to the reader chrome that
+ * carries the Next button, which leaves more clear air above the specimen and
+ * tightens the whole composition toward the bottom of the frame where the reader
+ * is already looking.
+ *
+ * Z came FORWARD, from 3.6 to 3.0, together with `DIORAMA_BACK` going to zero in
+ * `cameraDirector.ts`. Between them the range drops from 9.5 m to 8.0 m. That
+ * does not by itself make the specimen bigger - see the note in `specimen.ts` on
+ * why dollying buys nothing - but it puts the reading camera at the round's own
+ * rest distance, which means `speech2`, `instructorOut`, `dioramaIn` and
+ * `reading` all share one camera Z and the teaching act has no camera move in it
+ * at all beyond a lift and a re-aim.
  */
-export const DIORAMA_AT: [number, number, number] = [0, 2.05, 3.6]
+export const SPECIMEN_AT: [number, number, number] = [0, 1.96, 3.0]
 
 /**
  * How far apart the three stations stand, centre to centre.
@@ -334,18 +349,50 @@ export const DIORAMA_AT: [number, number, number] = [0, 2.05, 3.6]
  */
 export const STATION_PITCH = 2.15
 
-/** How tall a station's own content may be, centred on `DIORAMA_AT`. */
+/**
+ * How far apart the three key words stand under the specimen, centre to centre.
+ *
+ * The nameplate is the one thing that did NOT collapse into a single object. The
+ * model became one; the words stayed three, all present, one lit. A reader who
+ * presses Next after two seconds has still seen every claim named, in order,
+ * with the one they watched marked - which a single changing word cannot give
+ * them, because `reading` waits on the player and has no idea where the loop is.
+ *
+ * Derived from the longest word either card can put in the row. `CORRECTED` is
+ * nine characters, which at fontSize 0.22 with the house `letterSpacing` of 0.06
+ * measures about 1.25 m, so a pitch of 1.60 leaves 0.35 m of gutter between
+ * neighbours. 1.45 was tried first and buys only 0.20 m minus the kerning, which
+ * on two words of nine characters is not a gap anyone reads as a gap.
+ *
+ * At 1.60 the row spans `1.25 + 2 * 1.60 = 4.45 m` against a safe width of
+ * 5.82 m, so it is inside a square window with 24% to spare.
+ */
+export const WORD_PITCH = 1.6
+
+/** How tall a station's own content may be, centred on `SPECIMEN_AT`. */
 export const STATION_HEIGHT = 2.5
 
 /**
- * The width of the reading frame at the diorama's depth, on a SQUARE window.
+ * The width of the reading frame at the specimen's depth, on a SQUARE window.
  *
- * The worst case a player can present, short of a phone held upright - and the
- * one number that decides whether this stage fits. Derived rather than measured
- * so that moving the camera moves the box with it.
+ * **The constraint this function encodes is no longer the binding one, and that
+ * is worth knowing before trusting it.** With three stations side by side the
+ * stage was 6.75 m wide and the question was whether the outer two survived a
+ * narrow window. With one specimen the binding constraint is VERTICAL: the band
+ * between the HUD reading card and the robot's head. And vertical extent is
+ * aspect-independent, because `STAGE_FOV` is the vertical field of view - a
+ * square window and a 21:9 window show exactly the same amount of height.
+ *
+ * So the worst case a player can present is now a SHORT window, not a narrow
+ * one, and the check that matters is the DOM card's pixel height against
+ * `innerHeight` rather than anything this function returns. It stays because the
+ * nameplate is still a horizontal object and still has to fit; it is a ceiling,
+ * not the design driver it used to be.
+ *
+ * Derived rather than measured so that moving the camera moves the box with it.
  */
 export function dioramaSafeWidth(cameraZ: number, fovDegrees = STAGE_FOV): number {
-  const distance = DIORAMA_AT[2] - cameraZ
+  const distance = SPECIMEN_AT[2] - cameraZ
   return 2 * distance * Math.tan((fovDegrees * Math.PI) / 360)
 }
 
@@ -360,34 +407,93 @@ export function dioramaSafeWidth(cameraZ: number, fovDegrees = STAGE_FOV): numbe
  * curled the wrong way - so this is a function with a test rather than a sign
  * typed at a mount point.
  */
-export function stationX(index: number): number {
-  return (1 - index) * STATION_PITCH
+export function stationX(index: number, pitch: number = STATION_PITCH): number {
+  return (1 - index) * pitch
 }
+
+/**
+ * Where a prompt word sits inside the guessing form, so the sentence reads left
+ * to right ON SCREEN.
+ *
+ * **Descending x, which is the opposite of what anybody writes first.** `+X` is
+ * screen left here, so the FIRST word takes the HIGHEST x. Laid out the obvious
+ * way, `YOUR ROYAL` renders as `ROYAL YOUR` - which is exactly what shipped, and
+ * which is the sixth time this stage's axis inversion has caught the feature out.
+ *
+ * It lives here beside `stationX` rather than in `Guessed.tsx` for two reasons:
+ * it is the same class of decision, and a component file that also exports
+ * constants cannot be fast-refreshed. Both of them are functions rather than
+ * literals so that the inversion is asserted rather than typed at a mount point,
+ * which is the only thing that has ever caught it.
+ */
+export function promptX(index: number): number {
+  return PROMPT_START - index * PROMPT_STEP
+}
+
+const PROMPT_START = 0.92
+const PROMPT_STEP = 0.34
+
+/**
+ * How many words the prompt has, which is what sets where the blank is.
+ *
+ * A constant rather than `PROMPT.length` because `stage.ts` holds positions and
+ * `dioramaCopy.ts` holds words, and a layout file importing copy is the wrong
+ * direction. `dioramaCopy.test.ts` asserts the two agree, so adding a third
+ * prompt word fails a test rather than quietly putting the blank inside the
+ * sentence.
+ */
+export const PROMPT_WORDS = 2
+
+/** One step past the last prompt word, which is where a guess has to land. */
+export const BLANK_X = PROMPT_START - PROMPT_WORDS * PROMPT_STEP
 
 /** The headline, standing large behind everything. */
 export const HEADLINE = 'WHAT IS AI?'
 export const HEADLINE_AT: [number, number, number] = [0, 4.6, 16]
 
 /**
- * Where the headline goes once the cube rises for the quiz.
+ * Where the headline goes when its job is done.
  *
- * The sign follows the board rather than staying put, and that is a framing
- * decision rather than an animation. At 4.6 the headline sits behind the READING
- * pose's cube and its outer letters flank it, which is what makes the stage look
- * arranged; the moment the camera tilts up for the quiz, that same headline lands
- * squarely in the plank column and the top answer label became unreadable against
- * the word `IS`.
+ * ## Its job ends at the arrival, and that is a decision rather than a tidy-up
  *
- * Re-derived for the first-person camera. From the eye at 1.62 the headline
- * stands 15.7 in front; the top plank's label reaches 13.5 degrees up, so the
- * headline has to sit above `1.62 + 15.7 * tan(13.5 deg)` = 5.39 or it lands in
- * the answers again. 6.3 puts it at 16.6 degrees - clear of the labels, and still
- * well inside the 24-degree half-frame.
+ * The sign exists so a player dropped into a room they did not build can see in
+ * one glance why they are standing there. Once the first reading card is up, the
+ * HUD's own scene card names the lesson in DOM and the sign is saying it twice -
+ * in the exact band the specimen now needs. So it leaves on `instructorOut`,
+ * with the wizard, and the introduction packs up in one gesture.
  *
- * It is now the only thing above the coins, the cube having left, which is what
- * makes it worth keeping in shot at all.
+ * It used to park at 7.1 and stay in shot through the quiz, justified as "the
+ * only thing above the coins, the cube having left". That justification is void:
+ * the thing above the coins is `TrainingHUD`'s question banner, which is already
+ * there.
+ *
+ * ## Why 8.7 and not the 10.8 a reading-frame derivation gives
+ *
+ * The sign is only ever VISIBLE during `instructorOut`, so that is the frame it
+ * has to clear.
+ *
+ * **The instructor camera is 55 cm LOWER than the reading camera, and forgetting
+ * that is how this number went wrong twice.** `SPECIMEN_UP` lifts the reading
+ * pose to y 3.25; the instructor pose takes no lift, so it sits at `CAMERA_UP`,
+ * which is 2.70. A derivation that used 3.25 for both put the top of the
+ * instructor frame at 7.80 and this constant at 8.7 - and at 8.7 the sign stops
+ * moving while its lowest letters are still 62 cm inside the shot.
+ *
+ * Done against the pose that actually exists: the camera is at `(0, 2.70, -5.0)`
+ * aiming at `(-0.63, 2.1, 3.4)`, which is 4.07 degrees below horizontal. At the
+ * sign's z of 16 the range is 21.0, so the top of a 40 degree frame is
+ * `2.70 + 21.0 * tan(20 - 4.07)` = **8.69**. troika anchors this line at its
+ * middle, so the lowest visible cap sits about `0.34 * HEADLINE_SIZE` = 0.63
+ * below the anchor, and the sign is clear at 9.32. 9.6 adds 28 cm.
+ *
+ * `diorama.test.ts` derives all of this from `cameraPose('instructorOut')` rather
+ * than trusting the paragraph, which is what caught the 8.7.
+ *
+ * If the sign is ever un-hidden during `dioramaIn`, the reading frame becomes the
+ * binding one instead and the number goes up again - which is why the test reads
+ * the pose it is checking rather than hardcoding a frame.
  */
-export const HEADLINE_QUIZ_Y = 7.1
+export const HEADLINE_AWAY_Y = 9.6
 export const HEADLINE_SIZE = 1.85
 
 /**

@@ -17,6 +17,25 @@ import { Text } from '@react-three/drei'
  * three pieces of text is how a world stops looking like one world" - same
  * `#0b1020`, same ratio to the size.
  *
+ * ## These labels DO fade now, and the rule that said they could not was wrong
+ *
+ * Five files in this round used to carry a claim: troika's opacity lives in
+ * `fillOpacity` / `outlineOpacity`, which "need a `sync()` to take effect, so a
+ * smooth fade is a text re-sync every frame for the length of it". It was
+ * written once and cited everywhere, and it was never measured.
+ *
+ * `troika-three-text` as installed publishes `SYNCABLE_PROPS` - eighteen names,
+ * `text`, `fontSize`, `maxWidth`, `letterSpacing`, `anchorX` and so on - and only
+ * those get a setter that raises `_needsSync`. `fillOpacity`, `outlineOpacity`
+ * and `color` are not among them; `uTroikaFillOpacity` is assigned inside
+ * `_prepareForRender`, which runs on render anyway. Changing opacity is a uniform
+ * write.
+ *
+ * So `formPresence.ts` fades these directly, and the specimen's whole change-over
+ * is built on it. What genuinely does cost a re-layout is changing `text`, which
+ * is why the captions are three mounted labels with one visible rather than one
+ * label being rewritten.
+ *
  * ## The Suspense boundary is not decoration
  *
  * drei's `<Text>` suspends on a font fetched from a CDN at runtime, and `App.tsx`

@@ -12,6 +12,8 @@ import { useSceneTravel, type TravelRequest } from './game/scenes/SceneHost'
 import { getScene } from './game/scenes/registry'
 import { totemAction } from './state/lessonRoutes'
 import { TrainingHUD } from './ui/TrainingHUD'
+import { AudioGate } from './ui/AudioGate'
+import { unlock as unlockVoice } from './audio/voice'
 import { Transition } from './game/scenes/Transition'
 import { IrisTracker } from './game/scenes/IrisTracker'
 import { DevHooks } from './dev/DevHooks'
@@ -152,6 +154,22 @@ export default function App() {
    */
   const onInteract = useCallback(() => {
     if (covering) return
+    /*
+      **Unconditional, and taken before anything is decided.**
+
+      This handler's own comment warns that "adding a branch here is the
+      highest-leverage way to break four working lessons". That warning is about
+      BRANCHES. This is one side effect with no lesson-dependent behaviour, taken
+      whether or not the totem leads anywhere, and it is here because a keydown is
+      a user activation gesture and this is the only one that reaches the training
+      round from outside it.
+
+      It exists for the returning player who has already said yes to sound and
+      should not be asked again: `unlock()` returns early once the answer is
+      `'declined'`, and a first-time player unlocks from the gate's own button
+      instead. See `src/audio/voice.ts`.
+    */
+    unlockVoice()
     const action = totemAction(useGameStore.getState().activeTotemId, LESSONS)
     if (action.kind === 'complete') completeLesson(action.lessonId)
     else if (action.kind === 'travel') doTravel(action.sceneId, action.spawnId, action.label)
@@ -393,6 +411,7 @@ export default function App() {
         does not belong in a tree built on the opposite assumption.
       */}
       <TrainingHUD />
+      <AudioGate />
       <AdminPanel
         displayedSceneId={displayed.sceneId}
         busy={covering}

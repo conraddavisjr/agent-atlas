@@ -41,7 +41,25 @@ export const CAPTION_LIMIT = 42
  * look up, and the one trick underneath. `cards.test.ts` already pins that the
  * paragraph says all three.
  */
-export const FED_STREAMS: readonly string[] = [
+/**
+ * What is written on the books going into the hopper.
+ *
+ * These used to be `FED_STREAMS`, riding five glowing traces that have since been
+ * deleted - see `Fed.tsx`. They are titles on a conveyor now, which is the same
+ * claim drawn with one illustration instead of two.
+ *
+ * Five, and the number is a composition constraint rather than a taste. Each one
+ * needs a length of belt wide enough that its title clears its neighbour's, and
+ * the belt's length sets this form's aspect: at six the exhibit came out 2.57
+ * wide by 0.72 tall, which fits the frame by being drawn small. Five is what buys
+ * back the height.
+ *
+ * They are deliberately unalike - a science, a formal discipline, a humanity, a
+ * craft and a record - because the claim is BREADTH. A list of five neighbouring
+ * fields reads as a curriculum; five that have nothing to do with each other
+ * reads as "very nearly everything ever written".
+ */
+export const BOOK_SUBJECTS: readonly string[] = [
   'SCIENCE',
   'MATHEMATICS',
   'PHILOSOPHY',
@@ -148,3 +166,22 @@ export const CORRECTION_STOPS: readonly string[] = [
  */
 export const CONFIDENCE_READING = '99%'
 export const CONFIDENCE_NOTE = 'sure ≠ right'
+
+/**
+ * The two cards' station copy, indexed by card.
+ *
+ * A total mapping rather than two loose constants, because the thing that goes
+ * wrong here has already gone wrong once: `TeachingStage` mapped over
+ * `CARD_0_STATIONS` unconditionally and never read the card index, so card 1's
+ * words as well as its illustration came from card 0. Two exports that a caller
+ * has to remember to switch between is how that happens; an array the caller
+ * indexes by the card it already has is how it stops.
+ *
+ * The words are now correct for both cards. **The illustrations are not** - card
+ * 1 still shows card 0's three forms - and that gap is deliberate, loud in DEV,
+ * and recorded in `TeachingStage.tsx`.
+ */
+export const CARD_STATIONS: readonly (readonly [Station, Station, Station])[] = [
+  CARD_0_STATIONS,
+  CARD_1_STATIONS,
+]

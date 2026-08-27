@@ -4,6 +4,7 @@ import {
   CARDS,
   CARD_BODY_LIMIT,
   INSTRUCTOR_LINES,
+  sameSentence,
   QUIZ,
 } from './cards'
 import { CARD_COUNT } from './trainingMachine'
@@ -95,6 +96,26 @@ describe('the instructor', () => {
     expect(INSTRUCTOR_LINES).toHaveLength(2)
   })
 
+  it('says the same sentence aloud as it puts on screen', () => {
+    /*
+      The failure this catches is the one nobody thinks of: somebody fixes a typo
+      in the subtitle, does not touch the spoken form, and the wizard now says
+      something the caption does not. No hash catches it, because the hashed
+      string did not change.
+    */
+    for (const line of INSTRUCTOR_LINES) {
+      expect(sameSentence(line.spoken), line.shown).toBe(sameSentence(line.shown))
+    }
+  })
+
+  it('permits the phonemiser its two edits and nothing more', () => {
+    // A.I. for AI, and a comma for the project's plain dash.
+    expect(INSTRUCTOR_LINES[0].spoken).toContain('A.I.')
+    expect(INSTRUCTOR_LINES[0].shown).toContain('AI ')
+    expect(sameSentence('Ah - an apprentice!')).toBe(sameSentence('Ah, an apprentice!'))
+    expect(sameSentence('one question')).not.toBe(sameSentence('two questions'))
+  })
+
   it('keeps each line short enough to read before it moves on', () => {
     /*
       The lines auto-advance after 2.6 s and 3.2 s. Reading is roughly 15
@@ -102,7 +123,7 @@ describe('the instructor', () => {
       finished by someone who is also watching a wizard fly.
     */
     for (const line of INSTRUCTOR_LINES) {
-      expect(line.length, line).toBeLessThanOrEqual(80)
+      expect(line.shown.length, line.shown).toBeLessThanOrEqual(80)
     }
   })
 })

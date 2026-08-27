@@ -684,14 +684,33 @@ describe('the merged water batch', () => {
   })
 
   it('keeps every uv and normal finite through the merge', () => {
+    /*
+      **Scanned into one assertion rather than asserted per component, and that is
+      a fix rather than a tidy-up.**
+
+      This used to call `expect()` inside a triple loop over every component of
+      every vertex of the merged water batch - hundreds of thousands of matcher
+      objects, each with its own message string built eagerly by the template
+      literal. It ran in about 900 ms alone and timed out at 5 s under a full
+      suite, which is the worst kind of flake: green on the machine that wrote it,
+      red on a loaded one, and pointing at geometry that is perfectly fine.
+
+      The scan reports the FIRST bad component and its index, which is more useful
+      than a matcher firing on one of many - and it costs one assertion.
+    */
+    const bad: string[] = []
     for (const name of ['position', 'normal', 'uv']) {
       const attribute = batch.getAttribute(name)
-      for (let i = 0; i < attribute.count; i++) {
+      for (let i = 0; i < attribute.count && bad.length === 0; i++) {
         for (let c = 0; c < attribute.itemSize; c++) {
-          expect(Number.isFinite(attribute.getComponent(i, c)), `${name}[${i}][${c}]`).toBe(true)
+          if (!Number.isFinite(attribute.getComponent(i, c))) {
+            bad.push(`${name}[${i}][${c}] = ${attribute.getComponent(i, c)}`)
+            break
+          }
         }
       }
     }
+    expect(bad, 'the merge produced a non-finite component').toEqual([])
   })
 })
 

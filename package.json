@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "bake:lightmap": "node tools/bake/lightmap.mjs",
     "critique:sink": "node tools/critique/shotsink.mjs",
-    "critique:frame": "node tools/critique/frame.mjs"
+    "critique:frame": "node tools/critique/frame.mjs",
+    "bake:voice": "node tools/voice/bake.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.8",

@@ -82,6 +82,8 @@ export const COSMETICS: Cosmetic[] = [
 
 export const INITIAL_PROGRESS: ProgressState = {
   completedLessons: [],
+  /* Nobody has been asked yet. See `AudioGate`. */
+  audio: 'unset',
   currentSceneId: 'hub',
   currentSpawnId: 'start',
   lessonData: {},

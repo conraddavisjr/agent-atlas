@@ -6,7 +6,8 @@ import { palette } from '@/art/palette'
 import { mergeProp, pad, slab, trace } from '@/art/geometry'
 import { assertDrawable } from '@/game/world/hubLayout'
 import { teachingMachineGeometry } from '../teachingMachine'
-import { loop, pointAlong, steppedAlong } from '../diorama'
+import { loop, pointAlong, stationGlow, steppedAlong } from '../diorama'
+import type { LiveCue } from '../specimen'
 
 /**
  * Station two: the same machine looking something up, two ways.
@@ -29,10 +30,29 @@ import { loop, pointAlong, steppedAlong } from '../diorama'
  * `steppedAlong` is what makes the slow path read as steps rather than as a slow
  * line. Without it the two paths differ only in speed, and speed alone reads as
  * one path being further away.
+ *
+ * ## One book, alternating routes, rather than two dots at once
+ *
+ * It used to run both travellers simultaneously, one on each route, as two
+ * glowing dots. That drew the two claims but it drew them as a comparison - two
+ * things racing - when the paragraph makes them as alternatives: "give it a
+ * library and it will fetch; give it TIME and it will work step by step".
+ *
+ * So there is one traveller and it takes the routes in turn: a straight grab, and
+ * then the same errand done the long way. Alternating is what makes them read as
+ * two things the same machine can do, and it halves what is moving at any moment,
+ * which at the specimen's scale is the difference between a diagram and a busy
+ * one.
+ *
+ * And it is a BOOK rather than a dot, because it comes off a shelf of books and
+ * goes into a machine that eats books on the form before this one. A glowing dot
+ * leaving a library is an abstraction of an abstraction; a book leaving a library
+ * is the thing itself.
  */
-export function Fetched({ lit, local }: { lit: number; local: number }) {
-  const fast = useRef<Mesh>(null)
-  const slow = useRef<Mesh>(null)
+export function Fetched({ cue }: { cue: LiveCue }) {
+  const book = useRef<Mesh>(null)
+  const fastMaterial = useRef<{ emissiveIntensity: number } | null>(null)
+  const slowMaterial = useRef<{ emissiveIntensity: number } | null>(null)
 
   const machine = useMemo(
     () => assertDrawable(teachingMachineGeometry(0.42), 'the fetching machine'),
@@ -68,12 +88,19 @@ export function Fetched({ lit, local }: { lit: number; local: number }) {
     return assertDrawable(mergeProp(parts), 'the library shelf')
   }, [])
 
-  /* Both routes, plus a pad at each waypoint so the stops are visible when still. */
-  const routes = useMemo(
+  /*
+    The two routes, as separate geometries so each can be lit independently. The
+    waypoint pads belong to the slow one: they are what a stop looks like when the
+    book is standing on it.
+  */
+  const fastRoute = useMemo(
+    () => assertDrawable(mergeProp([{ geometry: trace(FAST_PATH, 0.012, 16) }]), 'the direct route'),
+    [],
+  )
+  const slowRoute = useMemo(
     () =>
       assertDrawable(
         mergeProp([
-          { geometry: trace(FAST_PATH, 0.012, 16) },
           { geometry: trace(SLOW_PATH, 0.012, 32) },
           ...SLOW_PATH.slice(1, -1).map((p) => ({
             geometry: pad(0.038),
@@ -81,23 +108,59 @@ export function Fetched({ lit, local }: { lit: number; local: number }) {
             rotation: [Math.PI / 2, 0, 0] as [number, number, number],
           })),
         ]),
-        'the retrieval routes',
+        'the stepped route',
       ),
     [],
   )
 
   useFrame(() => {
-    if (fast.current) {
-      const t = loop(local, FAST_PERIOD)
-      const [x, y, z] = pointAlong(FAST_PATH, t)
-      fast.current.position.set(x, y, z)
-      fast.current.visible = lit > 0.05
+    /* Read live, every frame. See `LiveCue` for why these are not props. */
+    const { lit, local } = cue
+
+    /*
+      Which errand this is. `local` restarts every time the form comes on stage -
+      see `specimen.ts` - so a visit always opens on the straight grab and the
+      player never arrives half way through the slow one wondering what the fast
+      one looked like.
+    */
+    const cycle = Math.floor(Math.max(0, local) / ROUTE_PERIOD)
+    const stepping = cycle % 2 === 1
+    const t = loop(local, ROUTE_PERIOD)
+
+    const path = stepping ? SLOW_PATH : FAST_PATH
+    /*
+      The stepped route dwells at each waypoint; the straight one does not. Both
+      are driven from the same 0-to-1 clock, so the two errands take exactly as
+      long as each other and the difference the player sees is entirely in HOW the
+      book travels rather than in how long it is gone.
+    */
+    const along = stepping ? steppedAlong(t, SLOW_PATH.length - 1) : t
+    const [x, y, z] = pointAlong(path, along)
+
+    if (book.current) {
+      book.current.position.set(x, y, z)
+      /*
+        It shrinks into the machine at the end of the run and comes back at full
+        size at the shelf, so the arrival reads as the book being taken IN rather
+        than as it stopping against the casing.
+      */
+      const swallow = Math.min(1, (1 - t) / 0.08)
+      const emerge = Math.min(1, t / 0.06)
+      book.current.scale.setScalar(Math.min(swallow, emerge))
+      book.current.rotation.set(0, 0, stepping ? 0 : -0.18)
+      book.current.visible = lit > 0.05
     }
-    if (slow.current) {
-      const t = steppedAlong(loop(local, SLOW_PERIOD), SLOW_PATH.length - 1)
-      const [x, y, z] = pointAlong(SLOW_PATH, t)
-      slow.current.position.set(x, y, z)
-      slow.current.visible = lit > 0.05
+
+    /*
+      The route in use is lit and the other is held back, so the picture says
+      which of the two claims is being made right now without a word of legend.
+      Two materials rather than one merged geometry for exactly this reason.
+    */
+    if (fastMaterial.current) {
+      fastMaterial.current.emissiveIntensity = stepping ? GLOW.hold : stationGlow(lit)
+    }
+    if (slowMaterial.current) {
+      slowMaterial.current.emissiveIntensity = stepping ? stationGlow(lit) : GLOW.hold
     }
   })
 
@@ -111,20 +174,28 @@ export function Fetched({ lit, local }: { lit: number; local: number }) {
         <meshPhysicalMaterial {...mattePlastic(palette.bandTrim)} />
       </mesh>
 
-      <mesh geometry={routes}>
-        <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
+      <mesh geometry={fastRoute}>
+        <meshPhysicalMaterial
+          ref={fastMaterial as never}
+          {...emissive(palette.visor, GLOW.source)}
+        />
+      </mesh>
+      <mesh geometry={slowRoute}>
+        <meshPhysicalMaterial
+          ref={slowMaterial as never}
+          {...emissive(palette.visor, GLOW.source)}
+        />
       </mesh>
 
-      {/* The two travellers. One mesh each: there are two of them, and an
-          instanced batch of two is a buffer and a matrix write to save nothing. */}
-      <mesh ref={fast}>
-        <sphereGeometry args={[0.038, 10, 8]} />
-        <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
+      {/*
+        The book being fetched. One mesh: there is one of it, and an instanced
+        batch of one is a buffer and a matrix write to save nothing.
+      */}
+      <mesh ref={book} castShadow>
+        <boxGeometry args={[0.1, 0.14, 0.045]} />
+        <meshPhysicalMaterial {...mattePlastic(palette.bandTrim)} />
       </mesh>
-      <mesh ref={slow}>
-        <sphereGeometry args={[0.038, 10, 8]} />
-        <meshPhysicalMaterial {...emissive(palette.visor, GLOW.source)} />
-      </mesh>
+
     </group>
   )
 }
@@ -148,5 +219,17 @@ const SLOW_PATH: [number, number, number][] = [
   [0.44, 0.6, 0.12],
 ]
 
-const FAST_PERIOD = 1.9
-const SLOW_PERIOD = 5.6
+/**
+ * How long one errand takes, in seconds.
+ *
+ * Both routes get the same number, which is the change that makes them
+ * comparable: the difference the player sees is entirely in HOW the book travels,
+ * where before it was in how long it took, and a slower dot mostly reads as a
+ * further-away one.
+ *
+ * It has to fit inside `FORM_WINDOW` twice, because a visit needs to show the
+ * straight grab AND the stepped version before the form fades - the paragraph
+ * names two things and a viewer who saw one of them learned half a sentence. At
+ * 2.1 the pair takes 4.2 s against a 4.55 s window.
+ */
+const ROUTE_PERIOD = 2.1

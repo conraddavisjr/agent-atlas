@@ -9,3 +9,6 @@ coverage
 
 # Critique-loop screenshots
 .critique
+
+# Baked by `npm run bake:voice`, not by the build
+tools/voice/.venv

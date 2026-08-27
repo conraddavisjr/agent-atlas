@@ -10,6 +10,7 @@ import {
   DURATIONS,
   PHASES,
   initialTrainingState,
+  type Phase,
   type TrainingState,
 } from "./trainingMachine";
 import {
@@ -19,12 +20,11 @@ import {
   CUBE_SIZE,
   EYE,
   FIRST_PERSON_FOV,
-  HEADLINE_AT,
-  HEADLINE_QUIZ_Y,
   PLANK_RADIUS,
 } from "./stage";
 import { LABEL_HALF_HEIGHT, LABEL_LIFT, plankLayout } from "./quiz";
 import { cameraPose } from "./cameraDirector";
+import { headlineVisible } from "./diorama";
 
 const at = (over: Partial<TrainingState>): TrainingState => ({
   ...initialTrainingState(),
@@ -253,26 +253,35 @@ describe("the quiz camera frames the whole beat", () => {
     expect(up).toBeCloseTo(-down, 6);
   });
 
-  it("keeps the headline clear of the answers", () => {
+  it("takes the headline out of the quiz entirely", () => {
     /*
-      The headline stands 15.7 m behind the column and rides up with the cube's
-      withdrawal. It is now the only thing above the coins, so it has to be
-      ABOVE them - at its reading height it lands squarely in the top label,
-      which is what it did before the rise was re-derived for this camera.
+      **This test used to assert the opposite, and the reversal is the point.**
+
+      The headline was kept in shot through the shooting, justified as "the only
+      thing above the coins, the cube having left", and it was raised to a parking
+      height so the top answer's label could clear it. That whole arrangement
+      existed to resolve a collision between two pieces of text that no longer
+      share a frame.
+
+      The sign's job is the arrival - it tells a player dropped into a room they
+      did not build why they are standing there - and from the first reading card
+      onward the HUD's own scene card says the same words in DOM. So it climbs out
+      with the wizard on `instructorOut`, and the thing above the coins is now
+      `TrainingHUD`'s question banner, which was already there.
     */
-    const pose = cameraPose("aiming");
-    const planks = plankLayout();
-    const label = degreesAbove(
-      pose,
-      planks[0][1] + LABEL_LIFT + LABEL_HALF_HEIGHT,
-      planks[0][2],
-    );
-    const headline = degreesAbove(pose, HEADLINE_QUIZ_Y, HEADLINE_AT[2]);
-    expect(headline, "the headline is in the answers again").toBeGreaterThan(
-      label,
-    );
-    expect(headline, "the headline is off the top of the frame").toBeLessThan(
-      pose.fov / 2,
-    );
+    const quizBeats: Phase[] = [
+      "dioramaIn",
+      "reading",
+      "question",
+      "arming",
+      "aiming",
+      "celebrating",
+    ];
+    for (const phase of quizBeats) {
+      expect(
+        headlineVisible({ ...initialTrainingState(), phase }),
+        `the headline is back in ${phase}`,
+      ).toBe(false);
+    }
   });
 });

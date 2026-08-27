@@ -2,8 +2,8 @@ import { Suspense, useRef, type RefObject } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Text } from "@react-three/drei";
 import type { Group } from "three";
-import { HEADLINE, HEADLINE_AT, HEADLINE_QUIZ_Y, HEADLINE_SIZE } from "./stage";
-import { cubeRise } from "./cube";
+import { HEADLINE, HEADLINE_AT, HEADLINE_SIZE } from "./stage";
+import { headlineLift, headlineVisible } from "./diorama";
 import type { TrainingState } from "./trainingMachine";
 
 /**
@@ -40,17 +40,30 @@ import type { TrainingState } from "./trainingMachine";
  * the environment is allowed in" - and a glowing headline would read as a thing
  * the player had earned rather than as a sign on a wall.
  *
- * ## It climbs out of the way, and moving it beats fading it
+ * ## It leaves when its job is done, and its job is the arrival
  *
- * The headline is a sign at the back of the stage, and a sign that dissolves when
- * the lesson starts is a sign that was never really there. So it rises instead -
- * see `headlineLift`, which raises it for the teaching and for the quiz and
- * leaves it low only for the arrival, when it is the whole point of the frame.
+ * The sign exists so a player dropped into a room they did not build can see in
+ * one glance why they are standing there. From the first reading card onward the
+ * HUD's own scene card says the same words in DOM, in the band the specimen now
+ * fills - so it climbs out of the top of the frame on `instructorOut` and goes
+ * with the wizard, and the whole introduction packs up in one gesture.
  *
- * The alternative was fading it out, and it was rejected on cost as much as on
- * taste: troika's opacity lives in `fillOpacity` / `outlineOpacity`, which need a
- * `sync()` to take effect, so a smooth fade is a text re-sync every frame for the
- * length of it. Moving a `<group>` is a matrix write.
+ * A rise rather than a fall: a sign that drops out of shot reads as one coming
+ * off its mounting, and nothing in a world of deliberately manufactured objects
+ * falls over.
+ *
+ * ## Where it stands is `headlineLift`'s question, and it used to be asked twice
+ *
+ * `diorama.ts` has always exported `headlineLift`, arguing at length that the
+ * sign's height must be "a function of what is on stage rather than of what one
+ * object is doing" - and this component drove it from `cubeRise` instead, which
+ * is what one object is doing, and never called `headlineLift` at all. Two
+ * answers to one question, disagreeing across six phases, with the dead one
+ * carrying all the reasoning. The live one is gone.
+ *
+ * An earlier note here claimed a fade was unavailable because troika's opacity
+ * needs a `sync()` per frame. That was never measured and it is false; see
+ * `formPresence.ts`. The rise survives on its merits, which are the ones above.
  */
 export function Headline({ run }: { run: RefObject<TrainingState> }) {
   const group = useRef<Group>(null);
@@ -58,9 +71,8 @@ export function Headline({ run }: { run: RefObject<TrainingState> }) {
   useFrame(() => {
     const state = run.current;
     if (!state || !group.current) return;
-    const rise = cubeRise(state);
-    group.current.position.y =
-      HEADLINE_AT[1] + (HEADLINE_QUIZ_Y - HEADLINE_AT[1]) * rise;
+    group.current.position.y = headlineLift(state);
+    group.current.visible = headlineVisible(state);
   });
 
   return (

@@ -1,3 +1,5 @@
+import { VOICE } from '@/audio/voiceManifest'
+
 /**
  * The training round's phase machine, as a pure function.
  *
@@ -85,11 +87,45 @@ export type Phase = (typeof PHASES)[number]
  * already in `tuning.ts` - `TRANSITION.irisOpenMs` is 420 ms, so `arriving` has to
  * outlast it or the wizard starts flying while the iris is still shut.
  */
+/**
+ * A beat of silence after a spoken line, in seconds.
+ *
+ * Enough that the wizard is not cut off by the next phase starting on his last
+ * syllable, and short enough that it does not read as a pause for effect.
+ */
+export const VOICE_TAIL = 0.35
+
 export const DURATIONS: Partial<Record<Phase, number>> = {
   arriving: 0.9,
   instructorIn: 1.3,
-  speech1: 2.6,
-  speech2: 3.2,
+  /*
+    **The speech beats are DERIVED, and they are derived whether or not any sound
+    is playing.**
+
+    `VOICE_TAIL` after the line ends, so the next phase does not begin on the last
+    syllable. That is the only authored number left in this timing.
+
+    The alternative was to keep the authored values as a floor and take the audio
+    when it was longer, and it is worth saying why that is wrong: every candidate
+    voice overruns both beats by 45% to 75%, so `max()` always returns the audio
+    branch with sound on and always the floor with sound off. That is not a
+    contract, it is a switch between two paces for the same script - 2.6 s or
+    4.28 s for the same sentence, decided by something the player chose on a
+    different screen.
+
+    And the shorter pace was already broken. `speech2` was 3.2 s for a subtitle of
+    thirteen words, which takes about 3.9 s to read; it had been showing its own
+    line for four fifths of the time a reader needs since the round shipped, with
+    no audio in the project at all. The beats above still say "PROVISIONAL, all of
+    them. They are paced by ear" - they were paced by the ear of somebody who
+    already knew the line.
+
+    So there is ONE pace, and it comes from the slower of the two demands. See
+    `src/audio/voice.ts` for why nothing ever asks the audio element how long it
+    is: the manifest is compiled in and cannot 404, where the mp3 can.
+  */
+  speech1: VOICE.lines[0].duration + VOICE_TAIL,
+  speech2: VOICE.lines[1].duration + VOICE_TAIL,
   instructorOut: 1.0,
   dioramaIn: 1.1,
   swapping: 0.7,

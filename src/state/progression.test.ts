@@ -10,6 +10,7 @@ import type { Cosmetic, Lesson, ProgressState, Zone } from './types'
 
 const base: ProgressState = {
   completedLessons: [],
+  audio: 'unset',
   currentSceneId: 'hub',
   currentSpawnId: 'start',
   lessonData: {},

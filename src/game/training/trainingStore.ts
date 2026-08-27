@@ -42,6 +42,15 @@ export type TrainingStore = {
   advanceSeq: number
   /** Bumped by Escape and by the exit button. */
   bailSeq: number
+  /**
+   * Whether the audio card is up, holding the round before it starts.
+   *
+   * Lives here rather than in `gameStore` because it is per-round session state -
+   * the same reason `phase` and `card` do - and because the thing it gates is the
+   * scene stepping itself. The player's ANSWER goes to `gameStore.audio`, which
+   * is persisted; this is only whether the question is currently on screen.
+   */
+  gateOpen: boolean
 
   /**
    * Push the machine's phase out to the DOM.
@@ -54,11 +63,33 @@ export type TrainingStore = {
   publish: (phase: Phase, card: number) => void
   requestAdvance: () => void
   requestBail: () => void
+  /** Raised on mount when the player has never been asked. */
+  openGate: () => void
+  closeGate: () => void
+  /**
+   * Bumped when the player clicks a key word to go back to that form.
+   *
+   * A sequence number and a value rather than a bare value, for the reason the
+   * whole file gives: a press is an EDGE, and clicking the same word twice has to
+   * be two events. With a bare index the second click on `FED` would be
+   * indistinguishable from no click at all.
+   */
+  formSeq: number
+  formWanted: number
+  requestForm: (index: number) => void
   /** Back to the start, for a replay. Called when the round mounts. */
   reset: () => void
 }
 
-const START = { phase: 'arriving' as Phase, card: 0, advanceSeq: 0, bailSeq: 0 }
+const START = {
+  phase: 'arriving' as Phase,
+  card: 0,
+  advanceSeq: 0,
+  bailSeq: 0,
+  gateOpen: false,
+  formSeq: 0,
+  formWanted: 0,
+}
 
 export const useTrainingStore = create<TrainingStore>()((set) => ({
   ...START,
@@ -68,6 +99,11 @@ export const useTrainingStore = create<TrainingStore>()((set) => ({
 
   requestAdvance: () => set((s) => ({ advanceSeq: s.advanceSeq + 1 })),
   requestBail: () => set((s) => ({ bailSeq: s.bailSeq + 1 })),
+
+  requestForm: (index) => set((s) => ({ formSeq: s.formSeq + 1, formWanted: index })),
+
+  openGate: () => set({ gateOpen: true }),
+  closeGate: () => set({ gateOpen: false }),
 
   /*
     The counters reset too, and the scene reads them back on mount rather than

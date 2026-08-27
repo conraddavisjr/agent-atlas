@@ -82,11 +82,70 @@ export const CARDS: readonly Card[] = [
   },
 ]
 
-/** What the instructor says on the way in. One line per beat. */
-export const INSTRUCTOR_LINES: readonly string[] = [
-  'Ah - an apprentice! Welcome to AI training.',
-  'Two short scrolls, then one question. You will answer it with an arrow.',
+export type InstructorLine = {
+  /** What the subtitle says. */
+  shown: string
+  /**
+   * What the synthesiser is handed, which is not the same string.
+   *
+   * Two edits, both necessary and both invisible in a screenshot. The project's
+   * plain dash is a typographic convention no grapheme-to-phoneme front end
+   * understands - it becomes silence, or a mispronunciation - so it becomes a
+   * comma, which is a prosodic cue. And `AI` is read as a WORD by any G2P that
+   * meets a two-letter uppercase token which happens to be a valid English
+   * digraph, so the wizard welcomes you to "eye training". `A.I.` is the fix.
+   */
+  spoken: string
+}
+
+/**
+ * What the instructor says on the way in. One line per beat.
+ *
+ * ## Why the pronunciation spelling lives here and not in the bake tool
+ *
+ * This file opens by arguing that copy is data because it is "the part most
+ * likely to be edited by somebody who is not editing code, and the part whose
+ * defects are invisible to a typechecker". A pronunciation spelling is copy by
+ * exactly that test: it is a decision about how a sentence sounds, made by
+ * whoever owns the sentence. Anywhere else and the person fixing a typo in the
+ * subtitle does not see that the wizard still says the old thing.
+ *
+ * ## Three tests chain to make that impossible
+ *
+ * 1. Edit `shown` and the NORMALISATION test fails, because `shown` and `spoken`
+ *    must be the same sentence once punctuation and case are stripped.
+ * 2. Edit `spoken` and the HASH test fails, because the voice manifest records a
+ *    hash of the exact string each mp3 was rendered from.
+ * 3. Re-bake and the EXISTENCE test confirms every file the manifest names is on
+ *    disk, and a DEV assertion confirms the decoded audio is the length the
+ *    manifest claims.
+ *
+ * There is no path from "somebody changed the wizard's words" to "the audio still
+ * says the old thing" that does not fail a test. Two things the chain cannot
+ * catch, so nobody assumes otherwise: a homograph the phonemiser gets wrong with
+ * no spelling change, and a correctly spelled word Kokoro simply mispronounces.
+ * Those need ears, once, at bake time.
+ */
+export const INSTRUCTOR_LINES: readonly InstructorLine[] = [
+  {
+    shown: 'Ah - an apprentice! Welcome to AI training.',
+    spoken: 'Ah, an apprentice! Welcome to A.I. training.',
+  },
+  {
+    shown: 'Two short scrolls, then one question. You will answer it with an arrow.',
+    spoken: 'Two short scrolls, then one question. You will answer it with an arrow.',
+  },
 ]
+
+/**
+ * The two strings reduced to the sentence they share.
+ *
+ * Case and everything that is not a letter or a digit, which is exactly the two
+ * edits the phonemiser needs - punctuation swapped for prosody, dots inside an
+ * initialism - and nothing else. A changed word, a dropped clause or a different
+ * number all survive the reduction and fail the comparison.
+ */
+export const sameSentence = (s: string): string => s.toUpperCase().replace(/[^A-Z0-9]/g, '')
 
 export type Quiz = {
   question: string
