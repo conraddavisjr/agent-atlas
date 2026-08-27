@@ -74,6 +74,41 @@ export const CARD_0_STATIONS: readonly [Station, Station, Station] = [
 ]
 
 /**
+ * What the feeding machine says while it eats.
+ *
+ * ## Why a machine in a lesson about AI is allowed to say "nom nom nom"
+ *
+ * The round already made one decision of this kind and wrote it down: the
+ * instructor is a wizard because "an explanation which admits to being a
+ * performance can be blunter than one pretending to be a textbook". This is the
+ * same move applied to the illustration. A hopper that eats the written works of
+ * humanity is a slightly alarming image if you draw it straight; a hopper that is
+ * visibly delighted about it is a joke, and a joke is a much better place to put
+ * a beginner than mild unease.
+ *
+ * It also does real work on the copy. The paragraph's claim is that the machine
+ * was fed everything and told what none of it means - the comedy of something
+ * enjoying its dinner without understanding it is that sentence, told twice.
+ *
+ * ## They are timed to the bite, not sprinkled
+ *
+ * `nom` lands on the swallow and nothing else; the aside appears between books.
+ * Speech that fires on a beat reads as caused, where speech that floats reads as
+ * decoration - and decoration next to a narrated paragraph is noise.
+ */
+export const MACHINE_CHATTER = {
+  /** On the bite. Short enough to be read in the half second it exists. */
+  bite: 'nom nom nom',
+  /**
+   * Between bites, occasionally. Rotated so the machine does not have one line.
+   *
+   * All three are the same joke from different angles: something that consumes
+   * without comprehending and is thrilled about it.
+   */
+  asides: ['I love data!', 'more books!', 'delicious!'] as readonly string[],
+} as const
+
+/**
  * The prompt the guessing station completes.
  *
  * Two words rather than a sentence, because the point is that a very short run-up

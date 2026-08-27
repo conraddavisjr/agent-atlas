@@ -77,6 +77,22 @@ export type TrainingStore = {
   formSeq: number
   formWanted: number
   requestForm: (index: number) => void
+
+  /**
+   * Which clause is being narrated, and how far into it the voice has got.
+   *
+   * `word` is an index into the segment's spoken words, or -1 before the first
+   * one. **Published only when it CHANGES**, which is three or four times a
+   * second rather than sixty: the scene steps every frame and zustand notifies on
+   * every `set` whether or not anything moved, so an unguarded write here would
+   * re-render the reading card at frame rate to tell it nothing had happened.
+   *
+   * That is the same guard `publish` already applies to the phase, and it is why
+   * this is a word index rather than a timestamp.
+   */
+  segment: number
+  word: number
+  publishNarration: (segment: number, word: number) => void
   /** Back to the start, for a replay. Called when the round mounts. */
   reset: () => void
 }
@@ -89,6 +105,8 @@ const START = {
   gateOpen: false,
   formSeq: 0,
   formWanted: 0,
+  segment: 0,
+  word: -1,
 }
 
 export const useTrainingStore = create<TrainingStore>()((set) => ({
@@ -101,6 +119,9 @@ export const useTrainingStore = create<TrainingStore>()((set) => ({
   requestBail: () => set((s) => ({ bailSeq: s.bailSeq + 1 })),
 
   requestForm: (index) => set((s) => ({ formSeq: s.formSeq + 1, formWanted: index })),
+
+  publishNarration: (segment, word) =>
+    set((s) => (s.segment === segment && s.word === word ? s : { segment, word })),
 
   openGate: () => set({ gateOpen: true }),
   closeGate: () => set({ gateOpen: false }),

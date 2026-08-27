@@ -3,6 +3,7 @@ import {
   ANSWER_LIMIT,
   CARDS,
   CARD_BODY_LIMIT,
+  cardBody,
   INSTRUCTOR_LINES,
   sameSentence,
   QUIZ,
@@ -28,8 +29,8 @@ describe('the cards', () => {
 
   it('fits its face', () => {
     for (const card of CARDS) {
-      expect(card.body.length, card.heading).toBeLessThanOrEqual(CARD_BODY_LIMIT)
-      expect(card.body.length, `${card.heading} is suspiciously short`).toBeGreaterThan(80)
+      expect(cardBody(card).length, card.heading).toBeLessThanOrEqual(CARD_BODY_LIMIT)
+      expect(cardBody(card).length, `${card.heading} is suspiciously short`).toBeGreaterThan(80)
       expect(card.heading.length).toBeLessThanOrEqual(24)
     }
   })
@@ -67,7 +68,7 @@ describe('the quiz', () => {
       never taught. A keyword test is crude, and it catches the real failure: copy
       rewritten on the cards while the quiz stays as it was.
     */
-    const reading = CARDS.map((c) => c.body).join(' ').toLowerCase()
+    const reading = CARDS.map((c) => cardBody(c)).join(' ').toLowerCase()
     for (const word of ['guess', 'next']) {
       expect(reading, `reading never mentions "${word}"`).toContain(word)
     }

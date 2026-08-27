@@ -7,36 +7,735 @@
   the sound - same beats, same subtitles, for the same length of time - because
   nothing about the script ever consults the audio.
 
-  `hash` is of the `spoken` string each file was rendered from. `voice.test.ts`
-  compares it against `INSTRUCTOR_LINES`, which is what makes it impossible to
-  change the wizard's words and leave the audio saying the old ones.
+  `hash` is of the spoken string each file was rendered from. `voice.test.ts`
+  compares it against the copy, which is what makes it impossible to change the
+  wizard's words and leave the audio saying the old ones.
+
+  `words` comes from Kokoro's own per-phoneme duration prediction rather than
+  from measuring the output or estimating from word length - see
+  `tools/voice/speak.py`. The numbers are what the vocoder was TOLD to produce,
+  so they are exact by construction.
 */
 
-export type VoiceLine = {
-  /** Served from `public/`, so it is a root-relative URL rather than an import. */
+export type VoiceWord = {
+  text: string
+  /** Seconds from the start of this clip. */
+  start: number
+  end: number
+}
+
+export type VoiceClip = {
+  /** Served from `public/`, so a root-relative URL rather than an import. */
   file: string
-  /** Seconds, measured off the encoded file. The speech beat is derived from it. */
+  /** Seconds, measured off the encoded file. */
   duration: number
+  /** Every word, in order, with the time it is spoken. */
+  words: readonly VoiceWord[]
   /** First 16 hex of sha256 over the exact spoken string. */
   hash: string
 }
 
+/** A card segment, which is one clause and the form that illustrates it. */
+export type VoiceSegment = VoiceClip & { card: number; index: number }
+
 export const VOICE = {
-  voice: "bm_george",
+  voice: "bm_fable",
   /** British English phonemes. Kokoro only WARNS if this disagrees with the voice. */
   lang: "b",
   /** Durations are only valid for the speed they were rendered at. */
   speed: 1,
+  /** What the instructor says on the way in. */
   lines: [
     {
       "file": "/voice/instructor-0.mp3",
-      "duration": 3.925,
+      "duration": 3.825,
+      "words": [
+        {
+          "text": "Ah,",
+          "start": 0.3,
+          "end": 0.487
+        },
+        {
+          "text": "an",
+          "start": 0.487,
+          "end": 0.563
+        },
+        {
+          "text": "apprentice!",
+          "start": 0.563,
+          "end": 1.387
+        },
+        {
+          "text": "Welcome",
+          "start": 1.387,
+          "end": 1.85
+        },
+        {
+          "text": "to",
+          "start": 1.85,
+          "end": 1.988
+        },
+        {
+          "text": "A.I.",
+          "start": 1.988,
+          "end": 2.388
+        },
+        {
+          "text": "training.",
+          "start": 2.388,
+          "end": 3.725
+        }
+      ],
       "hash": "aa458de7118dacc3"
     },
     {
       "file": "/voice/instructor-1.mp3",
-      "duration": 4.975,
+      "duration": 4.5,
+      "words": [
+        {
+          "text": "Two",
+          "start": 0.3,
+          "end": 0.487
+        },
+        {
+          "text": "short",
+          "start": 0.487,
+          "end": 0.775
+        },
+        {
+          "text": "scrolls,",
+          "start": 0.775,
+          "end": 1.262
+        },
+        {
+          "text": "then",
+          "start": 1.262,
+          "end": 1.4
+        },
+        {
+          "text": "one",
+          "start": 1.4,
+          "end": 1.6
+        },
+        {
+          "text": "question.",
+          "start": 1.6,
+          "end": 2.325
+        },
+        {
+          "text": "You",
+          "start": 2.325,
+          "end": 2.462
+        },
+        {
+          "text": "will",
+          "start": 2.462,
+          "end": 2.575
+        },
+        {
+          "text": "answer",
+          "start": 2.575,
+          "end": 2.9
+        },
+        {
+          "text": "it",
+          "start": 2.9,
+          "end": 3.013
+        },
+        {
+          "text": "with",
+          "start": 3.013,
+          "end": 3.138
+        },
+        {
+          "text": "an",
+          "start": 3.138,
+          "end": 3.225
+        },
+        {
+          "text": "arrow.",
+          "start": 3.225,
+          "end": 4.4
+        }
+      ],
       "hash": "67c2c6df7c869aae"
     }
-  ] as const satisfies readonly VoiceLine[],
+  ] as const satisfies readonly VoiceClip[],
+  /** The cards, narrated one clause at a time. */
+  segments: [
+    {
+      "file": "/voice/card-0-0.mp3",
+      "card": 0,
+      "index": 0,
+      "duration": 5.6,
+      "words": [
+        {
+          "text": "Behold:",
+          "start": 0.25,
+          "end": 0.9
+        },
+        {
+          "text": "a",
+          "start": 0.9,
+          "end": 0.963
+        },
+        {
+          "text": "machine",
+          "start": 0.963,
+          "end": 1.387
+        },
+        {
+          "text": "that",
+          "start": 1.387,
+          "end": 1.5
+        },
+        {
+          "text": "read",
+          "start": 1.5,
+          "end": 1.762
+        },
+        {
+          "text": "very",
+          "start": 1.762,
+          "end": 2.05
+        },
+        {
+          "text": "nearly",
+          "start": 2.05,
+          "end": 2.375
+        },
+        {
+          "text": "everything,",
+          "start": 2.375,
+          "end": 3.175
+        },
+        {
+          "text": "and",
+          "start": 3.175,
+          "end": 3.288
+        },
+        {
+          "text": "was",
+          "start": 3.288,
+          "end": 3.425
+        },
+        {
+          "text": "told",
+          "start": 3.425,
+          "end": 3.763
+        },
+        {
+          "text": "what",
+          "start": 3.763,
+          "end": 3.925
+        },
+        {
+          "text": "none",
+          "start": 3.925,
+          "end": 4.088
+        },
+        {
+          "text": "of",
+          "start": 4.088,
+          "end": 4.162
+        },
+        {
+          "text": "it",
+          "start": 4.162,
+          "end": 4.275
+        },
+        {
+          "text": "means.",
+          "start": 4.275,
+          "end": 5.5
+        }
+      ],
+      "hash": "00fa6a21a5a218b9"
+    },
+    {
+      "file": "/voice/card-0-1.mp3",
+      "card": 0,
+      "index": 1,
+      "duration": 5.05,
+      "words": [
+        {
+          "text": "Give",
+          "start": 0.25,
+          "end": 0.388
+        },
+        {
+          "text": "it",
+          "start": 0.388,
+          "end": 0.487
+        },
+        {
+          "text": "a",
+          "start": 0.487,
+          "end": 0.575
+        },
+        {
+          "text": "library",
+          "start": 0.575,
+          "end": 1.1
+        },
+        {
+          "text": "and",
+          "start": 1.1,
+          "end": 1.212
+        },
+        {
+          "text": "it",
+          "start": 1.212,
+          "end": 1.288
+        },
+        {
+          "text": "will",
+          "start": 1.288,
+          "end": 1.438
+        },
+        {
+          "text": "fetch;",
+          "start": 1.438,
+          "end": 2.1
+        },
+        {
+          "text": "give",
+          "start": 2.1,
+          "end": 2.263
+        },
+        {
+          "text": "it",
+          "start": 2.263,
+          "end": 2.375
+        },
+        {
+          "text": "time",
+          "start": 2.375,
+          "end": 2.75
+        },
+        {
+          "text": "and",
+          "start": 2.75,
+          "end": 2.862
+        },
+        {
+          "text": "it",
+          "start": 2.862,
+          "end": 2.938
+        },
+        {
+          "text": "will",
+          "start": 2.938,
+          "end": 3.05
+        },
+        {
+          "text": "work",
+          "start": 3.05,
+          "end": 3.325
+        },
+        {
+          "text": "step",
+          "start": 3.325,
+          "end": 3.6
+        },
+        {
+          "text": "by",
+          "start": 3.6,
+          "end": 3.788
+        },
+        {
+          "text": "step.",
+          "start": 3.788,
+          "end": 4.95
+        }
+      ],
+      "hash": "b2a3d47fae7d4b5c"
+    },
+    {
+      "file": "/voice/card-0-2.mp3",
+      "card": 0,
+      "index": 2,
+      "duration": 6.875,
+      "words": [
+        {
+          "text": "But",
+          "start": 0.225,
+          "end": 0.338
+        },
+        {
+          "text": "underneath",
+          "start": 0.338,
+          "end": 0.85
+        },
+        {
+          "text": "is",
+          "start": 0.85,
+          "end": 1
+        },
+        {
+          "text": "one",
+          "start": 1,
+          "end": 1.225
+        },
+        {
+          "text": "trick,",
+          "start": 1.225,
+          "end": 1.55
+        },
+        {
+          "text": "always:",
+          "start": 1.55,
+          "end": 2.325
+        },
+        {
+          "text": "guess",
+          "start": 2.325,
+          "end": 2.538
+        },
+        {
+          "text": "what",
+          "start": 2.538,
+          "end": 2.675
+        },
+        {
+          "text": "comes",
+          "start": 2.675,
+          "end": 2.975
+        },
+        {
+          "text": "next,",
+          "start": 2.975,
+          "end": 3.6
+        },
+        {
+          "text": "and",
+          "start": 3.6,
+          "end": 3.725
+        },
+        {
+          "text": "from",
+          "start": 3.725,
+          "end": 3.862
+        },
+        {
+          "text": "all",
+          "start": 3.862,
+          "end": 3.987
+        },
+        {
+          "text": "that",
+          "start": 3.987,
+          "end": 4.175
+        },
+        {
+          "text": "reading,",
+          "start": 4.175,
+          "end": 4.612
+        },
+        {
+          "text": "it",
+          "start": 4.612,
+          "end": 4.7
+        },
+        {
+          "text": "guesses",
+          "start": 4.7,
+          "end": 5.138
+        },
+        {
+          "text": "uncannily",
+          "start": 5.138,
+          "end": 5.7
+        },
+        {
+          "text": "well.",
+          "start": 5.7,
+          "end": 6.775
+        }
+      ],
+      "hash": "623a3fabbc81eceb"
+    },
+    {
+      "file": "/voice/card-1-0.mp3",
+      "card": 1,
+      "index": 0,
+      "duration": 8,
+      "words": [
+        {
+          "text": "No",
+          "start": 0.3,
+          "end": 0.525
+        },
+        {
+          "text": "wizard",
+          "start": 0.525,
+          "end": 0.875
+        },
+        {
+          "text": "wrote",
+          "start": 0.875,
+          "end": 1.087
+        },
+        {
+          "text": "its",
+          "start": 1.087,
+          "end": 1.275
+        },
+        {
+          "text": "rules.",
+          "start": 1.275,
+          "end": 2.125
+        },
+        {
+          "text": "We",
+          "start": 2.125,
+          "end": 2.275
+        },
+        {
+          "text": "hid",
+          "start": 2.275,
+          "end": 2.462
+        },
+        {
+          "text": "what",
+          "start": 2.462,
+          "end": 2.6
+        },
+        {
+          "text": "came",
+          "start": 2.6,
+          "end": 2.85
+        },
+        {
+          "text": "next",
+          "start": 2.85,
+          "end": 3.237
+        },
+        {
+          "text": "and",
+          "start": 3.237,
+          "end": 3.35
+        },
+        {
+          "text": "corrected",
+          "start": 3.35,
+          "end": 3.85
+        },
+        {
+          "text": "it,",
+          "start": 3.85,
+          "end": 4.2
+        },
+        {
+          "text": "a",
+          "start": 4.2,
+          "end": 4.3
+        },
+        {
+          "text": "trillion",
+          "start": 4.3,
+          "end": 4.7
+        },
+        {
+          "text": "times",
+          "start": 4.7,
+          "end": 5.05
+        },
+        {
+          "text": "over,",
+          "start": 5.05,
+          "end": 5.575
+        },
+        {
+          "text": "until",
+          "start": 5.575,
+          "end": 5.838
+        },
+        {
+          "text": "the",
+          "start": 5.838,
+          "end": 5.925
+        },
+        {
+          "text": "guessing",
+          "start": 5.925,
+          "end": 6.325
+        },
+        {
+          "text": "turned",
+          "start": 6.325,
+          "end": 6.625
+        },
+        {
+          "text": "uncanny.",
+          "start": 6.625,
+          "end": 7.9
+        }
+      ],
+      "hash": "db38a6d10e0bdc94"
+    },
+    {
+      "file": "/voice/card-1-1.mp3",
+      "card": 1,
+      "index": 1,
+      "duration": 4.725,
+      "words": [
+        {
+          "text": "Then",
+          "start": 0.25,
+          "end": 0.362
+        },
+        {
+          "text": "we",
+          "start": 0.362,
+          "end": 0.475
+        },
+        {
+          "text": "trained",
+          "start": 0.475,
+          "end": 0.787
+        },
+        {
+          "text": "it",
+          "start": 0.787,
+          "end": 0.875
+        },
+        {
+          "text": "again,",
+          "start": 0.875,
+          "end": 1.25
+        },
+        {
+          "text": "by",
+          "start": 1.25,
+          "end": 1.425
+        },
+        {
+          "text": "hand,",
+          "start": 1.425,
+          "end": 2.025
+        },
+        {
+          "text": "to",
+          "start": 2.025,
+          "end": 2.15
+        },
+        {
+          "text": "answer",
+          "start": 2.15,
+          "end": 2.475
+        },
+        {
+          "text": "you",
+          "start": 2.475,
+          "end": 2.675
+        },
+        {
+          "text": "rather",
+          "start": 2.675,
+          "end": 3.013
+        },
+        {
+          "text": "than",
+          "start": 3.013,
+          "end": 3.175
+        },
+        {
+          "text": "ramble",
+          "start": 3.175,
+          "end": 3.55
+        },
+        {
+          "text": "on.",
+          "start": 3.55,
+          "end": 4.625
+        }
+      ],
+      "hash": "c3fd2e4128039e76"
+    },
+    {
+      "file": "/voice/card-1-2.mp3",
+      "card": 1,
+      "index": 2,
+      "duration": 5.525,
+      "words": [
+        {
+          "text": "So",
+          "start": 0.275,
+          "end": 0.362
+        },
+        {
+          "text": "it",
+          "start": 0.362,
+          "end": 0.438
+        },
+        {
+          "text": "gives",
+          "start": 0.438,
+          "end": 0.637
+        },
+        {
+          "text": "you",
+          "start": 0.637,
+          "end": 0.738
+        },
+        {
+          "text": "what",
+          "start": 0.738,
+          "end": 0.875
+        },
+        {
+          "text": "usually",
+          "start": 0.875,
+          "end": 1.262
+        },
+        {
+          "text": "follows,",
+          "start": 1.262,
+          "end": 1.875
+        },
+        {
+          "text": "not",
+          "start": 1.875,
+          "end": 2.063
+        },
+        {
+          "text": "what",
+          "start": 2.063,
+          "end": 2.188
+        },
+        {
+          "text": "is",
+          "start": 2.188,
+          "end": 2.337
+        },
+        {
+          "text": "true.",
+          "start": 2.337,
+          "end": 3.038
+        },
+        {
+          "text": "Confident,",
+          "start": 3.038,
+          "end": 3.688
+        },
+        {
+          "text": "and",
+          "start": 3.688,
+          "end": 3.8
+        },
+        {
+          "text": "perfectly",
+          "start": 3.8,
+          "end": 4.3
+        },
+        {
+          "text": "wrong.",
+          "start": 4.3,
+          "end": 5.425
+        }
+      ],
+      "hash": "63771b73ee810027"
+    }
+  ] as const satisfies readonly VoiceSegment[],
 } as const

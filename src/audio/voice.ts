@@ -56,6 +56,7 @@ type Loaded = { buffer: AudioBuffer }
 let context: AudioContext | null = null
 let state: VoiceState = 'locked'
 let loaded: (Loaded | null)[] = []
+let segments: (Loaded | null)[] = []
 let playing: AudioBufferSourceNode | null = null
 let loading: Promise<void> | null = null
 
@@ -63,6 +64,7 @@ let loading: Promise<void> | null = null
 export function reset() {
   stop()
   loaded = []
+  segments = []
   loading = null
   if (state !== 'blocked') state = context ? 'unlocked' : 'locked'
 }
@@ -131,8 +133,7 @@ export function preload(): Promise<void> {
   if (loading) return loading
   if (!context) return Promise.resolve()
   const ctx = context
-  loading = Promise.all(
-    VOICE.lines.map(async (line, index) => {
+  const decode = async (line: { file: string; duration: number }, into: (Loaded | null)[], index: number) => {
       try {
         const res = await fetch(line.file)
         if (!res.ok) {
@@ -171,14 +172,39 @@ export function preload(): Promise<void> {
               `${line.duration}s. Re-run \`npm run bake:voice\`.`,
           )
         }
-        loaded[index] = { buffer }
+        into[index] = { buffer }
       } catch (err) {
         console.error(`[voice] ${line.file} could not be fetched`, err)
         state = 'missing'
       }
-    }),
-  ).then(() => undefined)
+  }
+
+  loading = Promise.all([
+    ...VOICE.lines.map((line, i) => decode(line, loaded, i)),
+    /*
+      The card narration is fetched with the instructor's lines rather than when a
+      card comes up. Six clips is about 200 KB, and the alternative is a fetch
+      landing in the middle of the beat it is meant to open - which on a slow
+      connection is a form that starts in silence and gains a voice halfway
+      through.
+    */
+    ...VOICE.segments.map((segment, i) => decode(segment, segments, i)),
+  ]).then(() => undefined)
   return loading
+}
+
+/**
+ * Speak one clause of a card.
+ *
+ * Indexed by card and position rather than by a flat number, so a caller cannot
+ * accidentally narrate card 1's second clause over card 0's second form - which
+ * is the kind of off-by-one that produces a round that sounds subtly wrong and
+ * looks completely fine.
+ */
+export function speakSegment(card: number, index: number) {
+  const at = VOICE.segments.findIndex((s) => s.card === card && s.index === index)
+  if (at < 0) return
+  play(segments[at])
 }
 
 /**
@@ -191,9 +217,11 @@ export function preload(): Promise<void> {
  * would bury it.
  */
 export function speak(index: number) {
-  if (state === 'declined' || !context) return
-  const entry = loaded[index]
-  if (!entry) return
+  play(loaded[index])
+}
+
+function play(entry: Loaded | null | undefined) {
+  if (state === 'declined' || !context || !entry) return
   stop()
   const source = context.createBufferSource()
   source.buffer = entry.buffer
@@ -228,10 +256,17 @@ export function voiceReport() {
     lang: VOICE.lang,
     speed: VOICE.speed,
     contextState: context?.state ?? null,
-    decoded: VOICE.lines.map((line, i) => ({
-      file: line.file,
-      manifest: line.duration,
-      decoded: loaded[i] ? +loaded[i]!.buffer.duration.toFixed(3) : null,
-    })),
+    decoded: [
+      ...VOICE.lines.map((line, i) => ({
+        file: line.file,
+        manifest: line.duration,
+        decoded: loaded[i] ? +loaded[i]!.buffer.duration.toFixed(3) : null,
+      })),
+      ...VOICE.segments.map((segment, i) => ({
+        file: segment.file,
+        manifest: segment.duration,
+        decoded: segments[i] ? +segments[i]!.buffer.duration.toFixed(3) : null,
+      })),
+    ],
   }
 }

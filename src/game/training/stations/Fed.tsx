@@ -6,7 +6,7 @@ import { palette } from '@/art/palette'
 import { kerb, mergeProp, slab } from '@/art/geometry'
 import { assertDrawable } from '@/game/world/hubLayout'
 import { MACHINE_SCALE, teachingMachineGeometry } from '../teachingMachine'
-import { BOOK_SUBJECTS } from '../dioramaCopy'
+import { BOOK_SUBJECTS, MACHINE_CHATTER } from '../dioramaCopy'
 import { loop } from '../diorama'
 import type { LiveCue } from '../specimen'
 import { StationLabel } from './StationLabel'
@@ -51,6 +51,9 @@ import { StationLabel } from './StationLabel'
 export function Fed({ cue }: { cue: LiveCue }) {
   const books = useRef<InstancedMesh>(null)
   const labels = useRef<(Group | null)[]>([])
+  const machineNode = useRef<Group>(null)
+  const nom = useRef<Group>(null)
+  const asides = useRef<(Group | null)[]>([])
 
   const machine = useMemo(
     () => assertDrawable(teachingMachineGeometry(MACHINE_SCALE), 'the teaching machine'),
@@ -149,13 +152,98 @@ export function Fed({ cue }: { cue: LiveCue }) {
       }
     }
     if (books.current) books.current.instanceMatrix.needsUpdate = true
+
+    /*
+      **The machine is alive, and the point is that it is only just alive.**
+
+      A hopper that eats books and does not move is a picture of a hopper. The
+      brief asked for something "slightly living" that gobbles, and the whole
+      difficulty is the word slightly: this thing sits in the middle of the frame
+      for five seconds at a time with a paragraph being read over it, so anything
+      big enough to notice consciously is big enough to distract from the words.
+
+      Three layers, smallest to largest, and none of them is a keyframe:
+
+      1. **A tremor.** Sub-millimetre, fast, and irrational against everything
+         else so it never lands on a beat. This is what stops the machine reading
+         as a still image between bites.
+      2. **A sway.** A slow lean, forward and back on one period and side to side
+         on another. The two are deliberately coprime-ish so the pair never
+         repeats inside a dwell, which is what separates "breathing" from
+         "looping".
+      3. **A bite**, on the beat a book goes in. Everything else is idle; this one
+         is caused, and a viewer reads the causation without being told.
+    */
+    const machine = machineNode.current
+    if (machine) {
+      const t = Math.max(0, local)
+
+      /*
+        The bite. A book is swallowed every `BELT_PERIOD / count`, so this rides
+        the same clock the belt does rather than a timer of its own - two clocks
+        for one event is how the mouth ends up chewing between books.
+      */
+      const chew = loop(t, BELT_PERIOD / BOOK_SUBJECTS.length)
+      const bite = chew > BITE_AT ? Math.sin(((chew - BITE_AT) / (1 - BITE_AT)) * Math.PI) : 0
+
+      const tremor = Math.sin(t * 37.1) * TREMOR + Math.sin(t * 23.7 + 1.7) * TREMOR * 0.6
+      machine.position.set(tremor, Math.sin(t * 29.3 + 0.6) * TREMOR - bite * 0.03, 0)
+
+      /*
+        Squash on the bite: down and wide, which is what a soft thing does when it
+        swallows. `tuning.ts` has the same shape for the character's landing, and
+        reusing the vocabulary is what makes a machine in this world read as made
+        of the same stuff the robot is.
+      */
+      machine.scale.set(1 + bite * 0.035, 1 - bite * 0.055, 1 + bite * 0.035)
+
+      machine.rotation.set(
+        Math.sin(t * 0.83) * SWAY + bite * 0.06,
+        0,
+        Math.sin(t * 0.61 + 2.1) * SWAY,
+      )
+
+      /*
+        **The chatter, and it rides the same clock the bite does.**
+
+        `nom nom nom` appears on the swallow and goes with it, so it reads as the
+        machine reacting rather than as a caption that happens to be there. It
+        drifts up and out as it fades, which is the one gesture everybody already
+        reads as a sound effect.
+      */
+      const nomNode = nom.current
+      if (nomNode) {
+        nomNode.visible = lit > 0.05 && bite > 0.08
+        nomNode.position.set(NOM_AT[0], NOM_AT[1] + bite * 0.1, NOM_AT[2])
+        nomNode.scale.setScalar(0.85 + bite * 0.2)
+      }
+
+      /*
+        The asides come BETWEEN bites and only sometimes, which is what keeps them
+        funny. One book in three, chosen by the swallow count rather than at
+        random - a diagram that says something different every time you look at it
+        is a diagram nobody trusts, and `Math.random` in a `useFrame` would also
+        make this un-photographable.
+      */
+      const swallows = Math.floor(t / (BELT_PERIOD / BOOK_SUBJECTS.length))
+      const speaking = swallows % 3 === 1 ? Math.floor(swallows / 3) % MACHINE_CHATTER.asides.length : -1
+      for (let i = 0; i < MACHINE_CHATTER.asides.length; i++) {
+        const node = asides.current[i]
+        if (!node) continue
+        const on = i === speaking && bite < 0.08
+        node.visible = lit > 0.05 && on
+        node.position.set(ASIDE_AT[0], ASIDE_AT[1] + Math.sin(t * 1.7) * 0.02, ASIDE_AT[2])
+      }
+    }
   })
 
   return (
     <group>
-      <mesh geometry={machine} castShadow receiveShadow>
-        <meshPhysicalMaterial {...shell(palette.shell)} />
-      </mesh>
+      <group ref={machineNode}>
+        <mesh geometry={machine} castShadow receiveShadow>
+          <meshPhysicalMaterial {...shell(palette.shell)} />
+        </mesh>
+      </group>
 
       {/*
         Matte, not emissive. The belt is a surface, not a light - and
@@ -185,6 +273,26 @@ export function Fed({ cue }: { cue: LiveCue }) {
         */}
         <meshPhysicalMaterial {...mattePlastic(palette.hardware)} />
       </instancedMesh>
+
+      {/*
+        The machine's own commentary. Outside the articulating group on purpose:
+        it should hover beside the machine rather than lurch with it, because
+        speech that swayed with the speaker would read as attached furniture.
+      */}
+      <group ref={nom} visible={false}>
+        <StationLabel text={MACHINE_CHATTER.bite} size={CHATTER_SIZE} colour="#ffd18a" />
+      </group>
+      {MACHINE_CHATTER.asides.map((line, i) => (
+        <group
+          key={line}
+          visible={false}
+          ref={(node) => {
+            asides.current[i] = node
+          }}
+        >
+          <StationLabel text={line} size={CHATTER_SIZE * 0.86} colour="#a9c4ea" />
+        </group>
+      ))}
 
       {BOOK_SUBJECTS.map((subject, i) => (
         <group
@@ -255,3 +363,37 @@ const SWALLOW_AT = 0.1
 
 /** Where along the belt the subject is lost. See the note at the visibility write. */
 const SUBJECT_LOST_AT = 0.82
+
+/**
+ * How far the machine moves when it is doing nothing, in its own units.
+ *
+ * `TREMOR` is about a millimetre once drawn, which is under a pixel at the
+ * reading camera - it is felt rather than seen, and that is the intent. `SWAY` is
+ * a degree and a half of lean, which is enough to read as weight shifting and not
+ * enough to look like the thing is falling over.
+ *
+ * Both are deliberately at the bottom of what is visible. There is a paragraph
+ * being narrated over this and a nameplate under it; a machine that demands
+ * attention while a sentence is being read is a machine competing with the
+ * lesson it exists to illustrate.
+ */
+const TREMOR = 0.0045
+const SWAY = 0.026
+
+/** How late in a book's approach the bite begins. The last sixth of its run. */
+const BITE_AT = 0.84
+
+/**
+ * Where the machine's commentary sits, and how big it is.
+ *
+ * Above and to the machine's own side - `+X` is screen left, so a positive x
+ * puts the speech to the LEFT of the hopper, clear of the belt that runs in from
+ * the right. Nothing else occupies that corner of this form, which is why the
+ * form can carry a joke without crowding the diagram.
+ *
+ * Smaller than a book's title, because it is an aside rather than a label: it is
+ * the machine talking, not the exhibit naming something.
+ */
+const NOM_AT: [number, number, number] = [0.46, 0.86, 0.06]
+const ASIDE_AT: [number, number, number] = [0.52, 0.7, 0.06]
+const CHATTER_SIZE = 0.062

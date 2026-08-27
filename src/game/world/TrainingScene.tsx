@@ -31,9 +31,10 @@ import { QUIZ } from '@/game/training/cards'
 import { Headline } from '@/game/training/Headline'
 import { Instructor } from '@/game/training/Instructor'
 import { instructorVisible } from '@/game/training/instructorPath'
-import { FORM_DWELL } from '@/game/training/specimen'
+import { formStart, litForm } from '@/game/training/specimen'
 import { useTrainingStore } from '@/game/training/trainingStore'
-import { preload, reset as resetVoice, speak, stop as stopVoice, unlock } from '@/audio/voice'
+import { preload, reset as resetVoice, speak, speakSegment, stop as stopVoice, unlock } from '@/audio/voice'
+import { VOICE } from '@/audio/voiceManifest'
 import {
   initialTrainingState,
   stepTraining,
@@ -105,6 +106,7 @@ export function TrainingScene() {
   const setPlayerHidden = useGameStore((s) => s.setPlayerHidden)
   const completeLesson = useGameStore((s) => s.completeLesson)
   const publish = useTrainingStore((s) => s.publish)
+  const publishNarration = useTrainingStore((s) => s.publishNarration)
   const resetRound = useTrainingStore((s) => s.reset)
 
   const run = useRef<TrainingState>(initialTrainingState())
@@ -114,6 +116,8 @@ export function TrainingScene() {
   const left = useRef(false)
   /** The phase the voice last acted on, so a line is spoken once per beat. */
   const spoke = useRef<Phase>('arriving')
+  /** The clause the voice last started, as `card * 3 + index`. */
+  const narrating = useRef(-1)
   /** Latched too. The completion is written once, on the frame the win lands. */
   const recorded = useRef(false)
   /** The live aim point, shared by the bow, the reticle and the shot. */
@@ -266,7 +270,7 @@ export function TrainingScene() {
     if (store.formSeq !== seen.current.form) {
       seen.current.form = store.formSeq
       if (run.current.phase === 'reading') {
-        run.current = { ...run.current, elapsed: store.formWanted * FORM_DWELL }
+        run.current = { ...run.current, elapsed: formStart(run.current.card, store.formWanted) }
       }
     }
 
@@ -301,6 +305,45 @@ export function TrainingScene() {
       leaves a wizard talking over the diorama's arrival unless something cuts him
       off. That is the most likely thing a player does to a preamble.
     */
+    /*
+      **The narration, and the word the highlight is on.**
+
+      A clause begins when its form's window opens, which is also when the form's
+      dwell begins - the two are the same event because the dwell IS the clause's
+      length. So the edge to watch is the form index changing, not a phase.
+
+      The word index comes from the ROUND's clock rather than from the audio's.
+      That is deliberate and it is what makes the highlight work identically with
+      the sound off: `local` and the clip's timings are both derived from the same
+      baked durations, so they agree by construction, and a player who declined
+      the voice still watches the words light up in time with a wizard they cannot
+      hear. Reading `AudioContext.currentTime` instead would have made the whole
+      feature contingent on an mp3 that is allowed to 404.
+    */
+    if (run.current.phase === 'reading') {
+      const index = litForm(run.current.card, run.current.elapsed)
+      const at = run.current.card * 3 + index
+      if (at !== narrating.current) {
+        narrating.current = at
+        speakSegment(run.current.card, index)
+      }
+      const clip = VOICE.segments.find(
+        (s) => s.card === run.current.card && s.index === index,
+      )
+      if (clip) {
+        const local = run.current.elapsed - formStart(run.current.card, index)
+        let word = -1
+        for (let i = 0; i < clip.words.length; i++) {
+          if (local >= clip.words[i].start) word = i
+          else break
+        }
+        publishNarration(at, word)
+      }
+    } else if (narrating.current !== -1) {
+      narrating.current = -1
+      publishNarration(-1, -1)
+    }
+
     if (run.current.phase !== spoke.current) {
       const previous = spoke.current
       spoke.current = run.current.phase

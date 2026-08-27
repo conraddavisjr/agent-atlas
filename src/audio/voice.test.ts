@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { VOICE } from './voiceManifest'
-import { INSTRUCTOR_LINES } from '@/game/training/cards'
+import { CARDS, INSTRUCTOR_LINES, segmentSpoken, shownWords } from '@/game/training/cards'
 import { DURATIONS, VOICE_TAIL, initialTrainingState, stepTraining } from '@/game/training/trainingMachine'
 
 /*
@@ -57,9 +57,72 @@ describe('the baked voice matches the copy it was baked from', () => {
       re-bake at different settings is visible in the diff rather than being a
       round whose beats are half a second wrong on every playthrough.
     */
-    expect(VOICE.voice).toBe('bm_george')
+    expect(VOICE.voice).toBe('bm_fable')
     expect(VOICE.lang).toBe('b')
     expect(VOICE.speed).toBe(1)
+  })
+
+  it('narrates every card segment, and from the segment\'s own words', () => {
+    /*
+      Six clips, two cards of three clauses. Each clause is illustrated by one
+      form and narrated while that form is on the stage, so a missing one is a
+      form with nothing being said over it - and, because the dwells are derived
+      from these durations, a form with no length either.
+    */
+    const segments = CARDS.flatMap((card, c) =>
+      card.segments.map((segment, i) => ({ c, i, segment })),
+    )
+    expect(VOICE.segments).toHaveLength(segments.length)
+    for (const { c, i, segment } of segments) {
+      const clip = VOICE.segments.find((s) => s.card === c && s.index === i)
+      expect(clip, `card ${c} segment ${i} was never baked`).toBeDefined()
+      expect(clip!.hash, `card ${c} segment ${i} was baked from different words`).toBe(
+        hashOf(segmentSpoken(segment)),
+      )
+    }
+  })
+
+  it('gives every clip word timings that stay inside it and never go backwards', () => {
+    /*
+      **These are what the highlighting rides on**, and a bad one is invisible
+      until somebody watches the words drift out of step with the voice.
+
+      They come from Kokoro's own per-phoneme duration prediction rather than
+      from measuring the output, so they are exact by construction - which is
+      exactly the kind of claim that deserves an assertion rather than trust.
+    */
+    for (const clip of [...VOICE.lines, ...VOICE.segments]) {
+      expect(clip.words.length, `${clip.file} has no words`).toBeGreaterThan(0)
+      let last = 0
+      for (const word of clip.words) {
+        expect(word.start, `${clip.file}: ${word.text} starts before the last word`)
+          .toBeGreaterThanOrEqual(last - 1e-6)
+        expect(word.end, `${clip.file}: ${word.text} ends before it starts`)
+          .toBeGreaterThanOrEqual(word.start)
+        last = word.start
+      }
+      const final = clip.words[clip.words.length - 1]
+      expect(final.end, `${clip.file}: the last word ends after the audio does`)
+        .toBeLessThanOrEqual(clip.duration + 0.05)
+    }
+  })
+
+  it('says every word the subtitle shows', () => {
+    /*
+      The highlight indexes the SHOWN words and the timings index the SPOKEN ones,
+      so the two lists have to be the same length or the highlight lands on the
+      wrong word - a failure that looks like bad timing rather than like bad data.
+    */
+    CARDS.forEach((card, c) => {
+      card.segments.forEach((segment, i) => {
+        const clip = VOICE.segments.find((s) => s.card === c && s.index === i)!
+        const spokenTokens = shownWords(segment.shown).filter((w) => w.spoken).length
+        expect(
+          clip.words.length,
+          `card ${c} segment ${i}: ${clip.words.length} timed vs ${spokenTokens} spoken tokens`,
+        ).toBe(spokenTokens)
+      })
+    })
   })
 })
 

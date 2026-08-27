@@ -25,10 +25,84 @@
  * actually is - are deliberately left on the table for it.
  */
 
+/**
+ * One clause of a card, and the form it is illustrated by.
+ *
+ * A card is three of these because the illustration is three forms, and the
+ * whole premise of the diorama is that each form is one clause of the paragraph
+ * made literal. Splitting the paragraph HERE rather than at read time is what
+ * makes that mapping a fact instead of an intention: the segments are what the
+ * wizard narrates, one at a time, and each one's measured duration is how long
+ * its form holds the stage.
+ *
+ * Before this, the paragraph was one string and the three forms ran on a fixed
+ * 5 s timer, so the picture and the words were only ever loosely in step.
+ */
+export type Segment = {
+  /** What the subtitle shows. */
+  shown: string
+  /**
+   * What the synthesiser is handed, when that has to differ.
+   *
+   * Omitted when the two are the same, which is most of the time. See
+   * `INSTRUCTOR_LINES` for the two edits a phonemiser actually needs and the
+   * test chain that stops them drifting into different sentences.
+   */
+  spoken?: string
+}
+
 export type Card = {
   /** Shown small above the body, so the player knows where they are. */
   heading: string
-  body: string
+  /**
+   * The paragraph, in the three clauses its three forms illustrate.
+   *
+   * `body` is derived from this rather than stored beside it, so the two cannot
+   * disagree - which they would, eventually, and silently.
+   */
+  segments: readonly [Segment, Segment, Segment]
+}
+
+/** The paragraph as one string, for anything that wants to read it whole. */
+export const cardBody = (card: Card): string =>
+  card.segments.map((s) => s.shown).join(' ')
+
+/** What the synthesiser is handed for a segment. */
+export const segmentSpoken = (segment: Segment): string => segment.spoken ?? segment.shown
+
+export type ShownWord = {
+  /** Exactly as it appears in the paragraph, punctuation included. */
+  text: string
+  /**
+   * Whether the voice says this token, and therefore whether it has a timing.
+   *
+   * False for anything with no letters or digits in it. The project's plain dash
+   * is the case that matters: `guess what comes next - and from all that reading`
+   * shows a standalone `-` that the spoken form replaces with a comma, so the
+   * paragraph has twenty whitespace-separated tokens and the audio has nineteen
+   * words.
+   */
+  spoken: boolean
+}
+
+/**
+ * The paragraph split the way the highlight has to index it.
+ *
+ * **This exists because the two lists must not be allowed to differ.** The
+ * highlight walks the SHOWN text and the timings come from the SPOKEN text, and
+ * if a reader's word 12 is the voice's word 11 then every highlight after the
+ * dash lands on the wrong word - which looks like bad timing rather than like bad
+ * data, and would be chased in the wrong file.
+ *
+ * `voice.test.ts` asserts that the number of spoken tokens here equals the number
+ * of words the bake produced, for every segment, so the two cannot drift apart
+ * without a test going red.
+ */
+export function shownWords(text: string): ShownWord[] {
+  return text
+    .trim()
+    .split(/\s+/)
+    .map((word) => ({ text: word, spoken: /[a-z0-9]/i.test(word) }))
 }
 
 /**
@@ -53,12 +127,37 @@ export const CARDS: readonly Card[] = [
       a live research dispute about internal representations. The replacement makes
       a claim about what we DID to the machine rather than about its inner life,
       and nobody disputes that we never told it what any of it means.
+
+      The three segments are FED, FETCHED and GUESSED in order, and that ordering
+      is load-bearing rather than tidy: each one is narrated while its own form is
+      on the stage.
     */
-    body:
-      'Behold: a machine that read very nearly everything, and was told what none ' +
-      'of it means. Give it a library and it will fetch; give it time and it will ' +
-      'work step by step. But underneath is one trick, always: guess what comes ' +
-      'next - and from all that reading, it guesses uncannily well.',
+    segments: [
+      {
+        shown:
+          'Behold: a machine that read very nearly everything, and was told what ' +
+          'none of it means.',
+      },
+      {
+        shown:
+          'Give it a library and it will fetch; give it time and it will work ' +
+          'step by step.',
+      },
+      {
+        shown:
+          'But underneath is one trick, always: guess what comes next - and from ' +
+          'all that reading, it guesses uncannily well.',
+        /*
+          The project's plain dash is a typographic convention no grapheme-to-
+          phoneme front end understands - it becomes silence or a mispronunciation
+          - so it becomes a comma, which is a prosodic cue that means the same
+          thing to a listener.
+        */
+        spoken:
+          'But underneath is one trick, always: guess what comes next, and from ' +
+          'all that reading, it guesses uncannily well.',
+      },
+    ],
   },
   {
     heading: 'THE SECOND TRUTH',
@@ -73,12 +172,30 @@ export const CARDS: readonly Card[] = [
       rules" overclaim. Nobody wrote the weights - but people very deliberately
       trained it to answer you rather than continue your sentence, and that second
       stage is the whole reason the thing behaves like an assistant at all.
+
+      Split into three on sentence boundaries, which is where a narrator would
+      breathe anyway. The mapping to HIDDEN / CORRECTED / CONFIDENT is looser than
+      card 0's because this card's three forms do not exist yet - see
+      `TeachingStage.tsx`.
     */
-    body:
-      'No wizard wrote its rules. We hid what came next and corrected it, a ' +
-      'trillion times over, until the guessing turned uncanny. Then we trained it ' +
-      'again, by hand, to answer you rather than ramble on. So it gives you what ' +
-      'USUALLY follows - not what is true. Confident, and perfectly wrong.',
+    segments: [
+      {
+        shown:
+          'No wizard wrote its rules. We hid what came next and corrected it, a ' +
+          'trillion times over, until the guessing turned uncanny.',
+      },
+      {
+        shown: 'Then we trained it again, by hand, to answer you rather than ramble on.',
+      },
+      {
+        shown:
+          'So it gives you what USUALLY follows - not what is true. Confident, ' +
+          'and perfectly wrong.',
+        spoken:
+          'So it gives you what usually follows, not what is true. Confident, ' +
+          'and perfectly wrong.',
+      },
+    ],
   },
 ]
 

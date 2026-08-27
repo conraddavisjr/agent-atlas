@@ -1,3 +1,4 @@
+import { VOICE } from '@/audio/voiceManifest'
 import { DURATIONS, type TrainingState } from './trainingMachine'
 
 /**
@@ -57,37 +58,85 @@ export const SPECIMEN_NAME = 'teaching-specimen'
 export const FORM_COUNT = 3
 
 /**
- * How long each form holds the stage, in seconds.
- *
- * A DWELL rather than the stagger it replaced - nothing accumulates any more,
- * because there is only ever one form on stage.
- *
- * **Five, and it was two and a half.** Two and a half was the number asked for
- * before anyone had watched it at the specimen's size, and at that size it turned
- * out to be a slideshow: the eye needs a moment to find a form that has just
- * arrived before it can start reading it, and the form's own argument then has to
- * play out inside what is left. Five gives each form a full pass of its animation
- * with room to watch it twice.
- *
- * A full pass of a card is now 15 s against a 300-character paragraph that takes
- * about 17 s to read, so the picture still finishes with the words rather than
- * leaving a reader waiting on a diagram.
- */
-export const FORM_DWELL = 5
-
-/**
  * How long the change-over takes, in seconds, out and in together.
  *
- * Half of it is the outgoing form leaving and half is the incoming one arriving,
- * so each direction gets `FORM_CROSS / 2`. Chosen rather than derived, and
- * pinned by a test at `FORM_CROSS < FORM_DWELL / 4` so that at least three
- * quarters of every beat is a still, readable form.
+ * Half of it is the outgoing form leaving and half is the incoming one arriving.
+ * Chosen rather than derived, and pinned by a test at `FORM_CROSS < dwell / 4`
+ * for every form, so that at least three quarters of every beat is a still,
+ * readable picture however long the clause over it turns out to be.
  */
 export const FORM_CROSS = 0.45
 
+/**
+ * How long each form holds the stage, in seconds.
+ *
+ * ## It is the length of the sentence being said over it
+ *
+ * This was a single authored number - 2.5, then 5 - and a form's own animation
+ * had to fit whatever it was. That is backwards. The premise of the whole diorama
+ * is that each form is one clause of the paragraph made literal, so the honest
+ * length of a form is however long that clause takes to say.
+ *
+ * `VOICE.segments` carries a measured duration per clause, baked from the same
+ * copy the subtitle shows. So FED holds the stage for as long as "Behold: a
+ * machine that read very nearly everything..." takes, and GUESSED - the longest
+ * clause - gets nearly two seconds more than it.
+ *
+ * **This applies whether or not any sound is playing.** The manifest is compiled
+ * into the bundle; the mp3s are runtime fetches. A player who declines the voice
+ * gets the same beats, in the same order, for the same length of time - and the
+ * word highlighting still runs, because it is driven by this clock rather than by
+ * the audio. See `src/audio/voice.ts`.
+ */
+export function formDwell(card: number, index: number): number {
+  const segment = VOICE.segments.find((s) => s.card === card && s.index === index)
+  /*
+    A card with no narration falls back to the longest one there is, rather than
+    to a tidy round number. A missing segment means the bake and the copy have
+    diverged, which `voice.test.ts` fails on - so this is the shape of a bug, and
+    it should look like the round is waiting rather than rushing.
+  */
+  if (!segment) return FALLBACK_DWELL
+  return segment.duration + SEGMENT_TAIL
+}
+
+/**
+ * A beat of quiet after a clause, before the picture changes.
+ *
+ * The form's argument does not land on the last syllable - `FETCHED` finishes its
+ * second errand a little after the sentence describing it ends - so a change-over
+ * that began the instant the voice stopped would cut the picture off mid-gesture.
+ * It also stops the round feeling like a queue of sentences.
+ */
+export const SEGMENT_TAIL = 0.8
+
+/** Only reachable when the manifest and the copy have diverged. See `formDwell`. */
+const FALLBACK_DWELL = 6
+
+/** Where a form's window opens, in seconds from the start of the card. */
+export function formStart(card: number, index: number): number {
+  let at = 0
+  for (let i = 0; i < index; i++) at += formDwell(card, i)
+  return at
+}
+
 /** One full pass through a card's three forms, in seconds. */
-export function specimenRunTime(): number {
-  return FORM_COUNT * FORM_DWELL
+export function specimenRunTime(card = 0): number {
+  return formStart(card, FORM_COUNT)
+}
+
+/**
+ * The window a form's own animation has to land its argument inside.
+ *
+ * Per form now, because the dwells are. A form is only readable while it is fully
+ * present, so its argument - the label released, the second errand completed, the
+ * winner landing in the blank - has to finish inside the dwell minus the
+ * change-over. `Guessed` locked at 3.22 s against a 2.05 s window once, which
+ * meant the fan filled and faded away unresolved on every appearance with nothing
+ * reporting it.
+ */
+export function formWindow(card: number, index: number): number {
+  return formDwell(card, index) - FORM_CROSS
 }
 
 export type FormCue = {
@@ -144,32 +193,37 @@ const clamp01 = (v: number) => Math.min(1, Math.max(0, v))
  * On every later pass form 0 fades in normally, because by then it is following
  * form 2 rather than following an empty stage.
  */
-export function formCue(index: number, elapsed: number): FormCue {
+export function formCue(card: number, index: number, elapsed: number): FormCue {
   const t = Math.max(0, elapsed)
-  const period = specimenRunTime()
-  const since = (((t - index * FORM_DWELL) % period) + period) % period
-  if (since >= FORM_DWELL) return { presence: 0, local: 0 }
+  const period = specimenRunTime(card)
+  const start = formStart(card, index)
+  const dwell = formDwell(card, index)
+  const since = (((t - start) % period) + period) % period
+  if (since >= dwell) return { presence: 0, local: 0 }
 
   const half = FORM_CROSS / 2
-  const firstEver = index === 0 && t < FORM_DWELL
+  const firstEver = index === 0 && t < dwell
   const rise = firstEver ? 1 : clamp01(since / half)
-  const fall = clamp01((FORM_DWELL - since) / half)
+  const fall = clamp01((dwell - since) / half)
   return { presence: Math.min(rise, fall), local: since }
 }
 
 /**
- * Which form is nearest to being the point, for the nameplate.
+ * Which form is nearest to being the point, for the nameplate and the narration.
  *
  * The word row lights the form that is on stage, and during a change-over there
- * is a moment when nothing is. Rounding to the nearest window rather than
- * reading `presence` keeps the lit word from flickering off and back on across
- * the seam: the words are an argument in an order and the reader's place in it
- * should not blink.
+ * is a moment when nothing is. Rounding to the nearest window rather than reading
+ * `presence` keeps the lit word from flickering off and back on across the seam:
+ * the words are an argument in an order and the reader's place in it should not
+ * blink.
  */
-export function litForm(elapsed: number): number {
-  const period = specimenRunTime()
+export function litForm(card: number, elapsed: number): number {
+  const period = specimenRunTime(card)
   const t = ((Math.max(0, elapsed) % period) + period) % period
-  return Math.min(FORM_COUNT - 1, Math.floor(t / FORM_DWELL))
+  for (let i = FORM_COUNT - 1; i >= 0; i--) {
+    if (t >= formStart(card, i)) return i
+  }
+  return 0
 }
 
 /**
@@ -312,16 +366,22 @@ export type FormFrame = {
 export const FORM_FRAME: readonly FormFrame[] = [
   /*
     FED. It argues when a titled book has ridden the belt and been swallowed
-    without its subject - six books staggered over a 4.2 s belt means one arrives
-    every 0.7 s, so a couple of them is well inside a second and a half.
+    without its subject - five books staggered over a 4.2 s belt means one arrives
+    every 0.84 s, so a couple of them is well inside a second and a half.
+
+    The box grew when the machine learned to talk: `nom nom nom` sits to its left
+    and reaches above the hopper, so the form is a third taller and a little wider
+    than the belt alone. Measured with `__dev.specimen()` across a full cycle, not
+    read off the constants - the chatter only exists for part of a bite, which is
+    exactly the kind of content a rest-pose box misses.
   */
-  { minY: 0, maxY: 0.718, width: 2.22, centreX: -0.8, argueAt: 1.4 },
+  { minY: 0, maxY: 0.991, width: 2.635, centreX: -0.559, argueAt: 1.4 },
   /*
     FETCHED. It argues when BOTH errands have been shown - the straight grab and
     the same job done step by step - which is two `ROUTE_PERIOD`s. The paragraph
     names two things and a viewer who saw one of them learned half a sentence.
   */
-  { minY: 0, maxY: 1.21, width: 1.5, centreX: -0.1, argueAt: 4.2 },
+  { minY: 0, maxY: 1.21, width: 1.5, centreX: -0.1, argueAt: 5.2 },
   /*
     GUESSED. Its machine stands ON the base plane now, where it used to be mounted
     at 0.36 and float most of a metre above the nameplate. It argues when the
@@ -382,18 +442,3 @@ export function formOffset(index: number): [number, number, number] {
   const scale = formScale(index)
   return [-frame.centreX * scale, -frame.minY * scale, 0]
 }
-
-/**
- * The window a form's own animation has to complete inside, in seconds.
- *
- * A form is readable only while it is fully present, so its argument - the label
- * released, the route completed, the winner locked - has to land inside the
- * dwell minus the change-over. `Guessed` locked at 3.22 s against a 2.05 s
- * window before the retiming, which meant the player would have watched a fan
- * fill and never resolve, three times a round, with nothing reporting it.
- *
- * The forms' CYCLES are allowed to be longer than this. A loop that gets cut off
- * by the fade and starts again next time is fine; an argument that never lands
- * is not.
- */
-export const FORM_WINDOW = FORM_DWELL - FORM_CROSS

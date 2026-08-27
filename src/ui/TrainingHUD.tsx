@@ -1,7 +1,7 @@
 import { useEffect, type CSSProperties } from 'react'
 import { useGameStore } from '@/state/gameStore'
 import { useTrainingStore } from '@/game/training/trainingStore'
-import { CARDS, INSTRUCTOR_LINES, QUIZ } from '@/game/training/cards'
+import { CARDS, INSTRUCTOR_LINES, QUIZ, shownWords } from '@/game/training/cards'
 import { decline, preload, unlock } from '@/audio/voice'
 import { CARD_COUNT } from '@/game/training/trainingMachine'
 import { LAYER } from './layers'
@@ -45,6 +45,8 @@ export function TrainingHUD() {
   const requestAdvance = useTrainingStore((s) => s.requestAdvance)
   const requestBail = useTrainingStore((s) => s.requestBail)
   const audio = useGameStore((s) => s.audio)
+  const segment = useTrainingStore((s) => s.segment)
+  const word = useTrainingStore((s) => s.word)
   const setAudio = useGameStore((s) => s.setAudio)
 
   useEffect(() => {
@@ -148,7 +150,9 @@ export function TrainingHUD() {
         */
         <div style={styles.card}>
           <div style={styles.cardHeading}>{CARDS[Math.min(card, CARD_COUNT - 1)].heading}</div>
-          <div style={styles.cardBody}>{CARDS[Math.min(card, CARD_COUNT - 1)].body}</div>
+          <div style={styles.cardBody}>
+            <ReadAlong card={Math.min(card, CARD_COUNT - 1)} segment={segment} word={word} />
+          </div>
         </div>
       )}
 
@@ -233,9 +237,10 @@ export function TrainingHUD() {
           }
         }}
         aria-label={audio === 'on' ? 'Mute the instructor' : 'Let the instructor speak'}
+        aria-pressed={audio === 'on'}
         title={audio === 'on' ? 'Mute the instructor' : 'Let the instructor speak'}
       >
-        {audio === 'on' ? 'Sound on' : 'Sound off'}
+        <MicIcon muted={audio !== 'on'} />
       </button>
 
       <button style={styles.exit} onClick={requestBail}>
@@ -405,14 +410,16 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: 'inherit',
   },
   sound: {
+    display: 'grid',
+    placeItems: 'center',
     pointerEvents: 'auto',
     position: 'absolute',
     top: 18,
     /* Left of `Esc to leave`, which keeps its corner. */
-    right: 132,
+    right: 116,
     ...panel,
-    padding: '8px 14px',
-    fontSize: '0.78rem',
+    padding: 7,
+    lineHeight: 0,
     cursor: 'pointer',
     fontFamily: 'inherit',
     color: 'inherit',
@@ -427,4 +434,118 @@ const styles: Record<string, CSSProperties> = {
     fontSize: '0.78rem',
     cursor: 'pointer',
   },
+}
+
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The reading card's paragraph, with the words lighting as they are said.
+ *
+ * ## A trailing window rather than one bouncing word
+ *
+ * A single word moving through a paragraph is the thing the brief called "big
+ * dancing text", and it is worse than it sounds when there is an animation to
+ * watch beside it: the eye is dragged word by word and never gets to look at the
+ * picture the words are describing.
+ *
+ * So the highlight is a short trail. The word being said is brightest, the three
+ * behind it fall away, and everything else sits at the paragraph's own strength.
+ * The effect is a soft bloom moving through the text rather than a cursor, which
+ * a reader can follow or ignore.
+ *
+ * ## It is deliberately faint
+ *
+ * The brightest state is barely above the body colour. There is a diagram doing
+ * the teaching two feet away and this is a subtitle: it needs to say WHERE the
+ * voice is, not compete for the frame. Nothing here changes size, weight or
+ * background, because all three reflow or flicker and any of them would pull the
+ * eye off the exhibit.
+ *
+ * ## It runs with the sound off
+ *
+ * `word` comes from the round's clock, not from the audio's. Both are derived
+ * from the same baked durations, so they agree by construction - and a player who
+ * declined the voice still gets the paragraph read to them at the pace it would
+ * have been spoken. See `TrainingScene`.
+ */
+function ReadAlong({ card, segment, word }: { card: number; segment: number; word: number }) {
+  const segments = CARDS[card].segments
+  /* Which clause the voice is in, as an index into this card's three. */
+  const active = segment >= 0 ? segment - card * 3 : -1
+
+  return (
+    <>
+      {segments.map((piece, index) => {
+        const words = shownWords(piece.shown)
+        const isActive = index === active
+        /*
+          Spoken-token indices, not token indices. The paragraph shows a standalone
+          dash that the voice replaces with a comma, so the two lists differ by one
+          from that point on - see `shownWords`, which exists for this.
+        */
+        let spokenIndex = -1
+        const rendered = words.map((token, w) => {
+          if (token.spoken) spokenIndex += 1
+          const behind = isActive && token.spoken ? word - spokenIndex : Number.NEGATIVE_INFINITY
+          const strength = behind >= 0 && behind < TRAIL.length ? TRAIL[behind] : 0
+          return (
+            <span
+              key={`${index}-${w}`}
+              style={strength > 0 ? { color: `rgba(255, 255, 255, ${strength})` } : undefined}
+            >
+              {token.text}
+              {w < words.length - 1 ? ' ' : ''}
+            </span>
+          )
+        })
+        return (
+          <span key={index} style={{ opacity: active === -1 || isActive ? 1 : 0.72 }}>
+            {rendered}
+            {index < segments.length - 1 ? ' ' : ''}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
+/**
+ * How bright the current word is, and the three behind it.
+ *
+ * The falloff is what makes it a trail rather than a cursor. The body sits at
+ * `rgba(226, 236, 255, 0.78)`, so even the leading value is a lift of about a
+ * fifth - enough to follow, not enough to read as a marker.
+ */
+const TRAIL = [0.98, 0.9, 0.84, 0.8]
+
+/**
+ * A microphone, drawn rather than typed.
+ *
+ * Full white, because it is a control rather than a status: the muted state gets
+ * a slash through it and the same weight. An icon that dimmed when muted would be
+ * saying the same thing twice and would be harder to hit with the eye.
+ *
+ * Inline SVG rather than a glyph or an image - it is fourteen pixels of line art,
+ * it has to sit on a dark panel without a background, and a font emoji would
+ * render differently on every platform this runs on.
+ */
+function MicIcon({ muted }: { muted: boolean }) {
+  return (
+    <svg
+      width="17"
+      height="17"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="#ffffff"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="9" y="2.5" width="6" height="11" rx="3" />
+      <path d="M5.5 11a6.5 6.5 0 0 0 13 0" />
+      <path d="M12 17.5V21" />
+      {muted && <path d="M4 20 20 4" />}
+    </svg>
+  )
 }

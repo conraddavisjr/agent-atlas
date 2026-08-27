@@ -14,7 +14,7 @@ import {
   HIDDEN_TRUTH,
   PROMPT,
 } from './dioramaCopy'
-import { CARDS } from './cards'
+import { CARDS, cardBody } from './cards'
 
 describe('the word fan is a real choice, honestly weighted', () => {
   it('is a probability distribution rather than five numbers', () => {
@@ -80,15 +80,32 @@ describe('the illustrations say what the paragraphs say', () => {
   */
 
   it('illustrates card zero: read, fetch, guess', () => {
-    const body = CARDS[0].body.toLowerCase()
+    const body = cardBody(CARDS[0]).toLowerCase()
     expect(body).toContain('read')
     expect(body).toContain('fetch')
     expect(body).toContain('guess')
     expect(CARD_0_STATIONS.map((s) => s.label)).toEqual(['FED', 'FETCHED', 'GUESSED'])
   })
 
+  it('puts each claim in the segment its own form illustrates', () => {
+    /*
+      **Stronger than the paragraph-wide check above, and it is what the narration
+      made possible.**
+
+      Before the split, all three claims only had to appear SOMEWHERE in one
+      string - so a paragraph that talked about guessing while the fetching
+      station was on screen would have passed. Now each segment is narrated while
+      its own form holds the stage, so the clause and the picture have to match
+      one at a time, which is what `dioramaCopy.ts` claims at the top of the file.
+    */
+    const segments = CARDS[0].segments.map((s) => s.shown.toLowerCase())
+    expect(segments[0], 'the FED segment does not mention reading').toContain('read')
+    expect(segments[1], 'the FETCHED segment does not mention fetching').toContain('fetch')
+    expect(segments[2], 'the GUESSED segment does not mention guessing').toContain('guess')
+  })
+
   it('illustrates card one: hidden, corrected, confident', () => {
-    const body = CARDS[1].body.toLowerCase()
+    const body = cardBody(CARDS[1]).toLowerCase()
     expect(body).toContain('hid')
     expect(body).toContain('corrected')
     expect(body).toContain('confident')
@@ -96,7 +113,7 @@ describe('the illustrations say what the paragraphs say', () => {
   })
 
   it('counts to the trillion the paragraph promises', () => {
-    expect(CARDS[1].body.toLowerCase()).toContain('trillion')
+    expect(cardBody(CARDS[1]).toLowerCase()).toContain('trillion')
     const last = CORRECTION_STOPS[CORRECTION_STOPS.length - 1]
     expect(Number(last.replace(/,/g, ''))).toBe(1e12)
   })

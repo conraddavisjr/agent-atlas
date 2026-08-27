@@ -8,7 +8,8 @@ import { assertDrawable } from '@/game/world/hubLayout'
 import { teachingMachineGeometry } from '../teachingMachine'
 import { BLANK_X, promptX } from '../stage'
 import { CANDIDATES, PROMPT } from '../dioramaCopy'
-import { loop, stationGlow } from '../diorama'
+import { stationGlow } from '../diorama'
+import { guessCue } from '../guessCue'
 import type { LiveCue } from '../specimen'
 import { StationLabel } from './StationLabel'
 
@@ -90,15 +91,11 @@ export function Guessed({ cue }: { cue: LiveCue }) {
 
     /*
       One clock, four moments: the candidates fill, one is chosen, it travels, and
-      it sits in the sentence. Derived from `local` rather than tracked in a ref so
-      a seeked round is never caught between two of its own steps.
+      it sits in the sentence. In `guessCue.ts` rather than here because the four
+      moments were once compared against a FRACTION while written in SECONDS, and
+      the winning word consequently never flew - see that file.
     */
-    const t = loop(local, CYCLE)
-    const filling = clamp01((t - FILL_AT) / (CHOOSE_AT - FILL_AT))
-    const chosen = clamp01((t - CHOOSE_AT) / (FLY_AT - CHOOSE_AT))
-    const raw = clamp01((t - FLY_AT) / (LANDED_AT - FLY_AT))
-    /* Eased, so the word accelerates out of the list and settles into the slot. */
-    const flight = raw * raw * (3 - 2 * raw)
+    const { filling, chosen, flight } = guessCue(local)
 
     if (losers.current) {
       for (let i = 0; i < rest.length; i++) {
@@ -217,8 +214,6 @@ export function Guessed({ cue }: { cue: LiveCue }) {
 
 /* ------------------------------------------------------------------------- */
 
-const clamp01 = (v: number) => Math.min(1, Math.max(0, v))
-
 /** Where a candidate sits, top to bottom in weight order. */
 function candidateY(rank: number): number {
   return FAN_TOP - rank * FAN_PITCH
@@ -262,24 +257,3 @@ const BAR_X = 0.56
 const CANDIDATE_SIZE = 0.042
 /** A weight of 1 would draw a bar this many units long. */
 const BAR_SCALE = 0.5
-
-/**
- * The cycle, and where its four moments fall inside it.
- *
- * A form holds the stage for `FORM_DWELL` and is fully readable for
- * `FORM_WINDOW`, 4.55 s, so fill-choose-fly-land has to complete inside that or
- * the player watches a list build to nothing.
- *
- * **That has happened here before.** At a 5.2 s cycle the winner locked at 3.22 s
- * against a 2.05 s window, so the fan filled and faded away unresolved on every
- * appearance, and nothing reported it. `specimen.test.ts` now asserts `argueAt`
- * against the window so it cannot happen quietly again.
- *
- * At 4.2 the word is in the sentence at 3.0 s with 1.2 s left to read it, which
- * is the moment the form exists for and therefore the one that gets the hold.
- */
-const CYCLE = 4.2
-const FILL_AT = 0.35
-const CHOOSE_AT = 1.6
-const FLY_AT = 2.0
-const LANDED_AT = 3.0

@@ -760,6 +760,35 @@ export function DevHooks() {
     const cueOf = (node: Object3D): { lit: number; local: number } | null =>
       (node.userData?.cue as { lit: number; local: number } | undefined) ?? null
 
+    /** Text and mesh counts for a subtree, split by whether they are drawn. */
+    const countDrawn = (root: Object3D) => {
+      let texts = 0
+      let hiddenTexts = 0
+      let meshes = 0
+      let hiddenMeshes = 0
+      root.traverse((o) => {
+        const isText = typeof (o as { fillOpacity?: number }).fillOpacity === 'number'
+        const isMesh = (o as { isMesh?: boolean }).isMesh === true
+        if (!isText && !isMesh) return
+        /* Visible means visible ALL THE WAY UP; a hidden parent hides the lot. */
+        let shown = true
+        for (let n: Object3D | null = o; n && n !== root.parent; n = n.parent) {
+          if (!n.visible) {
+            shown = false
+            break
+          }
+        }
+        if (isText) {
+          texts += 1
+          if (!shown) hiddenTexts += 1
+        } else {
+          meshes += 1
+          if (!shown) hiddenMeshes += 1
+        }
+      })
+      return { texts, hiddenTexts, meshes, hiddenMeshes }
+    }
+
     const specimen = () => {
       let group: Object3D | null = null
       scene.traverse((o) => {
@@ -803,6 +832,17 @@ export function DevHooks() {
           */
           local: +(cueOf(child)?.local ?? -1).toFixed(3),
           lit: +(cueOf(child)?.lit ?? -1).toFixed(3),
+          /*
+            What is actually IN this form, and how much of it is drawn.
+            
+            A form can be present, on the base plane, at the right size and still
+            be missing a piece - a label whose ref never attached, a mesh hidden
+            by a stale flag - and a bounding box cannot say so, because the box is
+            computed from whatever DID mount. Counting the graph is the cheapest
+            thing that can: a form whose text count drops by one between two
+            builds has lost a word, and no screenshot will tell you which.
+          */
+          drawn: countDrawn(child),
           worldMinY: +formBox.min.y.toFixed(3),
           worldMaxY: +formBox.max.y.toFixed(3),
           height: +(formBox.max.y - formBox.min.y).toFixed(3),

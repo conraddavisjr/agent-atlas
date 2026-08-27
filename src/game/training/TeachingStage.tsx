@@ -153,7 +153,7 @@ export function TeachingStage({ run }: { run: RefObject<TrainingState> }) {
     const reading = state.phase === 'reading'
 
     if (reading) {
-      held.current = litForm(state.elapsed)
+      held.current = litForm(card, state.elapsed)
     } else if (state.phase === 'dioramaIn') {
       // The card opens on its first form, always.
       held.current = 0
@@ -176,7 +176,7 @@ export function TeachingStage({ run }: { run: RefObject<TrainingState> }) {
       let presence: number
       let local: number
       if (reading) {
-        const cue = formCue(i, state.elapsed)
+        const cue = formCue(card, i, state.elapsed)
         presence = cue.presence
         local = cue.local
       } else {
