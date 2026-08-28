@@ -8,6 +8,7 @@ import { assertDrawable } from '@/game/world/hubLayout'
 import { MACHINE_SCALE, teachingMachineGeometry } from '../teachingMachine'
 import { BOOK_SUBJECTS, MACHINE_CHATTER } from '../dioramaCopy'
 import { loop } from '../diorama'
+import { NOM_OFFSETS, chatterCue } from '../chatterCue'
 import type { LiveCue } from '../specimen'
 import { StationLabel } from './StationLabel'
 
@@ -52,7 +53,7 @@ export function Fed({ cue }: { cue: LiveCue }) {
   const books = useRef<InstancedMesh>(null)
   const labels = useRef<(Group | null)[]>([])
   const machineNode = useRef<Group>(null)
-  const nom = useRef<Group>(null)
+  const noms = useRef<(Group | null)[]>([])
   const asides = useRef<(Group | null)[]>([])
 
   const machine = useMemo(
@@ -206,32 +207,27 @@ export function Fed({ cue }: { cue: LiveCue }) {
       /*
         **The chatter, and it rides the same clock the bite does.**
 
-        `nom nom nom` appears on the swallow and goes with it, so it reads as the
-        machine reacting rather than as a caption that happens to be there. It
-        drifts up and out as it fades, which is the one gesture everybody already
-        reads as a sound effect.
+        Three words landing 200 ms apart on a broken arc, each popping 15% past
+        its size and settling back - so the mouth reads as working rather than as
+        a caption appearing. The timing is in `chatterCue.ts` because a stagger
+        that is a beat out produces a still frame that looks entirely correct, and
+        this round has already lost one animation to exactly that.
       */
-      const nomNode = nom.current
-      if (nomNode) {
-        nomNode.visible = lit > 0.05 && bite > 0.08
-        nomNode.position.set(NOM_AT[0], NOM_AT[1] + bite * 0.1, NOM_AT[2])
-        nomNode.scale.setScalar(0.85 + bite * 0.2)
+      const chatter = chatterCue(t, BELT_PERIOD / BOOK_SUBJECTS.length, MACHINE_CHATTER.asides.length)
+      for (let i = 0; i < noms.current.length; i++) {
+        const node = noms.current[i]
+        if (!node) continue
+        const scale = chatter.scale[i] ?? 0
+        node.visible = lit > 0.05 && scale > 0.01
+        node.scale.setScalar(scale)
+        const [dx, dy] = NOM_OFFSETS[i]
+        node.position.set(NOM_AT[0] + dx, NOM_AT[1] + dy, NOM_AT[2])
       }
 
-      /*
-        The asides come BETWEEN bites and only sometimes, which is what keeps them
-        funny. One book in three, chosen by the swallow count rather than at
-        random - a diagram that says something different every time you look at it
-        is a diagram nobody trusts, and `Math.random` in a `useFrame` would also
-        make this un-photographable.
-      */
-      const swallows = Math.floor(t / (BELT_PERIOD / BOOK_SUBJECTS.length))
-      const speaking = swallows % 3 === 1 ? Math.floor(swallows / 3) % MACHINE_CHATTER.asides.length : -1
       for (let i = 0; i < MACHINE_CHATTER.asides.length; i++) {
         const node = asides.current[i]
         if (!node) continue
-        const on = i === speaking && bite < 0.08
-        node.visible = lit > 0.05 && on
+        node.visible = lit > 0.05 && i === chatter.aside
         node.position.set(ASIDE_AT[0], ASIDE_AT[1] + Math.sin(t * 1.7) * 0.02, ASIDE_AT[2])
       }
     }
@@ -279,9 +275,17 @@ export function Fed({ cue }: { cue: LiveCue }) {
         it should hover beside the machine rather than lurch with it, because
         speech that swayed with the speaker would read as attached furniture.
       */}
-      <group ref={nom} visible={false}>
-        <StationLabel text={MACHINE_CHATTER.bite} size={CHATTER_SIZE} colour="#ffd18a" />
-      </group>
+      {MACHINE_CHATTER.bite.map((word, i) => (
+        <group
+          key={i}
+          visible={false}
+          ref={(node) => {
+            noms.current[i] = node
+          }}
+        >
+          <StationLabel text={word} size={CHATTER_SIZE} colour={palette.gold} />
+        </group>
+      ))}
       {MACHINE_CHATTER.asides.map((line, i) => (
         <group
           key={line}
@@ -394,6 +398,6 @@ const BITE_AT = 0.84
  * Smaller than a book's title, because it is an aside rather than a label: it is
  * the machine talking, not the exhibit naming something.
  */
-const NOM_AT: [number, number, number] = [0.46, 0.86, 0.06]
+const NOM_AT: [number, number, number] = [0.42, 0.8, 0.06]
 const ASIDE_AT: [number, number, number] = [0.52, 0.7, 0.06]
 const CHATTER_SIZE = 0.062

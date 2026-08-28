@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { VOICE } from './voiceManifest'
+import { allow, decline, voiceState } from './voice'
 import { CARDS, INSTRUCTOR_LINES, segmentSpoken, shownWords } from '@/game/training/cards'
 import { DURATIONS, VOICE_TAIL, initialTrainingState, stepTraining } from '@/game/training/trainingMachine'
 
@@ -171,5 +172,45 @@ describe('the round is timed by the manifest, not by the audio', () => {
     )
     expect(still.phase).toBe('arriving')
     expect(still.elapsed).toBe(0)
+  })
+})
+
+describe('muting is reversible', () => {
+  /*
+    **This is a bug that shipped, and it shipped silently.**
+
+    `decline()` set the state and `unlock()` opened with an early return on it, so
+    the first press of mute made the module permanently mute. Pressing the toggle
+    again set the preference back to `'on'`, lit the icon, and produced nothing at
+    all - which from the outside is indistinguishable from a browser that has
+    blocked audio, an mp3 that 404ed, or a tab the operating system has muted.
+    Exactly the family of failures this module reports six separate states to tell
+    apart, defeated by one early return.
+
+    It runs here rather than in a browser because `allow()` deliberately needs
+    neither a `window` nor a gesture - that separation is what makes the round
+    trip testable at all.
+  */
+  it('comes back when the player changes their mind', () => {
+    decline()
+    expect(voiceState()).toBe('declined')
+    allow()
+    expect(voiceState(), 'the player is still muted after asking for sound').not.toBe('declined')
+  })
+
+  it('survives being asked twice, in either direction', () => {
+    decline()
+    decline()
+    expect(voiceState()).toBe('declined')
+    allow()
+    allow()
+    expect(voiceState()).not.toBe('declined')
+  })
+
+  it('leaves a state that is not declined alone', () => {
+    allow()
+    const before = voiceState()
+    allow()
+    expect(voiceState()).toBe(before)
   })
 })

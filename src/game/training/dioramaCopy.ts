@@ -97,8 +97,14 @@ export const CARD_0_STATIONS: readonly [Station, Station, Station] = [
  * decoration - and decoration next to a narrated paragraph is noise.
  */
 export const MACHINE_CHATTER = {
-  /** On the bite. Short enough to be read in the half second it exists. */
-  bite: 'nom nom nom',
+  /**
+   * On the bite, as three separate words so they can arrive one after another.
+   *
+   * One label reading `nom nom nom` appeared whole, which is a caption. Three
+   * that land in turn is a mouth working - the comedy is in the rhythm, and a
+   * rhythm needs more than one event.
+   */
+  bite: ['nom', 'nom', 'nom'] as readonly string[],
   /**
    * Between bites, occasionally. Rotated so the machine does not have one line.
    *

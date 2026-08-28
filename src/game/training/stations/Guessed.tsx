@@ -58,6 +58,7 @@ export function Guessed({ cue }: { cue: LiveCue }) {
   const winnerBar = useRef<Mesh>(null)
   const winnerWord = useRef<Group>(null)
   const spark = useRef<Mesh>(null)
+  const arrow = useRef<Group>(null)
   const railMaterial = useRef<{ emissiveIntensity: number } | null>(null)
 
   const machine = useMemo(
@@ -142,6 +143,23 @@ export function Guessed({ cue }: { cue: LiveCue }) {
       winnerWord.current.visible = lit > 0.05 && filling > 0.02
     }
 
+    if (arrow.current) {
+      /*
+        It climbs the column while the candidates fill, and lands on the winner as
+        the choice is made - so the two events are one gesture rather than a bar
+        chart and, separately, a flash.
+
+        `1 - filling` because the list runs weight-DESCENDING: rank 4 is the
+        bottom and least likely, rank 0 is the winner at the top. The arrow starts
+        at the sandwich nobody would say and ends at the word the machine picks.
+      */
+      const from = candidateY(CANDIDATES.length - 1)
+      const to = candidateY(0)
+      const eased = filling * filling * (3 - 2 * filling)
+      arrow.current.position.set(ARROW_X, from + (to - from) * eased, 0.12)
+      arrow.current.visible = lit > 0.05 && filling > 0.01 && flight < 0.98
+    }
+
     if (spark.current) {
       /* The moment of choosing, before the word moves. A flash on its own row. */
       spark.current.visible = lit > 0.05 && chosen > 0 && chosen < 1
@@ -200,13 +218,45 @@ export function Guessed({ cue }: { cue: LiveCue }) {
       </group>
 
       {/*
-        The choice's spark. `emissiveRaw` rather than `emissive`, deliberately
-        below the normalisation the bloom budget uses - this is a flash on a
-        diagram, and `00-art-bible.md` keeps tier A for ally blue and reward gold.
+        **The arrow, and it is the only thing in this form that says "read
+        upward".**
+
+        The candidate list is sorted by weight, so it already carries the ranking
+        - and a list is a thing a beginner reads top to bottom without noticing it
+        means anything. The arrow travels the other way, from the least likely
+        word to the most, and arrives on the winner at the moment it is chosen. It
+        turns a static ordering into a search that ends somewhere.
+
+        Gold, because the machine's own chatter and the choosing spark are gold:
+        one colour across the round for "this is the part that matters". Not
+        emissive - see the spark below for where that line is drawn.
+      */}
+      <group ref={arrow}>
+        <mesh position={[0, -ARROW_LENGTH / 2, 0]}>
+          <boxGeometry args={[ARROW_WIDTH, ARROW_LENGTH, ARROW_WIDTH]} />
+          <meshPhysicalMaterial {...mattePlastic(palette.gold)} />
+        </mesh>
+        {/* The head: a cone, pointing the way it travels. */}
+        <mesh rotation={[0, 0, 0]}>
+          <coneGeometry args={[ARROW_WIDTH * 2.6, ARROW_WIDTH * 4, 4]} />
+          <meshPhysicalMaterial {...mattePlastic(palette.gold)} />
+        </mesh>
+      </group>
+
+      {/*
+        The choice's spark, in the same gold as the arrow and the machine's
+        chatter - one colour for "this is the thing that matters" across the whole
+        round, where before it was cyan here and gold there.
+
+        `emissiveRaw` rather than `emissive`, and that distinction is what keeps
+        this legal: `00-art-bible.md` reserves the BLOOM tier for ally blue and
+        reward gold, and raw sits deliberately below the normalisation the bloom
+        budget uses. So this is a gold flash on a diagram rather than a gold glow
+        the player might read as something they had won.
       */}
       <mesh ref={spark} visible={false}>
         <sphereGeometry args={[1, 8, 6]} />
-        <meshPhysicalMaterial {...emissiveRaw(palette.visor, GLOW.source)} />
+        <meshPhysicalMaterial {...emissiveRaw(palette.gold, GLOW.source)} />
       </mesh>
     </group>
   )
@@ -248,6 +298,18 @@ const FEED: [number, number, number][] = [
   [MACHINE_X + 0.18, 0.85, 0.1],
   [BLANK_X - 0.2, PROMPT_Y - 0.075, 0.1],
 ]
+
+/**
+ * The arrow that climbs the candidate list, in the form's own units.
+ *
+ * To the RIGHT of the words on screen, which is a lower x - `+X` is screen left
+ * here. The list is at `WORD_X` 0.86 with its bars running left from `BAR_X`, so
+ * the arrow sits on the far side of the words from the bars and neither crowds
+ * the other.
+ */
+const ARROW_X = 1.12
+const ARROW_LENGTH = 0.13
+const ARROW_WIDTH = 0.018
 
 /** The candidate list, under the sentence it is competing to finish. */
 const FAN_TOP = 0.6

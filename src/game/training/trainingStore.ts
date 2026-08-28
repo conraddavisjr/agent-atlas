@@ -93,6 +93,13 @@ export type TrainingStore = {
   segment: number
   word: number
   publishNarration: (segment: number, word: number) => void
+
+  /** True once the card has been through all three forms. Guarded, like `phase`. */
+  cardDone: boolean
+  publishCardDone: (done: boolean) => void
+  /** Bumped by the replay button. An edge, for the reason the whole file gives. */
+  replaySeq: number
+  requestReplay: () => void
   /** Back to the start, for a replay. Called when the round mounts. */
   reset: () => void
 }
@@ -107,6 +114,8 @@ const START = {
   formWanted: 0,
   segment: 0,
   word: -1,
+  cardDone: false,
+  replaySeq: 0,
 }
 
 export const useTrainingStore = create<TrainingStore>()((set) => ({
@@ -122,6 +131,9 @@ export const useTrainingStore = create<TrainingStore>()((set) => ({
 
   publishNarration: (segment, word) =>
     set((s) => (s.segment === segment && s.word === word ? s : { segment, word })),
+
+  publishCardDone: (done) => set((s) => (s.cardDone === done ? s : { cardDone: done })),
+  requestReplay: () => set((s) => ({ replaySeq: s.replaySeq + 1 })),
 
   openGate: () => set({ gateOpen: true }),
   closeGate: () => set({ gateOpen: false }),

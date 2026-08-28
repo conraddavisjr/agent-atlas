@@ -8,6 +8,7 @@ import {
   FORM_FRAME,
   SPECIMEN_HEIGHT,
   SPECIMEN_WIDTH,
+  cycleComplete,
   formCue,
   formOffset,
   formScale,
@@ -16,6 +17,7 @@ import {
   specimenVisible,
   stagePresence,
 } from './specimen'
+import { VOICE } from '@/audio/voiceManifest'
 import { cameraPose } from './cameraDirector'
 import { SPECIMEN_AT, dioramaSafeWidth } from './stage'
 import { initialTrainingState, type Phase, type TrainingState } from './trainingMachine'
@@ -306,5 +308,46 @@ describe('the camera is aimed at what is actually there', () => {
 
   it('keeps the specimen in front of the camera, not behind it', () => {
     expect(cameraPose('reading').position[2]).toBeLessThan(SPECIMEN_AT[2])
+  })
+})
+
+describe('a card plays once and then asks', () => {
+  it('is not finished part way through', () => {
+    for (let i = 0; i < FORM_COUNT; i++) {
+      expect(cycleComplete(CARD, formStart(CARD, i)), `at the top of form ${i}`).toBe(false)
+    }
+    expect(cycleComplete(CARD, specimenRunTime(CARD) - 0.01)).toBe(false)
+  })
+
+  it('is finished once every form has had its clause said over it', () => {
+    /*
+      **The loop used to be endless and nobody decided that.** `reading` waits on
+      the player, so the exhibit cycled forever with the narration restarting each
+      time - a reader who had understood it got no signal they were now watching a
+      repeat, and a reader who had missed something had to sit through two more
+      forms to get back.
+    */
+    expect(cycleComplete(CARD, specimenRunTime(CARD))).toBe(true)
+    expect(cycleComplete(CARD, specimenRunTime(CARD) + 5)).toBe(true)
+  })
+
+  it('ends after the last clause has actually been spoken', () => {
+    // Not merely after three dwells: the dwells ARE the clauses, so this is the
+    // assertion that the offer cannot appear over a wizard still talking.
+    const spoken = VOICE.segments
+      .filter((s) => s.card === CARD)
+      .reduce((total, s) => total + s.duration, 0)
+    expect(specimenRunTime(CARD)).toBeGreaterThan(spoken)
+  })
+
+  it('lands the replay back at the very top of the card', () => {
+    /*
+      Replay writes `elapsed` to zero, and zero has to mean form 0 fully present
+      rather than form 0 fading in - otherwise a replay opens with a dip that the
+      first play does not have.
+    */
+    expect(cycleComplete(CARD, 0)).toBe(false)
+    expect(formCue(CARD, 0, 0).presence).toBe(1)
+    expect(litForm(CARD, 0)).toBe(0)
   })
 })

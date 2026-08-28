@@ -79,6 +79,26 @@ export function decline() {
 }
 
 /**
+ * Undo a decline, because a player who muted is allowed to change their mind.
+ *
+ * **This is the whole of a shipped bug.** `decline()` set the state and `unlock()`
+ * opened with `if (state === 'declined') return state` - so once somebody pressed
+ * mute, `unlock()` became a no-op, the state stayed `'declined'` for the life of
+ * the page, and `play()` refused every clip after it. Pressing the toggle again
+ * set the preference back to `'on'`, lit the icon back up, and produced silence
+ * forever. Nothing logged, because from the module's point of view it was doing
+ * exactly what it had been told.
+ *
+ * Separate from `unlock()` rather than folded into it because `unlock()` needs a
+ * `window` and a user gesture, and this needs neither - which is what lets
+ * `voice.test.ts` cover the round trip without a DOM.
+ */
+export function allow() {
+  if (state !== 'declined') return
+  state = context ? 'unlocked' : 'locked'
+}
+
+/**
  * Create and resume the context, synchronously, from inside a user gesture.
  *
  * **It has to be synchronous and it has to be inside the gesture's own call
@@ -93,7 +113,12 @@ export function decline() {
  * already chosen sound and should not be asked twice.
  */
 export function unlock(): VoiceState {
-  if (state === 'declined') return state
+  /*
+    A gesture asking for sound is a gesture asking for sound, even from somebody
+    who declined it earlier. This used to return early here and leave the module
+    permanently mute - see `allow`.
+  */
+  allow()
   try {
     if (!context) {
       const Ctor = window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
@@ -223,10 +248,10 @@ export function preload(): Promise<void> {
  * is the kind of off-by-one that produces a round that sounds subtly wrong and
  * looks completely fine.
  */
-export function speakSegment(card: number, index: number) {
+export function speakSegment(card: number, index: number, offset = 0) {
   const at = VOICE.segments.findIndex((s) => s.card === card && s.index === index)
   if (at < 0) return
-  play(segments[at])
+  play(segments[at], offset)
 }
 
 /**
@@ -242,13 +267,20 @@ export function speak(index: number) {
   play(loaded[index])
 }
 
-function play(entry: Loaded | null | undefined) {
+function play(entry: Loaded | null | undefined, offset = 0) {
   if (state === 'declined' || !context || !entry) return
   stop()
   const source = context.createBufferSource()
   source.buffer = entry.buffer
   source.connect(context.destination)
-  source.start()
+  /*
+    `offset` is what makes un-muting mid-sentence land in the right place rather
+    than restarting the clause. The round's clock does not pause for the audio -
+    the beats are derived from the manifest and run whether anything is playing -
+    so a clip resumed at zero would be a wizard half a sentence behind his own
+    subtitle for the rest of the beat.
+  */
+  source.start(0, Math.max(0, Math.min(offset, entry.buffer.duration - 0.02)))
   playing = source
 }
 

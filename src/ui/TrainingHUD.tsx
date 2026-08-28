@@ -45,6 +45,8 @@ export function TrainingHUD() {
   const requestAdvance = useTrainingStore((s) => s.requestAdvance)
   const requestBail = useTrainingStore((s) => s.requestBail)
   const audio = useGameStore((s) => s.audio)
+  const cardDone = useTrainingStore((s) => s.cardDone)
+  const requestReplay = useTrainingStore((s) => s.requestReplay)
   const segment = useTrainingStore((s) => s.segment)
   const word = useTrainingStore((s) => s.word)
   const setAudio = useGameStore((s) => s.setAudio)
@@ -156,6 +158,35 @@ export function TrainingHUD() {
         </div>
       )}
 
+      {cardDone && (
+        /*
+          **The end of a pass, and the one moment this round asks a question
+          instead of moving on.**
+
+          Every other beat either runs on a timer or has a single Next. Here the
+          reader has just watched three illustrations go by while a paragraph was
+          read over them, and the useful thing to know is whether they want it
+          again. Offering it explicitly is cheaper than the alternative, which is a
+          reader scrubbing back with the key words or sitting through a silent
+          second loop hoping to catch the bit they missed.
+
+          Replay is the primary and it is deliberately the bigger target: somebody
+          who understood it will press Continue without needing to be aimed at it,
+          and somebody who did not is the person this panel exists for.
+        */
+        <div style={styles.doneScrim}>
+          <div style={styles.donePanel}>
+            <button style={styles.replay} onClick={requestReplay} autoFocus>
+              <ReplayIcon />
+              <span>Play it again</span>
+            </button>
+            <button style={styles.continue} onClick={requestAdvance}>
+              Continue &rsaquo;
+            </button>
+          </div>
+        </div>
+      )}
+
       {(reading || question) && (
         <div style={styles.reader}>
           {/*
@@ -240,7 +271,7 @@ export function TrainingHUD() {
         aria-pressed={audio === 'on'}
         title={audio === 'on' ? 'Mute the instructor' : 'Let the instructor speak'}
       >
-        <MicIcon muted={audio !== 'on'} />
+        <SpeakerIcon muted={audio !== 'on'} />
       </button>
 
       <button style={styles.exit} onClick={requestBail}>
@@ -431,6 +462,63 @@ const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
+  /*
+    Over the exhibit rather than beside it, and NOT full-screen.
+
+    The reading card at the top and the reader chrome at the bottom both stay
+    visible and usable - the paragraph is what the reader may want to check
+    against, and a modal that covered it would be asking "again?" while hiding the
+    thing being offered. So this sits in the middle band, which is exactly the band
+    the frozen specimen occupies.
+  */
+  doneScrim: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: '26%',
+    display: 'grid',
+    placeItems: 'center',
+    pointerEvents: 'none',
+  },
+  donePanel: {
+    pointerEvents: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 12,
+  },
+  replay: {
+    pointerEvents: 'auto',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 9,
+    background: 'linear-gradient(180deg, #5aa9f5, #2f7ad2)',
+    border: 'none',
+    borderRadius: 11,
+    color: '#f2f7ff',
+    padding: '11px 20px',
+    fontSize: '0.9rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    boxShadow: '0 10px 28px rgba(0, 0, 0, 0.4)',
+  },
+  /*
+    Quieter than Replay. Both are real choices, but only one of them is the
+    reason the panel exists - and a matched pair of buttons would say the round
+    had no opinion about which.
+  */
+  continue: {
+    pointerEvents: 'auto',
+    background: 'rgba(12, 20, 38, 0.92)',
+    border: '1px solid rgba(150, 190, 255, 0.28)',
+    borderRadius: 10,
+    color: '#dbe6fb',
+    padding: '8px 18px',
+    fontSize: '0.84rem',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
   sound: {
     display: 'grid',
     placeItems: 'center',
@@ -565,17 +653,24 @@ const TRAIL = [0.98, 0.9, 0.84, 0.8]
 const CLAUSE_DIM = 0.58
 
 /**
- * A microphone, drawn rather than typed.
+ * A speaker, drawn rather than typed.
+ *
+ * **A microphone was wrong and the distinction matters.** A mic is an input
+ * control - it means "this application is listening to you" - and this button
+ * does the opposite: it decides whether the wizard is audible. On a page that has
+ * never asked for a microphone, a mic glyph with a slash through it reads as a
+ * privacy indicator, which is a considerably worse thing to be confused about
+ * than a volume control.
  *
  * Full white, because it is a control rather than a status: the muted state gets
- * a slash through it and the same weight. An icon that dimmed when muted would be
- * saying the same thing twice and would be harder to hit with the eye.
+ * a slash and keeps the same weight. An icon that dimmed when muted would be
+ * saying the same thing twice and would be harder to find with the eye.
  *
- * Inline SVG rather than a glyph or an image - it is fourteen pixels of line art,
- * it has to sit on a dark panel without a background, and a font emoji would
+ * Inline SVG rather than a glyph or an image - it is seventeen pixels of line
+ * art, it has to sit on a dark panel without a background, and a font emoji would
  * render differently on every platform this runs on.
  */
-function MicIcon({ muted }: { muted: boolean }) {
+function SpeakerIcon({ muted }: { muted: boolean }) {
   return (
     <svg
       width="17"
@@ -588,10 +683,46 @@ function MicIcon({ muted }: { muted: boolean }) {
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <rect x="9" y="2.5" width="6" height="11" rx="3" />
-      <path d="M5.5 11a6.5 6.5 0 0 0 13 0" />
-      <path d="M12 17.5V21" />
-      {muted && <path d="M4 20 20 4" />}
+      {/* The cone: a box at the wall and a horn opening to the right. */}
+      <path d="M4 9.5h3.5L12.5 5.5v13L7.5 14.5H4z" />
+      {muted ? (
+        <>
+          <path d="M16.5 9.5 21 14" />
+          <path d="M21 9.5 16.5 14" />
+        </>
+      ) : (
+        <>
+          <path d="M16 9.2a4 4 0 0 1 0 5.6" />
+          <path d="M18.7 6.8a7.5 7.5 0 0 1 0 10.4" />
+        </>
+      )}
+    </svg>
+  )
+}
+
+/**
+ * A circular arrow, for replay.
+ *
+ * An arc with a gap and a head on it rather than a full ring, because a closed
+ * circle with an arrowhead reads as "loop" - which is what this round was doing
+ * before and is the thing the panel exists to stop. The gap says "once more"
+ * rather than "forever".
+ */
+function ReplayIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.1"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" />
+      <path d="M20.6 3.4v5.2h-5.2" />
     </svg>
   )
 }

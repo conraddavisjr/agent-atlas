@@ -113,6 +113,35 @@ export const SEGMENT_TAIL = 0.8
 /** Only reachable when the manifest and the copy have diverged. See `formDwell`. */
 const FALLBACK_DWELL = 6
 
+/**
+ * Whether the card has been through all three of its forms once.
+ *
+ * ## The loop used to be endless, and that was a decision nobody made
+ *
+ * `reading` waits on the player, so before this the exhibit cycled forever: FED,
+ * FETCHED, GUESSED, FED again, with the narration restarting each time. Nothing
+ * marked the end of the argument, so a reader who had understood it had no signal
+ * that they were now watching a repeat - and a reader who had missed something
+ * had no way to ask for it again except to sit through two more forms.
+ *
+ * One pass, then a choice. It is also what lets the specimen freeze rather than
+ * loop behind the choice: a diagram still animating under a dialog asking whether
+ * you would like to see it again is arguing with itself.
+ */
+export function cycleComplete(card: number, elapsed: number): boolean {
+  return elapsed >= specimenRunTime(card)
+}
+
+/**
+ * How present the exhibit stays once its pass is done.
+ *
+ * Not zero. The replay offer is about the thing that is still on screen, and a
+ * dialog over an empty stage is a dialog about nothing - the reader needs to see
+ * what they would be replaying. Low enough that the two buttons in front of it
+ * are unmistakably the subject.
+ */
+export const FROZEN_PRESENCE = 0.22
+
 /** Where a form's window opens, in seconds from the start of the card. */
 export function formStart(card: number, index: number): number {
   let at = 0
