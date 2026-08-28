@@ -45,7 +45,41 @@ It reports which library it used rather than degrading quietly.
 
 ## The voice
 
-`bm_george` at speed 1.0.
+`bm_lewis` at speed 1.0, and it is the third one tried.
+
+`bm_george` shipped first and read weary; `bm_fable` replaced it and read too
+synthetic; `bm_lewis` is the next British male in the set.
+
+### The caveat that matters more than the choice
+
+**Voice selection may not be the lever.** Kokoro is an 82M-parameter model. It is
+tiny, it is fast, and every voice inside it shares that ceiling - so swapping
+between them changes timbre rather than fidelity. Kokoro's own published grades
+put `fable` and `george` at C and `lewis` at D+, which is a warning that the
+alternates are not better, only different.
+
+If the round wants a genuinely more natural read, the change is the MODEL:
+
+| | Kokoro 82M | the bigger local models |
+| --- | --- | --- |
+| Naturalness | synthetic but clear | markedly better |
+| Bake time | seconds | minutes |
+| **Per-word timings** | **exact, free** | **not exposed** |
+
+That last row is the whole trade. Kokoro is a StyleTTS2-family model, so it
+predicts a duration per phoneme BEFORE generating audio and `KokoroPipeline`
+already folds those into per-word timestamps - which is what the read-along
+highlighting rides on, and why it is exact rather than estimated. The
+diffusion and flow-matching models cached on this machine (`chatterbox`,
+`OmniVoice`, `F5-TTS`, `LongCat-AudioDiT`) generate audio directly and expose no
+equivalent, so moving to one means adding a forced aligner at bake time -
+`torchaudio.functional.forced_align` is the obvious candidate - to recover the
+timings the highlight needs.
+
+That is a real afternoon of work, not a blocker. It is written down here so the
+decision is made rather than discovered.
+
+### The old note, kept because the reasoning still holds
 
 Kokoro has four British male voices and two are a clear step above the others on published quality: `bm_george` and `bm_fable`.
 Between those two the choice is about age, and it is a choice about the copy rather than about the audio.

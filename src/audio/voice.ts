@@ -57,6 +57,7 @@ let context: AudioContext | null = null
 let state: VoiceState = 'locked'
 let loaded: (Loaded | null)[] = []
 let segments: (Loaded | null)[] = []
+let question: Loaded | null = null
 let playing: AudioBufferSourceNode | null = null
 let loading: Promise<void> | null = null
 
@@ -65,6 +66,7 @@ export function reset() {
   stop()
   loaded = []
   segments = []
+  question = null
   loading = null
   if (state !== 'blocked') state = context ? 'unlocked' : 'locked'
 }
@@ -236,6 +238,7 @@ export function preload(): Promise<void> {
       through.
     */
     ...VOICE.segments.map((segment, i) => decode(segment, segments, i)),
+    decode(VOICE.question, questionSlot, 0),
   ]).then(() => undefined)
   return loading
 }
@@ -248,6 +251,21 @@ export function preload(): Promise<void> {
  * is the kind of off-by-one that produces a round that sounds subtly wrong and
  * looks completely fine.
  */
+/**
+ * The quiz question, read as the board lands.
+ *
+ * A slot of one rather than a bare variable, so it goes through exactly the same
+ * decode, the same DEV duration assertion and the same four failure paths as
+ * everything else. A second code path for one clip is where the one clip stops
+ * being checked.
+ */
+const questionSlot: (Loaded | null)[] = []
+
+export function speakQuestion() {
+  question = questionSlot[0] ?? null
+  play(question)
+}
+
 export function speakSegment(card: number, index: number, offset = 0) {
   const at = VOICE.segments.findIndex((s) => s.card === card && s.index === index)
   if (at < 0) return
@@ -321,6 +339,11 @@ export function voiceReport() {
         manifest: segment.duration,
         decoded: segments[i] ? +segments[i]!.buffer.duration.toFixed(3) : null,
       })),
+      {
+        file: VOICE.question.file,
+        manifest: VOICE.question.duration,
+        decoded: questionSlot[0] ? +questionSlot[0]!.buffer.duration.toFixed(3) : null,
+      },
     ],
   }
 }

@@ -39,7 +39,7 @@ export type VoiceClip = {
 export type VoiceSegment = VoiceClip & { card: number; index: number }
 
 export const VOICE = {
-  voice: "bm_fable",
+  voice: "bm_lewis",
   /** British English phonemes. Kokoro only WARNS if this disagrees with the voice. */
   lang: "b",
   /** Durations are only valid for the speed they were rendered at. */
@@ -48,114 +48,114 @@ export const VOICE = {
   lines: [
     {
       "file": "/voice/instructor-0.mp3",
-      "duration": 3.825,
+      "duration": 3.875,
       "words": [
         {
           "text": "Ah,",
-          "start": 0.3,
-          "end": 0.487
+          "start": 0.4,
+          "end": 0.688
         },
         {
           "text": "an",
-          "start": 0.487,
-          "end": 0.563
+          "start": 0.688,
+          "end": 0.775
         },
         {
           "text": "apprentice!",
-          "start": 0.563,
-          "end": 1.387
+          "start": 0.775,
+          "end": 1.688
         },
         {
           "text": "Welcome",
-          "start": 1.387,
-          "end": 1.85
+          "start": 1.688,
+          "end": 2.15
         },
         {
           "text": "to",
-          "start": 1.85,
-          "end": 1.988
+          "start": 2.15,
+          "end": 2.325
         },
         {
           "text": "A.I.",
-          "start": 1.988,
-          "end": 2.388
+          "start": 2.325,
+          "end": 2.837
         },
         {
           "text": "training.",
-          "start": 2.388,
-          "end": 3.725
+          "start": 2.837,
+          "end": 3.775
         }
       ],
       "hash": "aa458de7118dacc3"
     },
     {
       "file": "/voice/instructor-1.mp3",
-      "duration": 4.5,
+      "duration": 5.075,
       "words": [
         {
           "text": "Two",
-          "start": 0.3,
-          "end": 0.487
+          "start": 0.35,
+          "end": 0.563
         },
         {
           "text": "short",
-          "start": 0.487,
-          "end": 0.775
+          "start": 0.563,
+          "end": 0.9
         },
         {
           "text": "scrolls,",
-          "start": 0.775,
-          "end": 1.262
+          "start": 0.9,
+          "end": 1.625
         },
         {
           "text": "then",
-          "start": 1.262,
-          "end": 1.4
+          "start": 1.625,
+          "end": 1.825
         },
         {
           "text": "one",
-          "start": 1.4,
-          "end": 1.6
+          "start": 1.825,
+          "end": 2.05
         },
         {
           "text": "question.",
-          "start": 1.6,
-          "end": 2.325
+          "start": 2.05,
+          "end": 2.975
         },
         {
           "text": "You",
-          "start": 2.325,
-          "end": 2.462
+          "start": 2.975,
+          "end": 3.112
         },
         {
           "text": "will",
-          "start": 2.462,
-          "end": 2.575
+          "start": 3.112,
+          "end": 3.25
         },
         {
           "text": "answer",
-          "start": 2.575,
-          "end": 2.9
+          "start": 3.25,
+          "end": 3.6
         },
         {
           "text": "it",
-          "start": 2.9,
-          "end": 3.013
+          "start": 3.6,
+          "end": 3.75
         },
         {
           "text": "with",
-          "start": 3.013,
-          "end": 3.138
+          "start": 3.75,
+          "end": 3.888
         },
         {
           "text": "an",
-          "start": 3.138,
-          "end": 3.225
+          "start": 3.888,
+          "end": 4.037
         },
         {
           "text": "arrow.",
-          "start": 3.225,
-          "end": 4.4
+          "start": 4.037,
+          "end": 4.975
         }
       ],
       "hash": "67c2c6df7c869aae"
@@ -167,87 +167,87 @@ export const VOICE = {
       "file": "/voice/card-0-0.mp3",
       "card": 0,
       "index": 0,
-      "duration": 5.6,
+      "duration": 6.4,
       "words": [
         {
           "text": "Behold:",
-          "start": 0.25,
-          "end": 0.9
+          "start": 0.35,
+          "end": 1.262
         },
         {
           "text": "a",
-          "start": 0.9,
-          "end": 0.963
+          "start": 1.262,
+          "end": 1.35
         },
         {
           "text": "machine",
-          "start": 0.963,
-          "end": 1.387
+          "start": 1.35,
+          "end": 1.85
         },
         {
           "text": "that",
-          "start": 1.387,
-          "end": 1.5
+          "start": 1.85,
+          "end": 1.975
         },
         {
           "text": "read",
-          "start": 1.5,
-          "end": 1.762
+          "start": 1.975,
+          "end": 2.263
         },
         {
           "text": "very",
-          "start": 1.762,
-          "end": 2.05
+          "start": 2.263,
+          "end": 2.587
         },
         {
           "text": "nearly",
-          "start": 2.05,
-          "end": 2.375
+          "start": 2.587,
+          "end": 3.013
         },
         {
           "text": "everything,",
-          "start": 2.375,
-          "end": 3.175
+          "start": 3.013,
+          "end": 3.875
         },
         {
           "text": "and",
-          "start": 3.175,
-          "end": 3.288
+          "start": 3.875,
+          "end": 3.987
         },
         {
           "text": "was",
-          "start": 3.288,
-          "end": 3.425
-        },
-        {
-          "text": "told",
-          "start": 3.425,
-          "end": 3.763
-        },
-        {
-          "text": "what",
-          "start": 3.763,
-          "end": 3.925
-        },
-        {
-          "text": "none",
-          "start": 3.925,
-          "end": 4.088
-        },
-        {
-          "text": "of",
-          "start": 4.088,
+          "start": 3.987,
           "end": 4.162
         },
         {
-          "text": "it",
+          "text": "told",
           "start": 4.162,
-          "end": 4.275
+          "end": 4.625
+        },
+        {
+          "text": "what",
+          "start": 4.625,
+          "end": 4.838
+        },
+        {
+          "text": "none",
+          "start": 4.838,
+          "end": 5.088
+        },
+        {
+          "text": "of",
+          "start": 5.088,
+          "end": 5.2
+        },
+        {
+          "text": "it",
+          "start": 5.2,
+          "end": 5.35
         },
         {
           "text": "means.",
-          "start": 4.275,
-          "end": 5.5
+          "start": 5.35,
+          "end": 6.3
         }
       ],
       "hash": "00fa6a21a5a218b9"
@@ -256,97 +256,97 @@ export const VOICE = {
       "file": "/voice/card-0-1.mp3",
       "card": 0,
       "index": 1,
-      "duration": 5.05,
+      "duration": 5.6,
       "words": [
         {
           "text": "Give",
-          "start": 0.25,
-          "end": 0.388
-        },
-        {
-          "text": "it",
-          "start": 0.388,
+          "start": 0.35,
           "end": 0.487
         },
         {
-          "text": "a",
+          "text": "it",
           "start": 0.487,
-          "end": 0.575
+          "end": 0.6
+        },
+        {
+          "text": "a",
+          "start": 0.6,
+          "end": 0.713
         },
         {
           "text": "library",
-          "start": 0.575,
-          "end": 1.1
+          "start": 0.713,
+          "end": 1.363
         },
         {
           "text": "and",
-          "start": 1.1,
-          "end": 1.212
+          "start": 1.363,
+          "end": 1.488
         },
         {
           "text": "it",
-          "start": 1.212,
-          "end": 1.288
+          "start": 1.488,
+          "end": 1.563
         },
         {
           "text": "will",
-          "start": 1.288,
-          "end": 1.438
+          "start": 1.563,
+          "end": 1.75
         },
         {
           "text": "fetch;",
-          "start": 1.438,
-          "end": 2.1
+          "start": 1.75,
+          "end": 2.638
         },
         {
           "text": "give",
-          "start": 2.1,
-          "end": 2.263
+          "start": 2.638,
+          "end": 2.813
         },
         {
           "text": "it",
-          "start": 2.263,
-          "end": 2.375
-        },
-        {
-          "text": "time",
-          "start": 2.375,
-          "end": 2.75
-        },
-        {
-          "text": "and",
-          "start": 2.75,
-          "end": 2.862
-        },
-        {
-          "text": "it",
-          "start": 2.862,
+          "start": 2.813,
           "end": 2.938
         },
         {
-          "text": "will",
+          "text": "time",
           "start": 2.938,
-          "end": 3.05
+          "end": 3.425
+        },
+        {
+          "text": "and",
+          "start": 3.425,
+          "end": 3.538
+        },
+        {
+          "text": "it",
+          "start": 3.538,
+          "end": 3.612
+        },
+        {
+          "text": "will",
+          "start": 3.612,
+          "end": 3.775
         },
         {
           "text": "work",
-          "start": 3.05,
-          "end": 3.325
+          "start": 3.775,
+          "end": 4.05
         },
         {
           "text": "step",
-          "start": 3.325,
-          "end": 3.6
+          "start": 4.05,
+          "end": 4.35
         },
         {
           "text": "by",
-          "start": 3.6,
-          "end": 3.788
+          "start": 4.35,
+          "end": 4.588
         },
         {
           "text": "step.",
-          "start": 3.788,
-          "end": 4.95
+          "start": 4.588,
+          "end": 5.5
         }
       ],
       "hash": "b2a3d47fae7d4b5c"
@@ -355,102 +355,102 @@ export const VOICE = {
       "file": "/voice/card-0-2.mp3",
       "card": 0,
       "index": 2,
-      "duration": 6.875,
+      "duration": 8.15,
       "words": [
         {
           "text": "But",
-          "start": 0.225,
-          "end": 0.338
+          "start": 0.325,
+          "end": 0.45
         },
         {
           "text": "underneath",
-          "start": 0.338,
-          "end": 0.85
+          "start": 0.45,
+          "end": 1.05
         },
         {
           "text": "is",
-          "start": 0.85,
-          "end": 1
+          "start": 1.05,
+          "end": 1.212
         },
         {
           "text": "one",
-          "start": 1,
-          "end": 1.225
+          "start": 1.212,
+          "end": 1.488
         },
         {
           "text": "trick,",
-          "start": 1.225,
-          "end": 1.55
+          "start": 1.488,
+          "end": 1.9
         },
         {
           "text": "always:",
-          "start": 1.55,
-          "end": 2.325
+          "start": 1.9,
+          "end": 2.888
         },
         {
           "text": "guess",
-          "start": 2.325,
-          "end": 2.538
+          "start": 2.888,
+          "end": 3.175
         },
         {
           "text": "what",
-          "start": 2.538,
-          "end": 2.675
+          "start": 3.175,
+          "end": 3.325
         },
         {
           "text": "comes",
-          "start": 2.675,
-          "end": 2.975
+          "start": 3.325,
+          "end": 3.65
         },
         {
           "text": "next,",
-          "start": 2.975,
-          "end": 3.6
+          "start": 3.65,
+          "end": 4.375
         },
         {
           "text": "and",
-          "start": 3.6,
-          "end": 3.725
+          "start": 4.375,
+          "end": 4.5
         },
         {
           "text": "from",
-          "start": 3.725,
-          "end": 3.862
+          "start": 4.5,
+          "end": 4.65
         },
         {
           "text": "all",
-          "start": 3.862,
-          "end": 3.987
+          "start": 4.65,
+          "end": 4.875
         },
         {
           "text": "that",
-          "start": 3.987,
-          "end": 4.175
-        },
-        {
-          "text": "reading,",
-          "start": 4.175,
-          "end": 4.612
-        },
-        {
-          "text": "it",
-          "start": 4.612,
-          "end": 4.7
-        },
-        {
-          "text": "guesses",
-          "start": 4.7,
+          "start": 4.875,
           "end": 5.138
         },
         {
-          "text": "uncannily",
+          "text": "reading,",
           "start": 5.138,
-          "end": 5.7
+          "end": 5.75
+        },
+        {
+          "text": "it",
+          "start": 5.75,
+          "end": 5.912
+        },
+        {
+          "text": "guesses",
+          "start": 5.912,
+          "end": 6.425
+        },
+        {
+          "text": "uncannily",
+          "start": 6.425,
+          "end": 7.175
         },
         {
           "text": "well.",
-          "start": 5.7,
-          "end": 6.775
+          "start": 7.175,
+          "end": 8.05
         }
       ],
       "hash": "623a3fabbc81eceb"
@@ -459,117 +459,117 @@ export const VOICE = {
       "file": "/voice/card-1-0.mp3",
       "card": 1,
       "index": 0,
-      "duration": 8,
+      "duration": 9.25,
       "words": [
         {
           "text": "No",
-          "start": 0.3,
-          "end": 0.525
+          "start": 0.4,
+          "end": 0.637
         },
         {
           "text": "wizard",
-          "start": 0.525,
-          "end": 0.875
+          "start": 0.637,
+          "end": 1.063
         },
         {
           "text": "wrote",
-          "start": 0.875,
-          "end": 1.087
+          "start": 1.063,
+          "end": 1.313
         },
         {
           "text": "its",
-          "start": 1.087,
-          "end": 1.275
+          "start": 1.313,
+          "end": 1.512
         },
         {
           "text": "rules.",
-          "start": 1.275,
-          "end": 2.125
+          "start": 1.512,
+          "end": 2.45
         },
         {
           "text": "We",
-          "start": 2.125,
-          "end": 2.275
-        },
-        {
-          "text": "hid",
-          "start": 2.275,
-          "end": 2.462
-        },
-        {
-          "text": "what",
-          "start": 2.462,
+          "start": 2.45,
           "end": 2.6
         },
         {
-          "text": "came",
+          "text": "hid",
           "start": 2.6,
-          "end": 2.85
+          "end": 2.813
         },
         {
-          "text": "next",
-          "start": 2.85,
+          "text": "what",
+          "start": 2.813,
+          "end": 2.95
+        },
+        {
+          "text": "came",
+          "start": 2.95,
           "end": 3.237
         },
         {
-          "text": "and",
+          "text": "next",
           "start": 3.237,
-          "end": 3.35
+          "end": 3.675
+        },
+        {
+          "text": "and",
+          "start": 3.675,
+          "end": 3.813
         },
         {
           "text": "corrected",
-          "start": 3.35,
-          "end": 3.85
+          "start": 3.813,
+          "end": 4.325
         },
         {
           "text": "it,",
-          "start": 3.85,
-          "end": 4.2
+          "start": 4.325,
+          "end": 4.825
         },
         {
           "text": "a",
-          "start": 4.2,
-          "end": 4.3
+          "start": 4.825,
+          "end": 4.938
         },
         {
           "text": "trillion",
-          "start": 4.3,
-          "end": 4.7
+          "start": 4.938,
+          "end": 5.438
         },
         {
           "text": "times",
-          "start": 4.7,
-          "end": 5.05
+          "start": 5.438,
+          "end": 5.85
         },
         {
           "text": "over,",
-          "start": 5.05,
-          "end": 5.575
+          "start": 5.85,
+          "end": 6.5
         },
         {
           "text": "until",
-          "start": 5.575,
-          "end": 5.838
+          "start": 6.5,
+          "end": 6.85
         },
         {
           "text": "the",
-          "start": 5.838,
-          "end": 5.925
+          "start": 6.85,
+          "end": 6.987
         },
         {
           "text": "guessing",
-          "start": 5.925,
-          "end": 6.325
+          "start": 6.987,
+          "end": 7.487
         },
         {
           "text": "turned",
-          "start": 6.325,
-          "end": 6.625
+          "start": 7.487,
+          "end": 7.95
         },
         {
           "text": "uncanny.",
-          "start": 6.625,
-          "end": 7.9
+          "start": 7.95,
+          "end": 9.15
         }
       ],
       "hash": "db38a6d10e0bdc94"
@@ -578,87 +578,87 @@ export const VOICE = {
       "file": "/voice/card-1-1.mp3",
       "card": 1,
       "index": 1,
-      "duration": 4.85,
+      "duration": 5.45,
       "words": [
         {
           "text": "Then",
-          "start": 0.25,
-          "end": 0.362
+          "start": 0.35,
+          "end": 0.512
         },
         {
           "text": "we",
-          "start": 0.362,
-          "end": 0.475
+          "start": 0.512,
+          "end": 0.625
         },
         {
           "text": "trained",
-          "start": 0.475,
-          "end": 0.787
+          "start": 0.625,
+          "end": 0.963
         },
         {
           "text": "it",
-          "start": 0.787,
-          "end": 0.875
+          "start": 0.963,
+          "end": 1.05
         },
         {
           "text": "again,",
-          "start": 0.875,
-          "end": 1.25
+          "start": 1.05,
+          "end": 1.65
         },
         {
           "text": "by",
-          "start": 1.25,
-          "end": 1.425
+          "start": 1.65,
+          "end": 1.825
         },
         {
           "text": "hand,",
-          "start": 1.425,
-          "end": 2.025
+          "start": 1.825,
+          "end": 2.575
         },
         {
           "text": "to",
-          "start": 2.025,
-          "end": 2.125
+          "start": 2.575,
+          "end": 2.7
         },
         {
           "text": "do",
-          "start": 2.125,
-          "end": 2.263
+          "start": 2.7,
+          "end": 2.862
         },
         {
           "text": "as",
-          "start": 2.263,
-          "end": 2.375
+          "start": 2.862,
+          "end": 2.975
         },
         {
           "text": "you",
-          "start": 2.375,
-          "end": 2.5
+          "start": 2.975,
+          "end": 3.138
         },
         {
           "text": "ask",
-          "start": 2.5,
-          "end": 2.85
+          "start": 3.138,
+          "end": 3.563
         },
         {
           "text": "rather",
-          "start": 2.85,
-          "end": 3.163
+          "start": 3.563,
+          "end": 3.925
         },
         {
           "text": "than",
-          "start": 3.163,
-          "end": 3.325
+          "start": 3.925,
+          "end": 4.125
         },
         {
           "text": "ramble",
-          "start": 3.325,
-          "end": 3.7
+          "start": 4.125,
+          "end": 4.575
         },
         {
           "text": "on.",
-          "start": 3.7,
-          "end": 4.75
+          "start": 4.575,
+          "end": 5.35
         }
       ],
       "hash": "4ecba54636529b03"
@@ -667,85 +667,148 @@ export const VOICE = {
       "file": "/voice/card-1-2.mp3",
       "card": 1,
       "index": 2,
-      "duration": 5.525,
+      "duration": 6.075,
       "words": [
         {
           "text": "So",
-          "start": 0.275,
-          "end": 0.362
+          "start": 0.375,
+          "end": 0.512
         },
         {
           "text": "it",
-          "start": 0.362,
-          "end": 0.438
+          "start": 0.512,
+          "end": 0.6
         },
         {
           "text": "gives",
-          "start": 0.438,
-          "end": 0.637
+          "start": 0.6,
+          "end": 0.85
         },
         {
           "text": "you",
-          "start": 0.637,
-          "end": 0.738
+          "start": 0.85,
+          "end": 0.975
         },
         {
           "text": "what",
-          "start": 0.738,
-          "end": 0.875
+          "start": 0.975,
+          "end": 1.163
         },
         {
           "text": "usually",
-          "start": 0.875,
-          "end": 1.262
+          "start": 1.163,
+          "end": 1.625
         },
         {
           "text": "follows,",
-          "start": 1.262,
-          "end": 1.875
+          "start": 1.625,
+          "end": 2.225
         },
         {
           "text": "not",
-          "start": 1.875,
-          "end": 2.063
+          "start": 2.225,
+          "end": 2.425
         },
         {
           "text": "what",
-          "start": 2.063,
-          "end": 2.188
+          "start": 2.425,
+          "end": 2.575
         },
         {
           "text": "is",
-          "start": 2.188,
-          "end": 2.337
+          "start": 2.575,
+          "end": 2.75
         },
         {
           "text": "true.",
-          "start": 2.337,
-          "end": 3.038
+          "start": 2.75,
+          "end": 3.563
         },
         {
           "text": "Confident,",
-          "start": 3.038,
-          "end": 3.688
+          "start": 3.563,
+          "end": 4.325
         },
         {
           "text": "and",
-          "start": 3.688,
-          "end": 3.8
+          "start": 4.325,
+          "end": 4.513
         },
         {
           "text": "perfectly",
-          "start": 3.8,
-          "end": 4.3
+          "start": 4.513,
+          "end": 5.063
         },
         {
           "text": "wrong.",
-          "start": 4.3,
-          "end": 5.425
+          "start": 5.063,
+          "end": 5.975
         }
       ],
       "hash": "63771b73ee810027"
     }
   ] as const satisfies readonly VoiceSegment[],
+  /** The quiz question, read when the board brings it in. */
+  question: {
+    "file": "/voice/question.mp3",
+    "duration": 4.4,
+    "words": [
+      {
+        "text": "So",
+        "start": 0.375,
+        "end": 0.563
+      },
+      {
+        "text": "tell",
+        "start": 0.563,
+        "end": 0.813
+      },
+      {
+        "text": "me,",
+        "start": 0.813,
+        "end": 0.975
+      },
+      {
+        "text": "apprentice.",
+        "start": 0.975,
+        "end": 1.95
+      },
+      {
+        "text": "Underneath",
+        "start": 1.95,
+        "end": 2.475
+      },
+      {
+        "text": "it",
+        "start": 2.475,
+        "end": 2.6
+      },
+      {
+        "text": "all,",
+        "start": 2.6,
+        "end": 3.05
+      },
+      {
+        "text": "what",
+        "start": 3.05,
+        "end": 3.225
+      },
+      {
+        "text": "does",
+        "start": 3.225,
+        "end": 3.4
+      },
+      {
+        "text": "it",
+        "start": 3.4,
+        "end": 3.525
+      },
+      {
+        "text": "do?",
+        "start": 3.525,
+        "end": 4.3
+      }
+    ],
+    "hash": "7d8d5ad25a77994f"
+  } as const satisfies VoiceClip,
 } as const

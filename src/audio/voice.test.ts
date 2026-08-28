@@ -4,7 +4,14 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { VOICE } from './voiceManifest'
 import { allow, decline, voiceState } from './voice'
-import { CARDS, INSTRUCTOR_LINES, segmentSpoken, shownWords } from '@/game/training/cards'
+import {
+  CARDS,
+  INSTRUCTOR_LINES,
+  QUIZ,
+  sameSentence,
+  segmentSpoken,
+  shownWords,
+} from '@/game/training/cards'
 import { DURATIONS, VOICE_TAIL, initialTrainingState, stepTraining } from '@/game/training/trainingMachine'
 
 /*
@@ -44,7 +51,7 @@ describe('the baked voice matches the copy it was baked from', () => {
   it('names files that are actually on disk', () => {
     // So a 404 in production requires a file to have been removed AFTER a green
     // test run, which is a deploy problem rather than a code one.
-    for (const line of VOICE.lines) {
+    for (const line of [...VOICE.lines, ...VOICE.segments, VOICE.question]) {
       const path = resolve(process.cwd(), 'public', line.file.replace(/^\//, ''))
       expect(existsSync(path), `${line.file} is missing; run \`npm run bake:voice\``).toBe(true)
     }
@@ -58,7 +65,7 @@ describe('the baked voice matches the copy it was baked from', () => {
       re-bake at different settings is visible in the diff rather than being a
       round whose beats are half a second wrong on every playthrough.
     */
-    expect(VOICE.voice).toBe('bm_fable')
+    expect(VOICE.voice).toBe('bm_lewis')
     expect(VOICE.lang).toBe('b')
     expect(VOICE.speed).toBe(1)
   })
@@ -83,6 +90,24 @@ describe('the baked voice matches the copy it was baked from', () => {
     }
   })
 
+  it('reads the quiz question, and from the question on the cube', () => {
+    /*
+      The one thing in the round the player is asked to answer. It used to arrive
+      in silence after two narrated cards, which reads as the voice having given
+      up rather than as the lesson changing gear.
+
+      Hashed like everything else, so the question on the board and the question
+      in the ear cannot drift apart - the same chain `cards.ts` describes.
+    */
+    expect(VOICE.question.hash).toBe(hashOf(QUIZ.spokenQuestion))
+    const path = resolve(process.cwd(), 'public', VOICE.question.file.replace(/^\//, ''))
+    expect(existsSync(path), 'question.mp3 is missing; run `npm run bake:voice`').toBe(true)
+  })
+
+  it('asks aloud the same question it shows', () => {
+    expect(sameSentence(QUIZ.spokenQuestion)).toBe(sameSentence(QUIZ.question))
+  })
+
   it('gives every clip word timings that stay inside it and never go backwards', () => {
     /*
       **These are what the highlighting rides on**, and a bad one is invisible
@@ -92,7 +117,7 @@ describe('the baked voice matches the copy it was baked from', () => {
       from measuring the output, so they are exact by construction - which is
       exactly the kind of claim that deserves an assertion rather than trust.
     */
-    for (const clip of [...VOICE.lines, ...VOICE.segments]) {
+    for (const clip of [...VOICE.lines, ...VOICE.segments, VOICE.question]) {
       expect(clip.words.length, `${clip.file} has no words`).toBeGreaterThan(0)
       let last = 0
       for (const word of clip.words) {

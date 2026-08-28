@@ -284,6 +284,8 @@ export const sameSentence = (s: string): string => s.toUpperCase().replace(/[^A-
 
 export type Quiz = {
   question: string
+  /** What the wizard says. See the note at the value. */
+  spokenQuestion: string
   /** Top to bottom, matching the planks. */
   answers: readonly string[]
   /** Index into `answers`. */
@@ -292,6 +294,17 @@ export type Quiz = {
 
 export const QUIZ: Quiz = {
   question: 'So tell me, apprentice. Underneath it all - what does it do?',
+  /*
+    The spoken form, for the same reason `INSTRUCTOR_LINES` has one: the
+    project's plain dash is a typographic convention no grapheme-to-phoneme front
+    end understands, and it becomes silence or a mispronunciation. A comma is the
+    prosodic cue that means the same thing to a listener.
+
+    `cards.test.ts` holds the two to the same sentence once punctuation and case
+    are stripped, so this cannot quietly become a different question from the one
+    on the cube.
+  */
+  spokenQuestion: 'So tell me, apprentice. Underneath it all, what does it do?',
   /*
     All three are within a third of the mean LENGTH, and that is enforced by a
     test rather than left to care. The classic multiple-choice tell is that the

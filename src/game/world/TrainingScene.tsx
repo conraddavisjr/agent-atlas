@@ -33,7 +33,15 @@ import { Instructor } from '@/game/training/Instructor'
 import { instructorVisible } from '@/game/training/instructorPath'
 import { cycleComplete, formStart, litForm } from '@/game/training/specimen'
 import { useTrainingStore } from '@/game/training/trainingStore'
-import { preload, reset as resetVoice, speak, speakSegment, stop as stopVoice, unlock } from '@/audio/voice'
+import {
+  preload,
+  reset as resetVoice,
+  speak,
+  speakQuestion,
+  speakSegment,
+  stop as stopVoice,
+  unlock,
+} from '@/audio/voice'
 import { VOICE } from '@/audio/voiceManifest'
 import {
   initialTrainingState,
@@ -390,9 +398,24 @@ export function TrainingScene() {
     if (run.current.phase !== spoke.current) {
       const previous = spoke.current
       spoke.current = run.current.phase
-      if (previous === 'speech1' || previous === 'speech2') stopVoice()
+      if (previous === 'speech1' || previous === 'speech2' || previous === 'question') {
+        stopVoice()
+      }
       if (run.current.phase === 'speech1') speak(0)
       if (run.current.phase === 'speech2') speak(1)
+      /*
+        **The question, read aloud on the beat the board arrives.**
+
+        `question` rather than `cubeIn`: the cube is still descending through
+        `cubeIn` and a voice that starts while the board is in motion reads as
+        talking over the arrival. `question` begins the moment it has landed,
+        which is also the moment the player is first able to read it.
+
+        It is the one thing in the round the player is asked to answer, and after
+        two narrated cards it used to arrive in silence - which read as the voice
+        having given up rather than as the lesson changing gear.
+      */
+      if (run.current.phase === 'question') speakQuestion()
     }
 
     /*
