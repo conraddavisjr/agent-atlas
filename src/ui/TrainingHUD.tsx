@@ -1,7 +1,7 @@
 import { useEffect, type CSSProperties } from 'react'
 import { useGameStore } from '@/state/gameStore'
 import { useTrainingStore } from '@/game/training/trainingStore'
-import { CARDS, INSTRUCTOR_LINES, QUIZ } from '@/game/training/cards'
+import { CARDS, INSTRUCTOR_LINES, QUIZ, shownWords } from '@/game/training/cards'
 import { decline, preload, unlock } from '@/audio/voice'
 import { CARD_COUNT } from '@/game/training/trainingMachine'
 import { LAYER } from './layers'
@@ -45,6 +45,10 @@ export function TrainingHUD() {
   const requestAdvance = useTrainingStore((s) => s.requestAdvance)
   const requestBail = useTrainingStore((s) => s.requestBail)
   const audio = useGameStore((s) => s.audio)
+  const cardDone = useTrainingStore((s) => s.cardDone)
+  const requestReplay = useTrainingStore((s) => s.requestReplay)
+  const segment = useTrainingStore((s) => s.segment)
+  const word = useTrainingStore((s) => s.word)
   const setAudio = useGameStore((s) => s.setAudio)
 
   useEffect(() => {
@@ -148,7 +152,38 @@ export function TrainingHUD() {
         */
         <div style={styles.card}>
           <div style={styles.cardHeading}>{CARDS[Math.min(card, CARD_COUNT - 1)].heading}</div>
-          <div style={styles.cardBody}>{CARDS[Math.min(card, CARD_COUNT - 1)].body}</div>
+          <div style={styles.cardBody}>
+            <ReadAlong card={Math.min(card, CARD_COUNT - 1)} segment={segment} word={word} />
+          </div>
+        </div>
+      )}
+
+      {cardDone && (
+        /*
+          **The end of a pass, and the one moment this round asks a question
+          instead of moving on.**
+
+          Every other beat either runs on a timer or has a single Next. Here the
+          reader has just watched three illustrations go by while a paragraph was
+          read over them, and the useful thing to know is whether they want it
+          again. Offering it explicitly is cheaper than the alternative, which is a
+          reader scrubbing back with the key words or sitting through a silent
+          second loop hoping to catch the bit they missed.
+
+          Replay is the primary and it is deliberately the bigger target: somebody
+          who understood it will press Continue without needing to be aimed at it,
+          and somebody who did not is the person this panel exists for.
+        */
+        <div style={styles.doneScrim}>
+          <div style={styles.donePanel}>
+            <button style={styles.replay} onClick={requestReplay} autoFocus>
+              <ReplayIcon />
+              <span>Play it again</span>
+            </button>
+            <button style={styles.continue} onClick={requestAdvance}>
+              Continue &rsaquo;
+            </button>
+          </div>
         </div>
       )}
 
@@ -233,9 +268,10 @@ export function TrainingHUD() {
           }
         }}
         aria-label={audio === 'on' ? 'Mute the instructor' : 'Let the instructor speak'}
+        aria-pressed={audio === 'on'}
         title={audio === 'on' ? 'Mute the instructor' : 'Let the instructor speak'}
       >
-        {audio === 'on' ? 'Sound on' : 'Sound off'}
+        <SpeakerIcon muted={audio !== 'on'} />
       </button>
 
       <button style={styles.exit} onClick={requestBail}>
@@ -246,7 +282,29 @@ export function TrainingHUD() {
 }
 
 const panel: CSSProperties = {
-  background: 'rgba(12, 20, 38, 0.72)',
+  /*
+    **0.92, and it was 0.72, and the difference is what makes the read-along
+    legal rather than merely visible.**
+
+    The card text is 14 px, which is under WCAG's large-text threshold, so every
+    word - highlighted, faded or plain - has to hold 4.5:1 under SC 1.4.3. The
+    panel is translucent over a live 3D scene, so its effective background is
+    whatever the diorama is doing behind it, and the worst case is a bright frame.
+
+    Computed for `#e4ecfa` over this panel over a white scene:
+
+      panel 0.72   text 1.00 -> 6.21    0.72 -> 4.12 FAIL   0.55 -> 3.10 FAIL
+      panel 0.92   text 1.00 -> 12.60   0.72 -> 7.24        0.55 -> 4.86
+
+    At 0.72 the entire fade budget was 0.80 opacity, which is not a fade anybody
+    can see - so the clause dimming shipped in the previous commit was failing AA
+    on any bright frame. At 0.92 the floor drops to 0.55 and a real fade fits
+    inside the standard.
+
+    It also removes the scene dependence, which matters on its own: 14 px text
+    over a moving background is a legibility problem with or without a highlight.
+  */
+  background: 'rgba(12, 20, 38, 0.92)',
   backdropFilter: 'blur(9px)',
   border: '1px solid rgba(150, 190, 255, 0.18)',
   borderRadius: 14,
@@ -404,15 +462,74 @@ const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
+  /*
+    Over the exhibit rather than beside it, and NOT full-screen.
+
+    The reading card at the top and the reader chrome at the bottom both stay
+    visible and usable - the paragraph is what the reader may want to check
+    against, and a modal that covered it would be asking "again?" while hiding the
+    thing being offered. So this sits in the middle band, which is exactly the band
+    the frozen specimen occupies.
+  */
+  doneScrim: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: '26%',
+    display: 'grid',
+    placeItems: 'center',
+    pointerEvents: 'none',
+  },
+  donePanel: {
+    pointerEvents: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 12,
+  },
+  replay: {
+    pointerEvents: 'auto',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 9,
+    background: 'linear-gradient(180deg, #5aa9f5, #2f7ad2)',
+    border: 'none',
+    borderRadius: 11,
+    color: '#f2f7ff',
+    padding: '11px 20px',
+    fontSize: '0.9rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    boxShadow: '0 10px 28px rgba(0, 0, 0, 0.4)',
+  },
+  /*
+    Quieter than Replay. Both are real choices, but only one of them is the
+    reason the panel exists - and a matched pair of buttons would say the round
+    had no opinion about which.
+  */
+  continue: {
+    pointerEvents: 'auto',
+    background: 'rgba(12, 20, 38, 0.92)',
+    border: '1px solid rgba(150, 190, 255, 0.28)',
+    borderRadius: 10,
+    color: '#dbe6fb',
+    padding: '8px 18px',
+    fontSize: '0.84rem',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
   sound: {
+    display: 'grid',
+    placeItems: 'center',
     pointerEvents: 'auto',
     position: 'absolute',
     top: 18,
     /* Left of `Esc to leave`, which keeps its corner. */
-    right: 132,
+    right: 116,
     ...panel,
-    padding: '8px 14px',
-    fontSize: '0.78rem',
+    padding: 7,
+    lineHeight: 0,
     cursor: 'pointer',
     fontFamily: 'inherit',
     color: 'inherit',
@@ -427,4 +544,185 @@ const styles: Record<string, CSSProperties> = {
     fontSize: '0.78rem',
     cursor: 'pointer',
   },
+}
+
+/* ------------------------------------------------------------------------- */
+
+/**
+ * The reading card's paragraph, with the words lighting as they are said.
+ *
+ * ## A trailing window rather than one bouncing word
+ *
+ * A single word moving through a paragraph is the thing the brief called "big
+ * dancing text", and it is worse than it sounds when there is an animation to
+ * watch beside it: the eye is dragged word by word and never gets to look at the
+ * picture the words are describing.
+ *
+ * So the highlight is a short trail. The word being said is brightest, the three
+ * behind it fall away, and everything else sits at the paragraph's own strength.
+ * The effect is a soft bloom moving through the text rather than a cursor, which
+ * a reader can follow or ignore.
+ *
+ * ## It is deliberately faint
+ *
+ * The brightest state is barely above the body colour. There is a diagram doing
+ * the teaching two feet away and this is a subtitle: it needs to say WHERE the
+ * voice is, not compete for the frame. Nothing here changes size, weight or
+ * background, because all three reflow or flicker and any of them would pull the
+ * eye off the exhibit.
+ *
+ * ## It runs with the sound off
+ *
+ * `word` comes from the round's clock, not from the audio's. Both are derived
+ * from the same baked durations, so they agree by construction - and a player who
+ * declined the voice still gets the paragraph read to them at the pace it would
+ * have been spoken. See `TrainingScene`.
+ */
+function ReadAlong({ card, segment, word }: { card: number; segment: number; word: number }) {
+  const segments = CARDS[card].segments
+  /* Which clause the voice is in, as an index into this card's three. */
+  const active = segment >= 0 ? segment - card * 3 : -1
+
+  return (
+    <>
+      {segments.map((piece, index) => {
+        const words = shownWords(piece.shown)
+        const isActive = index === active
+        /*
+          Spoken-token indices, not token indices. The paragraph shows a standalone
+          dash that the voice replaces with a comma, so the two lists differ by one
+          from that point on - see `shownWords`, which exists for this.
+        */
+        let spokenIndex = -1
+        const rendered = words.map((token, w) => {
+          if (token.spoken) spokenIndex += 1
+          const behind = isActive && token.spoken ? word - spokenIndex : Number.NEGATIVE_INFINITY
+          const strength = behind >= 0 && behind < TRAIL.length ? TRAIL[behind] : 0
+          return (
+            <span
+              key={`${index}-${w}`}
+              style={strength > 0 ? { color: `rgba(255, 255, 255, ${strength})` } : undefined}
+            >
+              {token.text}
+              {w < words.length - 1 ? ' ' : ''}
+            </span>
+          )
+        })
+        return (
+          <span key={index} style={{ opacity: active === -1 || isActive ? 1 : CLAUSE_DIM }}>
+            {rendered}
+            {index < segments.length - 1 ? ' ' : ''}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
+/**
+ * How bright the current word is, and the three behind it.
+ *
+ * The falloff is what makes it a trail rather than a cursor. The body sits at
+ * `rgba(226, 236, 255, 0.78)`, so even the leading value is a lift of about a
+ * fifth - enough to follow, not enough to read as a marker.
+ */
+const TRAIL = [0.98, 0.9, 0.84, 0.8]
+
+/**
+ * How far the clauses that are not being read fall back.
+ *
+ * **This is the part of the read-along that carries the learning**, and it is
+ * worth being clear that the word window is not. The two studies that test
+ * synchronised highlighting against no highlighting - Keelor 2023 on children
+ * with reading difficulties, Brown 2021 on adults with aphasia - both find no
+ * comprehension difference, and Brown found readers simply PREFER having one. So
+ * the trail is an engagement feature and should not be asked to do more.
+ *
+ * The clause is different, because it is the only thing on screen that says which
+ * sentence the picture belongs to. Each card is three clauses and each clause has
+ * one form; dimming the other two is a three-step signal that carries the
+ * correspondence the whole diorama exists to teach.
+ *
+ * 0.58 against a 0.92 panel is 5.24:1 on the worst frame, comfortably AA. It has
+ * to stay readable rather than disappear: Schotter, Tran and Rayner (2014) found
+ * that preventing readers from looking BACK hurts comprehension - and not only on
+ * ambiguous sentences - so a clause that has been read must remain re-readable.
+ * That is also why a spoken word returns to full strength rather than staying
+ * marked or dimming further.
+ */
+const CLAUSE_DIM = 0.58
+
+/**
+ * A speaker, drawn rather than typed.
+ *
+ * **A microphone was wrong and the distinction matters.** A mic is an input
+ * control - it means "this application is listening to you" - and this button
+ * does the opposite: it decides whether the wizard is audible. On a page that has
+ * never asked for a microphone, a mic glyph with a slash through it reads as a
+ * privacy indicator, which is a considerably worse thing to be confused about
+ * than a volume control.
+ *
+ * Full white, because it is a control rather than a status: the muted state gets
+ * a slash and keeps the same weight. An icon that dimmed when muted would be
+ * saying the same thing twice and would be harder to find with the eye.
+ *
+ * Inline SVG rather than a glyph or an image - it is seventeen pixels of line
+ * art, it has to sit on a dark panel without a background, and a font emoji would
+ * render differently on every platform this runs on.
+ */
+function SpeakerIcon({ muted }: { muted: boolean }) {
+  return (
+    <svg
+      width="17"
+      height="17"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="#ffffff"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {/* The cone: a box at the wall and a horn opening to the right. */}
+      <path d="M4 9.5h3.5L12.5 5.5v13L7.5 14.5H4z" />
+      {muted ? (
+        <>
+          <path d="M16.5 9.5 21 14" />
+          <path d="M21 9.5 16.5 14" />
+        </>
+      ) : (
+        <>
+          <path d="M16 9.2a4 4 0 0 1 0 5.6" />
+          <path d="M18.7 6.8a7.5 7.5 0 0 1 0 10.4" />
+        </>
+      )}
+    </svg>
+  )
+}
+
+/**
+ * A circular arrow, for replay.
+ *
+ * An arc with a gap and a head on it rather than a full ring, because a closed
+ * circle with an arrowhead reads as "loop" - which is what this round was doing
+ * before and is the thing the panel exists to stop. The gap says "once more"
+ * rather than "forever".
+ */
+function ReplayIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.1"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" />
+      <path d="M20.6 3.4v5.2h-5.2" />
+    </svg>
+  )
 }

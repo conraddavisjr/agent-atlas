@@ -31,9 +31,10 @@ import { QUIZ } from '@/game/training/cards'
 import { Headline } from '@/game/training/Headline'
 import { Instructor } from '@/game/training/Instructor'
 import { instructorVisible } from '@/game/training/instructorPath'
-import { FORM_DWELL } from '@/game/training/specimen'
+import { cycleComplete, formStart, litForm } from '@/game/training/specimen'
 import { useTrainingStore } from '@/game/training/trainingStore'
-import { preload, reset as resetVoice, speak, stop as stopVoice, unlock } from '@/audio/voice'
+import { preload, reset as resetVoice, speak, speakSegment, stop as stopVoice, unlock } from '@/audio/voice'
+import { VOICE } from '@/audio/voiceManifest'
 import {
   initialTrainingState,
   stepTraining,
@@ -105,15 +106,21 @@ export function TrainingScene() {
   const setPlayerHidden = useGameStore((s) => s.setPlayerHidden)
   const completeLesson = useGameStore((s) => s.completeLesson)
   const publish = useTrainingStore((s) => s.publish)
+  const publishNarration = useTrainingStore((s) => s.publishNarration)
+  const publishCardDone = useTrainingStore((s) => s.publishCardDone)
   const resetRound = useTrainingStore((s) => s.reset)
 
   const run = useRef<TrainingState>(initialTrainingState())
   /** Sequence numbers last acted on. See `trainingStore` for why they are counters. */
-  const seen = useRef({ advance: 0, bail: 0, form: 0 })
+  const seen = useRef({ advance: 0, bail: 0, form: 0, replay: 0 })
   /** Latched, so the exit can only ever be requested once. */
   const left = useRef(false)
   /** The phase the voice last acted on, so a line is spoken once per beat. */
   const spoke = useRef<Phase>('arriving')
+  /** The clause the voice last started, as `card * 3 + index`. */
+  const narrating = useRef(-1)
+  /** Whether sound was wanted last frame, so un-muting is an edge. */
+  const wanted = useRef(false)
   /** Latched too. The completion is written once, on the frame the win lands. */
   const recorded = useRef(false)
   /** The live aim point, shared by the bow, the reticle and the shot. */
@@ -184,7 +191,12 @@ export function TrainingScene() {
       its own first card.
     */
     const counters = useTrainingStore.getState()
-    seen.current = { advance: counters.advanceSeq, bail: counters.bailSeq, form: counters.formSeq }
+    seen.current = {
+      advance: counters.advanceSeq,
+      bail: counters.bailSeq,
+      form: counters.formSeq,
+      replay: counters.replaySeq,
+    }
     left.current = false
     recorded.current = false
     pendingShot.current = null
@@ -263,10 +275,24 @@ export function TrainingScene() {
       Only while reading. During the change-over between cards, or the arrival, the
       clock means something else and a jump would fight it.
     */
+    /*
+      Replay: put the clock back to the top of the card and let the narration
+      restart from its first clause. It writes `elapsed` for the same reason the
+      word row does - `formCue` is a pure function of it, so moving the clock IS
+      moving the exhibit, and nothing else has to know.
+    */
+    if (store.replaySeq !== seen.current.replay) {
+      seen.current.replay = store.replaySeq
+      if (run.current.phase === 'reading') {
+        run.current = { ...run.current, elapsed: 0 }
+        narrating.current = -1
+      }
+    }
+
     if (store.formSeq !== seen.current.form) {
       seen.current.form = store.formSeq
       if (run.current.phase === 'reading') {
-        run.current = { ...run.current, elapsed: store.formWanted * FORM_DWELL }
+        run.current = { ...run.current, elapsed: formStart(run.current.card, store.formWanted) }
       }
     }
 
@@ -301,6 +327,66 @@ export function TrainingScene() {
       leaves a wizard talking over the diorama's arrival unless something cuts him
       off. That is the most likely thing a player does to a preamble.
     */
+    /*
+      **The narration, and the word the highlight is on.**
+
+      A clause begins when its form's window opens, which is also when the form's
+      dwell begins - the two are the same event because the dwell IS the clause's
+      length. So the edge to watch is the form index changing, not a phase.
+
+      The word index comes from the ROUND's clock rather than from the audio's.
+      That is deliberate and it is what makes the highlight work identically with
+      the sound off: `local` and the clip's timings are both derived from the same
+      baked durations, so they agree by construction, and a player who declined
+      the voice still watches the words light up in time with a wizard they cannot
+      hear. Reading `AudioContext.currentTime` instead would have made the whole
+      feature contingent on an mp3 that is allowed to 404.
+    */
+    const done = run.current.phase === 'reading' && cycleComplete(run.current.card, run.current.elapsed)
+    publishCardDone(done)
+
+    if (run.current.phase === 'reading' && !done) {
+      const index = litForm(run.current.card, run.current.elapsed)
+      const at = run.current.card * 3 + index
+      /*
+        Re-speak when the clause changes OR when the player has just turned the
+        sound back on. The second half is what makes the toggle work mid-beat: the
+        clock never stopped, so the clip has to start at the offset the round has
+        already reached rather than from the top.
+      */
+      const wants = useGameStore.getState().audio === 'on'
+      const resumed = wants && !wanted.current
+      wanted.current = wants
+      if (at !== narrating.current || resumed) {
+        narrating.current = at
+        speakSegment(
+          run.current.card,
+          index,
+          run.current.elapsed - formStart(run.current.card, index),
+        )
+      }
+      const clip = VOICE.segments.find(
+        (s) => s.card === run.current.card && s.index === index,
+      )
+      if (clip) {
+        const local = run.current.elapsed - formStart(run.current.card, index)
+        let word = -1
+        for (let i = 0; i < clip.words.length; i++) {
+          if (local >= clip.words[i].start) word = i
+          else break
+        }
+        publishNarration(at, word)
+      }
+    } else if (narrating.current !== -1) {
+      /*
+        The pass is over, or the beat is. Either way the wizard stops rather than
+        being talked over by the next thing - the same stop the Skip button takes.
+      */
+      narrating.current = -1
+      stopVoice()
+      publishNarration(-1, -1)
+    }
+
     if (run.current.phase !== spoke.current) {
       const previous = spoke.current
       spoke.current = run.current.phase

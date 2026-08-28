@@ -1,4 +1,4 @@
-// Renders the instructor's lines with Kokoro and writes the voice manifest.
+// Renders everything the instructor says with Kokoro, and writes the manifest.
 //
 //   npm run bake:voice
 //
@@ -16,58 +16,101 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '../..')
 const VENV = join(HERE, '.venv')
 const PY = join(VENV, 'bin', 'python')
+const SPEAK = join(HERE, 'speak.py')
 const OUT_AUDIO = join(ROOT, 'public', 'voice')
 const OUT_MANIFEST = join(ROOT, 'src', 'audio', 'voiceManifest.ts')
 
 const MODEL = 'mlx-community/Kokoro-82M-bf16'
-const VOICE = 'bm_george'
+
+/**
+ * The voice.
+ *
+ * `bm_fable` after listening to both. `bm_george` shipped first, on the argument
+ * that the wizard is licensed to be blunt by being old - and heard against the
+ * round it reads as weary rather than as theatrical. Fable is the storyteller
+ * voice in the set and it performs the line rather than reporting it, which is
+ * what "an explanation that admits to being a performance" actually asks for.
+ *
+ * It is also 10% quicker at the same nominal speed, which now matters more than
+ * it did: the reading beats are as long as the narration, so the voice's pace is
+ * the round's pace.
+ */
+const VOICE = 'bm_fable'
 const SPEED = 1.0
+
 /**
  * British English phonemes, and this is not optional for a British voice.
  *
- * Without it Kokoro logs `Language mismatch, loading bm_george voice into
- * American English pipeline` and carries on - a WARNING, on stderr, in a tool
- * whose output nobody reads twice. The voice embedding stays British and the
- * phonemes it is asked to produce are American, so the wizard says "ANN-ser" and
- * "SKRAWLS" in an English accent, which is the uncanny half-and-half you get from
- * a dialect coach who left halfway through.
+ * Without it Kokoro logs `Language mismatch, loading bm_fable voice into American
+ * English pipeline` and carries on - a WARNING, on stderr, in a tool whose output
+ * nobody reads twice. The voice embedding stays British and the phonemes it is
+ * asked to produce are American, so the wizard says "ANN-ser" and "SKRAWLS" in an
+ * English accent, which is the uncanny half-and-half you get from a dialect coach
+ * who left halfway through. The first bake shipped exactly that.
  */
 const LANG = 'b'
 
 const BREW_LIB = '/opt/homebrew/lib/libespeak-ng.dylib'
 const BREW_DATA = '/opt/homebrew/share/espeak-ng-data'
 
-const run = (cmd, args, opts = {}) =>
-  execFileSync(cmd, args, { stdio: 'inherit', ...opts })
+const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: 'inherit', ...opts })
 
 /**
- * The lines, read out of `cards.ts` rather than duplicated here.
+ * Everything the wizard says, read out of the source rather than duplicated.
  *
- * A regex over a TypeScript file is normally a bad idea and it is safe in this
- * one place, because it cannot fail quietly: the manifest records a hash of
- * whatever this extracts, and a unit test compares that hash against the real
- * `INSTRUCTOR_LINES[i].spoken`. If the regex ever grabs the wrong thing, the test
- * goes red rather than the wizard saying something nobody wrote.
+ * A regex over TypeScript is normally a bad idea and it is safe in this one
+ * place, because it cannot fail quietly: the manifest records a hash of whatever
+ * this extracts, and `voice.test.ts` compares those hashes against the real
+ * exports. If the regex ever grabs the wrong thing the test goes red rather than
+ * the wizard saying something nobody wrote.
  *
- * It still refuses rather than guessing when the shape changes, because a bake
- * that silently produces one line is worse than one that stops.
+ * It refuses rather than guessing when the shape changes, because a bake that
+ * silently produces half the lines is worse than one that stops.
  */
-function readSpokenLines() {
+function readScript() {
   const source = readFileSync(join(ROOT, 'src/game/training/cards.ts'), 'utf8')
-  const block = source.match(
+
+  const lineBlock = source.match(
     /export const INSTRUCTOR_LINES: readonly InstructorLine\[\] = \[([\s\S]*?)\n\]/,
   )
-  if (!block) throw new Error('bake:voice: could not find INSTRUCTOR_LINES in cards.ts')
-  const lines = [...block[1].matchAll(/spoken:\s*'((?:[^'\\]|\\.)*)'/g)].map((m) =>
-    m[1].replace(/\\'/g, "'"),
+  if (!lineBlock) throw new Error('bake:voice: could not find INSTRUCTOR_LINES in cards.ts')
+  const lines = [...lineBlock[1].matchAll(/spoken:\s*((?:'(?:[^'\\]|\\.)*'\s*\+?\s*)+)/g)].map((m) =>
+    joinLiteral(m[1]),
   )
   if (lines.length !== 2) {
     throw new Error(
-      `bake:voice: expected 2 spoken lines in cards.ts, found ${lines.length}. ` +
+      `bake:voice: expected 2 instructor lines, found ${lines.length}. ` +
         'The shape of INSTRUCTOR_LINES changed; fix this extractor rather than the data.',
     )
   }
-  return lines
+
+  /*
+    The card segments. Each entry is `shown:` with an optional `spoken:` after
+    it, and the spoken form wins when present - the same rule `segmentSpoken`
+    applies at runtime.
+  */
+  const cardBlock = source.match(/export const CARDS: readonly Card\[\] = \[([\s\S]*?)\n\]\n/)
+  if (!cardBlock) throw new Error('bake:voice: could not find CARDS in cards.ts')
+  const segments = [
+    ...cardBlock[1].matchAll(
+      /shown:\s*((?:'(?:[^'\\]|\\.)*'\s*\+?\s*)+),(?:\s*\/\*[\s\S]*?\*\/)?\s*(?:spoken:\s*((?:'(?:[^'\\]|\\.)*'\s*\+?\s*)+),)?/g,
+    ),
+  ].map((m) => joinLiteral(m[2] ?? m[1]))
+  if (segments.length !== 6) {
+    throw new Error(
+      `bake:voice: expected 6 card segments (2 cards x 3), found ${segments.length}. ` +
+        'The shape of CARDS changed; fix this extractor rather than the data.',
+    )
+  }
+
+  return { lines, segments }
+}
+
+/** `'a' + 'b'` in the source is one string here. */
+function joinLiteral(fragment) {
+  return [...fragment.matchAll(/'((?:[^'\\]|\\.)*)'/g)]
+    .map((m) => m[1].replace(/\\'/g, "'"))
+    .join('')
 }
 
 /** Build the venv on first run. Both packages are large; this is not quick. */
@@ -76,7 +119,7 @@ function ensureVenv() {
   console.log('bake:voice: creating tools/voice/.venv (this takes a few minutes)')
   run('python3.11', ['-m', 'venv', VENV])
   run(PY, ['-m', 'pip', 'install', '--quiet', '--upgrade', 'pip'])
-  run(PY, ['-m', 'pip', 'install', 'mlx-audio', 'misaki[en]'])
+  run(PY, ['-m', 'pip', 'install', 'mlx-audio', 'misaki[en]', 'soundfile'])
 }
 
 /**
@@ -108,38 +151,28 @@ function fixEspeak() {
   console.log(`bake:voice: phonemiser ${BREW_LIB}`)
 }
 
-function durationOf(file) {
-  const out = execFileSync('ffprobe', [
-    '-v', 'error',
-    '-show_entries', 'format=duration',
-    '-of', 'csv=p=0',
-    file,
-  ])
-  return +Number(out.toString().trim()).toFixed(3)
-}
+const durationOf = (file) =>
+  +Number(
+    execFileSync('ffprobe', [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'csv=p=0',
+      file,
+    ])
+      .toString()
+      .trim(),
+  ).toFixed(3)
 
-ensureVenv()
-fixEspeak()
-mkdirSync(OUT_AUDIO, { recursive: true })
-mkdirSync(dirname(OUT_MANIFEST), { recursive: true })
-
-const spoken = readSpokenLines()
-const entries = []
-
-spoken.forEach((text, index) => {
-  const stem = join(OUT_AUDIO, `instructor-${index}`)
-  console.log(`bake:voice: [${index}] ${text}`)
-  run(PY, [
-    '-m', 'mlx_audio.tts.generate',
-    '--model', MODEL,
-    '--text', text,
-    '--voice', VOICE,
-    '--speed', String(SPEED),
-    '--lang_code', LANG,
-    '--file_prefix', stem,
-  ])
-  const wav = `${stem}_000.wav`
-  if (!existsSync(wav)) throw new Error(`bake:voice: kokoro produced no audio for line ${index}`)
+/** One clip: synthesise, take its word timings, encode, and measure the result. */
+function render(text, stem) {
+  console.log(`bake:voice: ${stem}  ${text.slice(0, 64)}${text.length > 64 ? '...' : ''}`)
+  const wav = `${stem}.wav`
+  const spoken = execFileSync(
+    PY,
+    [SPEAK, '--text', text, '--voice', VOICE, '--lang', LANG, '--speed', String(SPEED), '--out', wav, '--model', MODEL],
+    { encoding: 'utf8' },
+  )
+  const timing = JSON.parse(spoken.trim().split('\n').pop())
   const mp3 = `${stem}.mp3`
   /*
     24 kHz mono at q4. Speech, not music: a fixed 64 kbps would roughly halve the
@@ -148,11 +181,34 @@ spoken.forEach((text, index) => {
   */
   run('ffmpeg', ['-y', '-loglevel', 'error', '-i', wav, '-codec:a', 'libmp3lame', '-q:a', '4', mp3])
   rmSync(wav, { force: true })
-  entries.push({
-    file: `/voice/instructor-${index}.mp3`,
+  return {
     duration: durationOf(mp3),
+    words: timing.words.map((w) => ({
+      text: w.text,
+      start: +w.start.toFixed(3),
+      end: +w.end.toFixed(3),
+    })),
     hash: createHash('sha256').update(text).digest('hex').slice(0, 16),
-  })
+  }
+}
+
+ensureVenv()
+fixEspeak()
+mkdirSync(OUT_AUDIO, { recursive: true })
+mkdirSync(dirname(OUT_MANIFEST), { recursive: true })
+
+const { lines, segments } = readScript()
+
+const instructor = lines.map((text, i) => {
+  const out = render(text, join(OUT_AUDIO, `instructor-${i}`))
+  return { file: `/voice/instructor-${i}.mp3`, ...out }
+})
+
+const cardSegments = segments.map((text, i) => {
+  const card = Math.floor(i / 3)
+  const index = i % 3
+  const out = render(text, join(OUT_AUDIO, `card-${card}-${index}`))
+  return { file: `/voice/card-${card}-${index}.mp3`, card, index, ...out }
 })
 
 const manifest = `/*
@@ -164,19 +220,36 @@ const manifest = `/*
   the sound - same beats, same subtitles, for the same length of time - because
   nothing about the script ever consults the audio.
 
-  \`hash\` is of the \`spoken\` string each file was rendered from. \`voice.test.ts\`
-  compares it against \`INSTRUCTOR_LINES\`, which is what makes it impossible to
-  change the wizard's words and leave the audio saying the old ones.
+  \`hash\` is of the spoken string each file was rendered from. \`voice.test.ts\`
+  compares it against the copy, which is what makes it impossible to change the
+  wizard's words and leave the audio saying the old ones.
+
+  \`words\` comes from Kokoro's own per-phoneme duration prediction rather than
+  from measuring the output or estimating from word length - see
+  \`tools/voice/speak.py\`. The numbers are what the vocoder was TOLD to produce,
+  so they are exact by construction.
 */
 
-export type VoiceLine = {
-  /** Served from \`public/\`, so it is a root-relative URL rather than an import. */
+export type VoiceWord = {
+  text: string
+  /** Seconds from the start of this clip. */
+  start: number
+  end: number
+}
+
+export type VoiceClip = {
+  /** Served from \`public/\`, so a root-relative URL rather than an import. */
   file: string
-  /** Seconds, measured off the encoded file. The speech beat is derived from it. */
+  /** Seconds, measured off the encoded file. */
   duration: number
+  /** Every word, in order, with the time it is spoken. */
+  words: readonly VoiceWord[]
   /** First 16 hex of sha256 over the exact spoken string. */
   hash: string
 }
+
+/** A card segment, which is one clause and the form that illustrates it. */
+export type VoiceSegment = VoiceClip & { card: number; index: number }
 
 export const VOICE = {
   voice: ${JSON.stringify(VOICE)},
@@ -184,10 +257,15 @@ export const VOICE = {
   lang: ${JSON.stringify(LANG)},
   /** Durations are only valid for the speed they were rendered at. */
   speed: ${SPEED},
-  lines: ${JSON.stringify(entries, null, 2).replace(/\n/g, '\n  ')} as const satisfies readonly VoiceLine[],
+  /** What the instructor says on the way in. */
+  lines: ${JSON.stringify(instructor, null, 2).replace(/\n/g, '\n  ')} as const satisfies readonly VoiceClip[],
+  /** The cards, narrated one clause at a time. */
+  segments: ${JSON.stringify(cardSegments, null, 2).replace(/\n/g, '\n  ')} as const satisfies readonly VoiceSegment[],
 } as const
 `
 
 writeFileSync(OUT_MANIFEST, manifest)
 console.log(`bake:voice: wrote ${OUT_MANIFEST}`)
-entries.forEach((e, i) => console.log(`  [${i}] ${e.file}  ${e.duration}s`))
+for (const clip of [...instructor, ...cardSegments]) {
+  console.log(`  ${clip.file}  ${clip.duration}s  ${clip.words.length} words`)
+}

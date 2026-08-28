@@ -5,7 +5,7 @@ import { GLOW, emissive, mattePlastic, shell } from '@/art/materials'
 import { palette } from '@/art/palette'
 import { mergeProp, pad, slab, trace } from '@/art/geometry'
 import { assertDrawable } from '@/game/world/hubLayout'
-import { teachingMachineGeometry } from '../teachingMachine'
+import { machineIntake, teachingMachineGeometry } from '../teachingMachine'
 import { loop, pointAlong, stationGlow, steppedAlong } from '../diorama'
 import type { LiveCue } from '../specimen'
 
@@ -55,7 +55,7 @@ export function Fetched({ cue }: { cue: LiveCue }) {
   const slowMaterial = useRef<{ emissiveIntensity: number } | null>(null)
 
   const machine = useMemo(
-    () => assertDrawable(teachingMachineGeometry(0.42), 'the fetching machine'),
+    () => assertDrawable(teachingMachineGeometry(MACHINE_SCALE_HERE), 'the fetching machine'),
     [],
   )
 
@@ -166,7 +166,7 @@ export function Fetched({ cue }: { cue: LiveCue }) {
 
   return (
     <group>
-      <mesh geometry={machine} position={[0.44, 0, 0]} castShadow receiveShadow>
+      <mesh geometry={machine} position={MACHINE_AT} castShadow receiveShadow>
         <meshPhysicalMaterial {...shell(palette.shell)} />
       </mesh>
 
@@ -191,9 +191,21 @@ export function Fetched({ cue }: { cue: LiveCue }) {
         The book being fetched. One mesh: there is one of it, and an instanced
         batch of one is a buffer and a matrix write to save nothing.
       */}
+      {/*
+        The book being fetched, in `accent` rather than the shelf's own colour.
+
+        It was `bandTrim`, which is what the spines are made of - so the one
+        object the whole form is about was the same colour as the fifty it came
+        out of. A reader could not tell which book had been chosen, which is the
+        entire claim. Orange against a shelf of slate says "this one" without a
+        label.
+
+        Not emissive: `00-art-bible.md` keeps bloom for ally blue and reward gold,
+        and a glowing book would read as something the player had won.
+      */}
       <mesh ref={book} castShadow>
-        <boxGeometry args={[0.1, 0.14, 0.045]} />
-        <meshPhysicalMaterial {...mattePlastic(palette.bandTrim)} />
+        <boxGeometry args={[0.11, 0.15, 0.05]} />
+        <meshPhysicalMaterial {...mattePlastic(palette.accent)} />
       </mesh>
 
     </group>
@@ -203,20 +215,63 @@ export function Fetched({ cue }: { cue: LiveCue }) {
 /* ------------------------------------------------------------------------- */
 
 const SHELF_Y = 0.62
+const MACHINE_AT: [number, number, number] = [0.44, 0, 0]
+/** Shared with the geometry call, so the intake cannot be derived from the wrong size. */
+const MACHINE_SCALE_HERE = 0.42
 
-/** Straight from the shelf's top row to the machine's head. One grab. */
+/**
+ * The shelf face, and the two routes off it.
+ *
+ * ## They run IN FRONT of the shelf now, which they did not
+ *
+ * The camera sits at negative Z looking toward positive Z, so SMALLER z is nearer
+ * the viewer. The shelf's spines occupy z 0 to 0.1 and both routes were drawn at
+ * z 0.12 - behind it. The book was fetched from a library by travelling through
+ * the back of it, which read as the book being generated somewhere inside the
+ * shelf rather than taken off it.
+ *
+ * `ROUTE_Z` is negative, so the whole errand happens in front of the furniture.
+ * The book's first move is still outward, from inside the shelf to the face, so
+ * it is visibly REMOVED rather than appearing beside it.
+ */
+const ROUTE_Z = -0.08
+const SHELF_FACE_X = -0.42
+
+/**
+ * Where the machine's hopper actually is, in this station's own units.
+ *
+ * **Derived rather than typed, because the routes used to miss it.** Both paths
+ * ended at a hand-written `(0.44, 0.92)` while the machine stands at `MACHINE_AT`
+ * with `teachingMachineGeometry(0.42)`, whose intake sits at
+ * `(LEG_HEIGHT + 0.84) * 0.42` = 0.428 above its base. So the line stopped half a
+ * metre short and above, in mid-air, and the book arrived somewhere near the
+ * machine rather than at it - which at the specimen's scale is unmissable.
+ *
+ * `machineIntake` is shared with `Fed.tsx` for exactly this reason: its own note
+ * says the two "have to agree or the streams miss the hopper, and they missed it
+ * once already". They have now missed it twice.
+ */
+const INTAKE: [number, number, number] = (() => {
+  const [, y] = machineIntake(MACHINE_SCALE_HERE)
+  return [MACHINE_AT[0], y, ROUTE_Z]
+})()
+
+
+/** Straight from the shelf's top row to the hopper. One grab. */
 const FAST_PATH: [number, number, number][] = [
-  [-0.42, 1.12, 0.12],
-  [0.44, 0.92, 0.12],
+  [SHELF_FACE_X, 1.1, 0.04],
+  [SHELF_FACE_X, 1.1, ROUTE_Z],
+  INTAKE,
 ]
 
 /** Four waypoints between the shelf's lower row and the machine. A procedure. */
 const SLOW_PATH: [number, number, number][] = [
-  [-0.42, 0.66, 0.12],
-  [-0.2, 0.44, 0.12],
-  [0.02, 0.56, 0.12],
-  [0.24, 0.4, 0.12],
-  [0.44, 0.6, 0.12],
+  [SHELF_FACE_X, 0.66, 0.04],
+  [SHELF_FACE_X, 0.66, ROUTE_Z],
+  [-0.2, 0.44, ROUTE_Z],
+  [0.02, 0.56, ROUTE_Z],
+  [0.24, 0.4, ROUTE_Z],
+  INTAKE,
 ]
 
 /**
@@ -227,9 +282,14 @@ const SLOW_PATH: [number, number, number][] = [
  * where before it was in how long it took, and a slower dot mostly reads as a
  * further-away one.
  *
- * It has to fit inside `FORM_WINDOW` twice, because a visit needs to show the
+ * It has to fit inside the form's window TWICE, because a visit needs to show the
  * straight grab AND the stepped version before the form fades - the paragraph
- * names two things and a viewer who saw one of them learned half a sentence. At
- * 2.1 the pair takes 4.2 s against a 4.55 s window.
+ * names two things, and a viewer who saw one of them learned half a sentence.
+ *
+ * 2.6 rather than 2.1, and the reason is that this form's dwell is now the length
+ * of its own clause: 5.05 s of narration plus the tail, or 5.85 s. At 2.1 the
+ * pair finished in 4.2 s and the belt started a third errand it never completed,
+ * which reads as the diagram stuttering. At 2.6 the two take 5.2 s of a 5.4 s
+ * readable window - one grab, one procedure, and then the form leaves.
  */
-const ROUTE_PERIOD = 2.1
+const ROUTE_PERIOD = 2.6

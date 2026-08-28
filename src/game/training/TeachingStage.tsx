@@ -8,7 +8,10 @@ import type { LiveCue } from './specimen'
 import {
   FORM_COUNT,
   FORM_CROSS,
+  FROZEN_PRESENCE,
+  cycleComplete,
   formCue,
+  formDwell,
   formOffset,
   formScale,
   litForm,
@@ -150,10 +153,22 @@ export function TeachingStage({ run }: { run: RefObject<TrainingState> }) {
     }
 
     const stage = stagePresence(state, carried.current)
-    const reading = state.phase === 'reading'
+    /*
+      **The pass ends, and the exhibit stops rather than looping.**
 
-    if (reading) {
-      held.current = litForm(state.elapsed)
+      Once all three forms have been through once the card is offering a replay,
+      and a diagram still animating behind that offer is arguing with it. So the
+      last form holds its final pose and fades back, which also stops the
+      narration talking over a dialog.
+    */
+    const done = state.phase === 'reading' && cycleComplete(card, state.elapsed)
+    const reading = state.phase === 'reading' && !done
+
+    if (done) {
+      held.current = FORM_COUNT - 1
+      heldLocal.current = formDwell(card, FORM_COUNT - 1)
+    } else if (reading) {
+      held.current = litForm(card, state.elapsed)
     } else if (state.phase === 'dioramaIn') {
       // The card opens on its first form, always.
       held.current = 0
@@ -175,8 +190,16 @@ export function TeachingStage({ run }: { run: RefObject<TrainingState> }) {
 
       let presence: number
       let local: number
-      if (reading) {
-        const cue = formCue(i, state.elapsed)
+      if (done) {
+        /*
+          Frozen, not hidden. The reader is being asked whether to watch this
+          again, so it has to still be there to point at - just clearly no longer
+          the thing happening.
+        */
+        presence = i === held.current ? FROZEN_PRESENCE : 0
+        local = heldLocal.current
+      } else if (reading) {
+        const cue = formCue(card, i, state.elapsed)
         presence = cue.presence
         local = cue.local
       } else {
@@ -206,7 +229,7 @@ export function TeachingStage({ run }: { run: RefObject<TrainingState> }) {
         same fade the player has already seen eleven times. It covers the dev
         harness's `seek` for free, which is the other way this clock moves.
       */
-      const target = presence * (reading ? stage : 1)
+      const target = presence * (reading || done ? stage : 1)
       const was = applied.current[i] < 0 ? target : applied.current[i]
       const step = delta / (FORM_CROSS / 2)
       const next = Math.abs(target - was) <= step ? target : was + Math.sign(target - was) * step

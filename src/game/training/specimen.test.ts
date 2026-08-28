@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   FORM_COUNT,
   FORM_CROSS,
-  FORM_DWELL,
+  formDwell,
+  formStart,
+  formWindow,
   FORM_FRAME,
-  FORM_WINDOW,
   SPECIMEN_HEIGHT,
   SPECIMEN_WIDTH,
+  cycleComplete,
   formCue,
   formOffset,
   formScale,
@@ -15,6 +17,7 @@ import {
   specimenVisible,
   stagePresence,
 } from './specimen'
+import { VOICE } from '@/audio/voiceManifest'
 import { cameraPose } from './cameraDirector'
 import { SPECIMEN_AT, dioramaSafeWidth } from './stage'
 import { initialTrainingState, type Phase, type TrainingState } from './trainingMachine'
@@ -27,7 +30,9 @@ const at = (phase: Phase, elapsed = 0, over: Partial<TrainingState> = {}): Train
 })
 
 /** Every 20 ms over four full passes, which is twelve appearances of each form. */
-const SWEEP = Array.from({ length: 3000 }, (_, i) => i * 0.02)
+const SWEEP = Array.from({ length: 4000 }, (_, i) => i * 0.02)
+/** Every test below runs against card 0, which is the one with three real forms. */
+const CARD = 0
 
 describe('the change-over shows one form at a time', () => {
   it('never draws two forms at once', () => {
@@ -38,7 +43,7 @@ describe('the change-over shows one form at a time', () => {
       outgoing form reaches zero before the incoming one leaves it.
     */
     for (const t of SWEEP) {
-      const present = Array.from({ length: FORM_COUNT }, (_, i) => formCue(i, t).presence).filter(
+      const present = Array.from({ length: FORM_COUNT }, (_, i) => formCue(CARD, i, t).presence).filter(
         (p) => p > 0,
       )
       expect(present.length, `two forms drawn at t=${t.toFixed(2)}`).toBeLessThanOrEqual(1)
@@ -52,22 +57,22 @@ describe('the change-over shows one form at a time', () => {
       immediately dip again - a stutter on the beat that introduces the whole
       teaching act.
     */
-    expect(formCue(0, 0).presence).toBe(1)
-    expect(litForm(0)).toBe(0)
+    expect(formCue(CARD, 0, 0).presence).toBe(1)
+    expect(litForm(CARD, 0)).toBe(0)
   })
 
   it('fades form 0 in normally on every later pass', () => {
     // By then it is following form 2 rather than following an empty stage.
-    const justOpened = specimenRunTime() + 0.01
-    expect(formCue(0, justOpened).presence).toBeGreaterThan(0)
-    expect(formCue(0, justOpened).presence).toBeLessThan(1)
+    const justOpened = specimenRunTime(CARD) + 0.01
+    expect(formCue(CARD, 0, justOpened).presence).toBeGreaterThan(0)
+    expect(formCue(CARD, 0, justOpened).presence).toBeLessThan(1)
   })
 
   it('closes the cycle, so the loop has no seam', () => {
     for (const t of [0.4, 1.9, 3.1, 5.2, 7.0]) {
       for (let i = 0; i < FORM_COUNT; i++) {
-        const a = formCue(i, t + specimenRunTime())
-        const b = formCue(i, t + specimenRunTime() * 2)
+        const a = formCue(CARD, i, t + specimenRunTime(CARD))
+        const b = formCue(CARD, i, t + specimenRunTime(CARD) * 2)
         expect(a.presence, `form ${i} at t=${t}`).toBeCloseTo(b.presence, 9)
         expect(a.local).toBeCloseTo(b.local, 9)
       }
@@ -91,8 +96,8 @@ describe("each form's own clock restarts every visit", () => {
     */
     for (let pass = 0; pass < 4; pass++) {
       for (let i = 0; i < FORM_COUNT; i++) {
-        const opens = pass * specimenRunTime() + i * FORM_DWELL
-        expect(formCue(i, opens).local, `form ${i}, pass ${pass}`).toBeCloseTo(0, 9)
+        const opens = pass * specimenRunTime(CARD) + formStart(CARD, i)
+        expect(formCue(CARD, i, opens).local, `form ${i}, pass ${pass}`).toBeCloseTo(0, 9)
       }
     }
   })
@@ -100,8 +105,8 @@ describe("each form's own clock restarts every visit", () => {
   it('runs forward for the whole of a visit', () => {
     for (let i = 0; i < FORM_COUNT; i++) {
       let last = -1
-      for (let s = 0; s < FORM_DWELL; s += 0.01) {
-        const cue = formCue(i, i * FORM_DWELL + s)
+      for (let s = 0; s < formDwell(CARD, i); s += 0.01) {
+        const cue = formCue(CARD, i, formStart(CARD, i) + s)
         expect(cue.local, `form ${i} went backwards`).toBeGreaterThanOrEqual(last)
         last = cue.local
       }
@@ -111,14 +116,21 @@ describe("each form's own clock restarts every visit", () => {
 
 describe('the cadence leaves room to read', () => {
   it('spends most of every beat on a still, readable form', () => {
-    expect(FORM_CROSS).toBeLessThan(FORM_DWELL / 4)
+    for (let i = 0; i < FORM_COUNT; i++) {
+      expect(FORM_CROSS, `form ${i}`).toBeLessThan(formDwell(CARD, i) / 4)
+    }
   })
 
   it('finishes a pass inside the time it takes to read the paragraph beside it', () => {
     /*
-      Inherited from the three-station stage and still the right ceiling: much
-      past ten seconds and the reader has finished the paragraph and is waiting on
-      a diagram. A 300-character card is about 17 s of reading at 200 wpm.
+      The ceiling has moved twice with the pacing - 10 s against three 2.5 s
+      frames, 18 against three 5 s ones, and 24 now that each frame lasts as long
+      as the clause said over it. What it protects has never changed: a pass that
+      outlasts the paragraph beside it leaves the reader waiting on a picture.
+
+      It cannot really do that any more, because the pass IS the paragraph - but
+      the assertion stays as a tripwire on the bake. A clause that suddenly takes
+      twelve seconds means somebody re-baked at half speed.
     */
     /*
       The ceiling moved with the dwell: it was 10 s against three 2.5 s frames and
@@ -126,7 +138,7 @@ describe('the cadence leaves room to read', () => {
       that outlasts the paragraph beside it leaves the reader waiting on a picture
       - and a 300-character card is about 17 s of reading at 200 wpm.
     */
-    expect(specimenRunTime()).toBeLessThan(18)
+    expect(specimenRunTime(CARD)).toBeLessThan(24)
   })
 
   it('gives every form time to finish its own argument', () => {
@@ -141,7 +153,7 @@ describe('the cadence leaves room to read', () => {
     */
     for (let i = 0; i < FORM_COUNT; i++) {
       expect(FORM_FRAME[i].argueAt, `form ${i} never lands its claim`).toBeLessThanOrEqual(
-        FORM_WINDOW,
+        formWindow(CARD, i),
       )
     }
   })
@@ -296,5 +308,46 @@ describe('the camera is aimed at what is actually there', () => {
 
   it('keeps the specimen in front of the camera, not behind it', () => {
     expect(cameraPose('reading').position[2]).toBeLessThan(SPECIMEN_AT[2])
+  })
+})
+
+describe('a card plays once and then asks', () => {
+  it('is not finished part way through', () => {
+    for (let i = 0; i < FORM_COUNT; i++) {
+      expect(cycleComplete(CARD, formStart(CARD, i)), `at the top of form ${i}`).toBe(false)
+    }
+    expect(cycleComplete(CARD, specimenRunTime(CARD) - 0.01)).toBe(false)
+  })
+
+  it('is finished once every form has had its clause said over it', () => {
+    /*
+      **The loop used to be endless and nobody decided that.** `reading` waits on
+      the player, so the exhibit cycled forever with the narration restarting each
+      time - a reader who had understood it got no signal they were now watching a
+      repeat, and a reader who had missed something had to sit through two more
+      forms to get back.
+    */
+    expect(cycleComplete(CARD, specimenRunTime(CARD))).toBe(true)
+    expect(cycleComplete(CARD, specimenRunTime(CARD) + 5)).toBe(true)
+  })
+
+  it('ends after the last clause has actually been spoken', () => {
+    // Not merely after three dwells: the dwells ARE the clauses, so this is the
+    // assertion that the offer cannot appear over a wizard still talking.
+    const spoken = VOICE.segments
+      .filter((s) => s.card === CARD)
+      .reduce((total, s) => total + s.duration, 0)
+    expect(specimenRunTime(CARD)).toBeGreaterThan(spoken)
+  })
+
+  it('lands the replay back at the very top of the card', () => {
+    /*
+      Replay writes `elapsed` to zero, and zero has to mean form 0 fully present
+      rather than form 0 fading in - otherwise a replay opens with a dip that the
+      first play does not have.
+    */
+    expect(cycleComplete(CARD, 0)).toBe(false)
+    expect(formCue(CARD, 0, 0).presence).toBe(1)
+    expect(litForm(CARD, 0)).toBe(0)
   })
 })
