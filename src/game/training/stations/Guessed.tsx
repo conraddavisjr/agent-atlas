@@ -9,7 +9,7 @@ import { teachingMachineGeometry } from '../teachingMachine'
 import { BLANK_X, promptX } from '../stage'
 import { CANDIDATES, PROMPT } from '../dioramaCopy'
 import { stationGlow } from '../diorama'
-import { guessCue } from '../guessCue'
+import { ARROW_PATH, guessCue } from '../guessCue'
 import type { LiveCue } from '../specimen'
 import { StationLabel } from './StationLabel'
 
@@ -59,6 +59,7 @@ export function Guessed({ cue }: { cue: LiveCue }) {
   const winnerWord = useRef<Group>(null)
   const spark = useRef<Mesh>(null)
   const arrow = useRef<Group>(null)
+  const candidateNodes = useRef<(Group | null)[]>([])
   const railMaterial = useRef<{ emissiveIntensity: number } | null>(null)
 
   const machine = useMemo(
@@ -96,7 +97,7 @@ export function Guessed({ cue }: { cue: LiveCue }) {
       moments were once compared against a FRACTION while written in SECONDS, and
       the winning word consequently never flew - see that file.
     */
-    const { filling, chosen, flight } = guessCue(local)
+    const { filling, chosen, flight, pointingAt, stop, travel } = guessCue(local)
 
     if (losers.current) {
       for (let i = 0; i < rest.length; i++) {
@@ -145,19 +146,41 @@ export function Guessed({ cue }: { cue: LiveCue }) {
 
     if (arrow.current) {
       /*
-        It climbs the column while the candidates fill, and lands on the winner as
-        the choice is made - so the two events are one gesture rather than a bar
-        chart and, separately, a flash.
+        **The arrow steps between words rather than sliding past them**, and it
+        doubles back before it settles.
 
-        `1 - filling` because the list runs weight-DESCENDING: rank 4 is the
-        bottom and least likely, rank 0 is the winner at the top. The arrow starts
-        at the sandwich nobody would say and ends at the word the machine picks.
+        A pointer that slides once from the least likely word to the most likely
+        describes a ranking, which the list already does by being sorted. The
+        paragraph claims something harder - that the machine picks *uncannily
+        well* - and picking well looks like considering, rejecting, and returning.
+        So it climbs, reaches the winner, drops to the real rival and comes back.
+        `ARROW_PATH` in `guessCue.ts` is that route.
       */
-      const from = candidateY(CANDIDATES.length - 1)
-      const to = candidateY(0)
-      const eased = filling * filling * (3 - 2 * filling)
-      arrow.current.position.set(ARROW_X, from + (to - from) * eased, 0.12)
-      arrow.current.visible = lit > 0.05 && filling > 0.01 && flight < 0.98
+      const here = pointingAt < 0 ? CANDIDATES.length - 1 : pointingAt
+      const next = nextStop(stop)
+      const y = candidateY(here) + (candidateY(next) - candidateY(here)) * travel
+      arrow.current.position.set(ARROW_X, y, 0.12)
+      arrow.current.visible = lit > 0.05 && pointingAt >= 0 && flight < 0.98
+    }
+
+    /*
+      The word under the arrow lifts toward the viewer and brightens, and drops
+      back the moment the arrow leaves it. That is what turns a pointer into a
+      machine reading its options: without it the arrow travels past a static list
+      and nothing acknowledges being looked at.
+
+      A step forward rather than a colour change, so it costs a matrix write and
+      matches what the winner already does when it locks.
+    */
+    for (let i = 0; i < rest.length; i++) {
+      const node = candidateNodes.current[i]
+      if (!node) continue
+      const on = pointingAt === i + 1 && travel < 0.5
+      node.position.set(WORD_X, candidateY(i + 1), 0.1 - (on ? LOOKED_AT : 0))
+    }
+    if (winnerWord.current && flight <= 0) {
+      const on = pointingAt === 0 && travel < 0.5
+      winnerWord.current.position.z = 0.1 - (on ? LOOKED_AT : 0)
     }
 
     if (spark.current) {
@@ -204,7 +227,13 @@ export function Guessed({ cue }: { cue: LiveCue }) {
         <meshPhysicalMaterial {...mattePlastic(palette.bandFrame)} />
       </instancedMesh>
       {rest.map((c, i) => (
-        <group key={c.word} position={[WORD_X, candidateY(i + 1), 0.1]}>
+        <group
+          key={c.word}
+          position={[WORD_X, candidateY(i + 1), 0.1]}
+          ref={(node) => {
+            candidateNodes.current[i] = node
+          }}
+        >
           <StationLabel text={c.word} size={CANDIDATE_SIZE} colour="#8ea4c6" />
         </group>
       ))}
@@ -307,6 +336,26 @@ const FEED: [number, number, number][] = [
  * the arrow sits on the far side of the words from the bars and neither crowds
  * the other.
  */
+/**
+ * Which word the arrow travels to after the stop it is on.
+ *
+ * Indexed by STOP rather than by rank, because the path doubles back and a rank
+ * therefore does not identify a place on it - `MAJESTY` is rank 0 and appears
+ * twice. Looking the rank up instead returns the later occurrence, so the arrow
+ * reaches the winner and never leaves, which is the single slide the doubling
+ * back exists to replace.
+ *
+ * The last stop has no next, which is what leaves the arrow resting on the winner
+ * rather than sliding off the top of the list.
+ */
+function nextStop(stop: number): number {
+  if (stop < 0) return CANDIDATES.length - 1
+  return ARROW_PATH[Math.min(stop + 1, ARROW_PATH.length - 1)]
+}
+
+/** How far a word under the arrow steps toward the viewer. `-Z` is nearer. */
+const LOOKED_AT = 0.06
+
 const ARROW_X = 1.12
 const ARROW_LENGTH = 0.13
 const ARROW_WIDTH = 0.018

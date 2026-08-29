@@ -34,7 +34,9 @@ import { instructorVisible } from '@/game/training/instructorPath'
 import { cycleComplete, formStart, litForm } from '@/game/training/specimen'
 import { useTrainingStore } from '@/game/training/trainingStore'
 import {
+  decline,
   preload,
+  pump,
   reset as resetVoice,
   speak,
   speakQuestion,
@@ -183,10 +185,36 @@ export function TrainingScene() {
     */
     resetVoice()
     const preference = useGameStore.getState().audio
-    if (preference === 'unset') {
+    if (preference === 'off') {
+      /*
+        Match the module to the preference. Without this they disagree after a
+        replay: `resetVoice()` clears `'declined'` on the way in, so a player who
+        had muted came back with the module willing to speak and the icon showing
+        muted - two sources of truth for one question.
+      */
+      decline()
+    } else if (preference === 'unset' || unlock() === 'blocked') {
+      /*
+        **The `'blocked'` half of this condition is a bug fix, and the bug was
+        total silence with nothing reporting it.**
+
+        `unlock()` needs a user gesture in its own call stack. Normally it gets
+        one: the player presses E at the totem and `App.tsx` unlocks there. But
+        `currentSceneId` is PERSISTED, so a player who reloads - or closes the tab
+        mid-round and comes back - lands directly in the round with no gesture
+        anywhere. The context is created suspended, `unlock()` returns
+        `'blocked'`, and until now that return value was discarded.
+
+        The result was a returning player with `audio: 'on'`, a speaker icon
+        showing sound is on, and no sound at all, forever, with no gate to fix it
+        because they had already answered the question. Exactly the failure this
+        module reports six states to make visible, thrown away at the call site.
+
+        A blocked unlock now raises the gate, whose button IS a gesture - so the
+        one screen that can fix it is the one the player is shown.
+      */
       useTrainingStore.getState().openGate()
-    } else if (preference === 'on') {
-      unlock()
+    } else {
       void preload()
     }
     /*
@@ -243,6 +271,14 @@ export function TrainingScene() {
       step - the wizard would arrive, speak twice and leave between two frames.
     */
     let dt = Math.min(delta, 1 / 20)
+
+    /*
+      Give the voice a chance to start a line whose buffer had not arrived when
+      its beat began. On a fast connection this never does anything; on a slow one
+      it is the difference between the wizard skipping a sentence and starting it
+      a few frames late.
+    */
+    pump(dt)
 
     /*
       **The gate holds the round by handing the machine a delta of zero.**

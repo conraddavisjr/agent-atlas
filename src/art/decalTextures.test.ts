@@ -731,8 +731,10 @@ describe('panel fills', () => {
       panel placed later in the row below. The wrap is included, since the map's
       span is finite and anything past it repeats.
     */
+    let clash: string | null = null
     for (const cells of [8, 16, 24, 40, 80]) {
       for (const seed of [20260810, 1, 99, 424242]) {
+        if (clash) break
         const regions = panelRegions({ cells, seed })
         const tone = new Int32Array(cells * cells).fill(-1)
         const owner = new Int32Array(cells * cells).fill(-1)
@@ -747,8 +749,16 @@ describe('panel fills', () => {
         const wrap = (v: number) => ((v % cells) + cells) % cells
         const idx = (x: number, y: number) => wrap(y) * cells + wrap(x)
 
-        for (let y = 0; y < cells; y++) {
-          for (let x = 0; x < cells; x++) {
+        /*
+          Scanned rather than asserted per boundary. At 80 cells across four
+          seeds this is over fifty thousand `expect()` calls, each allocating a
+          matcher and eagerly building its message - which ran fine alone and
+          timed out at 5 s once the suite grew around it. The scan reports the
+          first clash, which is more useful than a matcher firing somewhere in
+          fifty thousand.
+        */
+        for (let y = 0; y < cells && !clash; y++) {
+          for (let x = 0; x < cells && !clash; x++) {
             for (const [dx, dy] of [
               [1, 0],
               [0, 1],
@@ -758,15 +768,16 @@ describe('panel fills', () => {
               // Two cells of ONE panel share a tone by definition, so only
               // boundaries between different panels are the claim.
               if (owner[here] === owner[there]) continue
-              expect(
-                tone[here],
-                `cells ${cells} seed ${seed}: boundary at ${x},${y} toward ${dx},${dy}`,
-              ).not.toBe(tone[there])
+              if (tone[here] === tone[there]) {
+                clash = `cells ${cells} seed ${seed}: boundary at ${x},${y} toward ${dx},${dy}`
+                break
+              }
             }
           }
         }
       }
     }
+    expect(clash, 'two panels of the same tone share an edge').toBeNull()
   })
 
   it('is seeded, so the island is the same island every session', () => {

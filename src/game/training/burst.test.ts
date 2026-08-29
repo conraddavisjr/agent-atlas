@@ -180,15 +180,33 @@ describe('the fade', () => {
   })
 
   it('never leaves the unit interval', () => {
+    /*
+      **Scanned into one assertion rather than asserted per element.**
+
+      `expect()` allocates a matcher and eagerly builds its message string, so a
+      loop of this size spends far more time in the assertion library than in the
+      code it is testing. This one ran comfortably alone and timed out at 5 s once
+      the suite grew - the worst kind of flake, since it is green on the machine
+      that wrote it and red on a loaded one, and it points at geometry that is
+      perfectly fine. `hubLayout.test.ts` lost the same way and was fixed the same
+      way.
+
+      The scan also reports the FIRST bad value and where it was, which is more
+      useful than a matcher firing somewhere in a million samples.
+    */
     const burst = createBurst()
     seedBurst(burst, origin, rng(), 4)
-    for (let i = 0; i < 200; i++) {
+    const bad: string[] = []
+    for (let i = 0; i < 200 && bad.length === 0; i++) {
       stepBurst(burst, 1 / 60)
       for (let p = 0; p < BURST_CAPACITY; p++) {
         const o = burstOpacity(burst, p)
-        expect(o).toBeGreaterThanOrEqual(0)
-        expect(o).toBeLessThanOrEqual(1)
+        if (!(o >= 0 && o <= 1)) {
+          bad.push(`particle ${p} at step ${i} had opacity ${o}`)
+          break
+        }
       }
     }
+    expect(bad, 'a particle left the unit interval').toEqual([])
   })
 })

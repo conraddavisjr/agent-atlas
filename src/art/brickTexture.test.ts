@@ -270,12 +270,27 @@ describe('brickHeight', () => {
   const height = brickHeight(size)
 
   it('produces one value per texel, all finite and inside the mask range', () => {
+    /*
+      **Scanned into one assertion rather than asserted per element.**
+
+      `expect()` allocates a matcher and eagerly builds its message string, so a
+      loop of this size spends far more time in the assertion library than in the
+      code it is testing. This one ran comfortably alone and timed out at 5 s once
+      the suite grew - the worst kind of flake, since it is green on the machine
+      that wrote it and red on a loaded one, and it points at geometry that is
+      perfectly fine. `hubLayout.test.ts` lost the same way and was fixed the same
+      way.
+
+      The scan also reports the FIRST bad value and where it was, which is more
+      useful than a matcher firing somewhere in a million samples.
+    */
     expect(height.length).toBe(size * size)
-    for (let i = 0; i < height.length; i++) {
-      expect(Number.isFinite(height[i]), `texel ${i}`).toBe(true)
-      expect(height[i]).toBeGreaterThan(0)
-      expect(height[i]).toBeLessThan(1)
+    const bad: string[] = []
+    for (let i = 0; i < height.length && bad.length === 0; i++) {
+      const v = height[i]
+      if (!Number.isFinite(v) || v <= 0 || v >= 1) bad.push(`texel ${i} = ${v}`)
     }
+    expect(bad, 'a texel is outside the mask range').toEqual([])
   })
 
   it('cuts the mortar below the base plane and stands the faces above it', () => {

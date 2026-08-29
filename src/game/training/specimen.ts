@@ -416,7 +416,7 @@ export const FORM_FRAME: readonly FormFrame[] = [
     at 0.36 and float most of a metre above the nameplate. It argues when the
     winning word has landed in the blank and finished the sentence, at `LANDED_AT`.
   */
-  { minY: 0, maxY: 1.002, width: 1.913, centreX: 0.047, argueAt: 3.0 },
+  { minY: 0, maxY: 1.002, width: 1.913, centreX: 0.047, argueAt: 4 },
 ]
 
 /**

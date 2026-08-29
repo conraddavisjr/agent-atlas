@@ -57,7 +57,6 @@ let context: AudioContext | null = null
 let state: VoiceState = 'locked'
 let loaded: (Loaded | null)[] = []
 let segments: (Loaded | null)[] = []
-let question: Loaded | null = null
 let playing: AudioBufferSourceNode | null = null
 let loading: Promise<void> | null = null
 
@@ -66,7 +65,7 @@ export function reset() {
   stop()
   loaded = []
   segments = []
-  question = null
+  questionSlot.length = 0
   loading = null
   if (state !== 'blocked') state = context ? 'unlocked' : 'locked'
 }
@@ -262,14 +261,13 @@ export function preload(): Promise<void> {
 const questionSlot: (Loaded | null)[] = []
 
 export function speakQuestion() {
-  question = questionSlot[0] ?? null
-  play(question)
+  request(() => questionSlot[0] ?? null, 0)
 }
 
 export function speakSegment(card: number, index: number, offset = 0) {
   const at = VOICE.segments.findIndex((s) => s.card === card && s.index === index)
   if (at < 0) return
-  play(segments[at], offset)
+  request(() => segments[at] ?? null, offset)
 }
 
 /**
@@ -282,11 +280,66 @@ export function speakSegment(card: number, index: number, offset = 0) {
  * would bury it.
  */
 export function speak(index: number) {
-  play(loaded[index])
+  request(() => loaded[index] ?? null, 0)
 }
 
+/** Play now if the buffer is here, otherwise the moment it arrives. */
+function request(get: () => Loaded | null, offset: number) {
+  const entry = get()
+  if (entry) {
+    play(entry, offset)
+    pending = null
+    return
+  }
+  if (state === 'declined' || !context) return
+  pending = { get, offset, waited: 0 }
+}
+
+/**
+ * The clip a beat asked for before it had finished decoding.
+ *
+ * A phase edge fires once and never comes back, so a `speak()` that arrived a
+ * few hundred milliseconds before its buffer used to drop the line silently -
+ * which on a slow connection means the wizard skips a sentence and there is
+ * nothing anywhere to say he did. Holding the request and playing it the moment
+ * the buffer lands costs one variable and closes the whole class.
+ *
+ * It is cleared by any later request and by `stop()`, so a pending line can never
+ * arrive after the beat that wanted it has passed.
+ */
+let pending: { get: () => Loaded | null; offset: number; waited: number } | null = null
+
+/**
+ * Flush a request that arrived before its buffer. Called once per frame.
+ *
+ * `waited` accumulates so the clip can start at the point the round has reached
+ * rather than from the top - the beats never paused for the decode, so a line
+ * played from zero would be behind its own subtitle for the rest of the beat.
+ *
+ * It gives up after `PATIENCE`. Past that the beat has moved on, and a sentence
+ * arriving late over the next picture is worse than a sentence missed.
+ */
+export function pump(delta: number) {
+  if (!pending) return
+  pending.waited += delta
+  if (pending.waited > PATIENCE) {
+    console.error('[voice] a line was still not decoded when its beat ended; skipped')
+    pending = null
+    return
+  }
+  const entry = pending.get()
+  if (!entry) return
+  const { offset, waited } = pending
+  pending = null
+  play(entry, offset + waited)
+}
+
+/** How long a beat will wait for its own audio, in seconds. */
+const PATIENCE = 0.6
+
 function play(entry: Loaded | null | undefined, offset = 0) {
-  if (state === 'declined' || !context || !entry) return
+  if (state === 'declined' || !context) return
+  if (!entry) return
   stop()
   const source = context.createBufferSource()
   source.buffer = entry.buffer
@@ -310,6 +363,7 @@ function play(entry: Loaded | null | undefined, offset = 0) {
  * which is the most likely thing a player does to a preamble.
  */
 export function stop() {
+  pending = null
   if (!playing) return
   try {
     playing.stop()

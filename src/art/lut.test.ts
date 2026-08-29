@@ -88,18 +88,35 @@ describe('gradeColour, the shipping grade', () => {
   })
 
   it('keeps every output inside the unit interval and finite', () => {
+    /*
+      **Scanned into one assertion rather than asserted per element.**
+
+      `expect()` allocates a matcher and eagerly builds its message string, so a
+      loop of this size spends far more time in the assertion library than in the
+      code it is testing. This one ran comfortably alone and timed out at 5 s once
+      the suite grew - the worst kind of flake, since it is green on the machine
+      that wrote it and red on a loaded one, and it points at geometry that is
+      perfectly fine. `hubLayout.test.ts` lost the same way and was fixed the same
+      way.
+
+      The scan also reports the FIRST bad value and where it was, which is more
+      useful than a matcher firing somewhere in a million samples.
+    */
     const axis = sweep(17)
-    for (const r of axis) {
+    const bad: string[] = []
+    outer: for (const r of axis) {
       for (const g of axis) {
         for (const b of axis) {
           for (const v of gradeColour(r, g, b)) {
-            expect(Number.isFinite(v)).toBe(true)
-            expect(v).toBeGreaterThanOrEqual(0)
-            expect(v).toBeLessThanOrEqual(1)
+            if (!Number.isFinite(v) || v < 0 || v > 1) {
+              bad.push(`gradeColour(${r}, ${g}, ${b}) produced ${v}`)
+              break outer
+            }
           }
         }
       }
     }
+    expect(bad, 'a graded colour left the unit interval').toEqual([])
   })
 
   it('clamps its domain rather than returning NaN', () => {

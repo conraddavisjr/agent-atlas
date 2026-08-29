@@ -61,3 +61,145 @@ canvas {
     rgba(3, 5, 12, 1) calc(var(--iris-r) + 44px)
   );
 }
+
+/*
+  The loading atom: a nucleus with three tilted orbits, sitting exactly where the
+  iris is about to open from.
+
+  ## Why it is centred on the iris and not on the screen
+
+  `IrisTracker` publishes `--iris-x` and `--iris-y` on the overlay every frame,
+  so this inherits them for free and needs no JavaScript of its own. That is more
+  than a convenience: the point the world opens from is the point the player has
+  been staring at, so the thing they waited on becomes the thing that opens
+  rather than a spinner that disappears and is replaced by something else.
+
+  ## Why CSS animation rather than a frame callback
+
+  The scene's chunk is downloading, its textures are decoding and Rapier's WASM
+  is initialising - the main thread is exactly as busy as it ever gets, and a
+  loader driven from `requestAnimationFrame` stutters at precisely the moment it
+  is supposed to reassure. `transform` and `opacity` animations run on the
+  compositor and keep moving through all of it, which is the one thing a loading
+  indicator has to do.
+
+  Everything here animates only those two properties for that reason. Nothing
+  animates a layout property, and the rings are `border` on a fixed-size box
+  rather than anything that reflows.
+*/
+.iris-orbit {
+  position: absolute;
+  left: var(--iris-x);
+  top: var(--iris-y);
+  /*
+    150, and it was 96. At the smaller size the whole figure subtended about a
+    tenth of the shortest screen edge and the rings measured almost nothing
+    against the near-black cover - the first build of this rendered correctly and
+    was, in practice, invisible. A loading indicator that has to be looked for is
+    not doing the one job it has.
+  */
+  width: 150px;
+  height: 150px;
+  margin: -75px 0 0 -75px;
+  pointer-events: none;
+  transform-origin: 50% 50%;
+  /* Slower out than in, so it settles into the reveal instead of snapping off. */
+  transition: opacity 520ms ease-out, transform 620ms ease-out;
+}
+
+.iris-nucleus {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 34%, #f2fdff, #4de2ff 56%, #1d7fa8);
+  /* Two shadows: a tight core and a wide bloom, so it reads as a light source
+     rather than as a disc with a halo pasted behind it. */
+  box-shadow: 0 0 14px rgba(120, 226, 255, 0.85), 0 0 42px rgba(77, 200, 255, 0.4);
+  animation: iris-pulse 2.4s ease-in-out infinite;
+}
+
+/*
+  A ring is a circle squashed on one axis and then rotated, which is what gives
+  three coplanar ellipses the look of three orbits around one body. Squashing
+  with `scaleY` on the element would squash its satellite too, so the flattening
+  lives in the ring's own transform and the satellite counter-rotates inside it.
+*/
+.iris-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  /*
+    0.38, up from 0.22. The cover behind this is `rgba(3, 5, 12, 1)` - very nearly
+    black - and a hairline at a fifth alpha over that is under the threshold most
+    screens will show at all, let alone at a glance.
+  */
+  border: 1px solid rgba(150, 215, 255, 0.38);
+  transform-origin: 50% 50%;
+}
+
+.iris-ring i {
+  position: absolute;
+  left: 50%;
+  top: -5px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  background: #d8f6ff;
+  box-shadow: 0 0 12px rgba(150, 235, 255, 0.9);
+}
+
+/*
+  Three tilts and three periods, none of them a multiple of another - so the
+  three satellites never line up and the figure never appears to stop. The
+  periods are what stop it reading as a logo.
+*/
+.iris-ring-a {
+  transform: rotate(0deg) scaleY(0.4);
+  animation: iris-spin 2.1s linear infinite;
+}
+.iris-ring-b {
+  transform: rotate(62deg) scaleY(0.4);
+  animation: iris-spin 3.1s linear infinite reverse;
+}
+.iris-ring-c {
+  transform: rotate(121deg) scaleY(0.4);
+  animation: iris-spin 2.6s linear infinite;
+}
+
+@keyframes iris-spin {
+  from {
+    rotate: 0deg;
+  }
+  to {
+    rotate: 360deg;
+  }
+}
+
+@keyframes iris-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.92;
+  }
+  50% {
+    transform: scale(1.14);
+    opacity: 1;
+  }
+}
+
+/*
+  Motion is decoration here and the wait is not. Reduced motion keeps the atom,
+  the nucleus and the loading bar - which are what say "this is working" - and
+  stops the parts that only say "this is pretty".
+*/
+@media (prefers-reduced-motion: reduce) {
+  .iris-ring,
+  .iris-nucleus {
+    animation: none;
+  }
+}

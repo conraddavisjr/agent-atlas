@@ -86,6 +86,40 @@ export function Transition({ active, label }: { active: boolean; label?: string 
         </div>
       )}
 
+      {/*
+        **The orbit, and it is centred on the iris rather than on the screen.**
+
+        `IrisTracker` publishes `--iris-x` and `--iris-y` every frame, so this
+        rides the exact point the world is about to open from. That is the whole
+        idea: the thing you watch while you wait becomes the thing that opens,
+        rather than a spinner somewhere else that disappears and is replaced.
+
+        It is mounted whenever the overlay is and faded by opacity rather than
+        unmounted, so the atom does not vanish on the frame the last texture
+        lands. It shrinks slightly as it goes, which reads as the orbits
+        collapsing into the world rather than as a layer being switched off.
+      */}
+      <div
+        className="iris-orbit"
+        style={{ opacity: loading ? 1 : 0, transform: `scale(${loading ? 1 : 0.82})` }}
+      >
+        <div className="iris-nucleus" />
+        {/*
+          Three rings at three tilts. Two would read as a flat pair of ellipses
+          and four starts to look like a logo; three is the fewest that reads as
+          a volume being described rather than as circles drawn on glass.
+        */}
+        <div className="iris-ring iris-ring-a">
+          <i />
+        </div>
+        <div className="iris-ring iris-ring-b">
+          <i />
+        </div>
+        <div className="iris-ring iris-ring-c">
+          <i />
+        </div>
+      </div>
+
       {loading && (
         <div style={loadingStyle}>
           <div style={loadingBarTrack}>
