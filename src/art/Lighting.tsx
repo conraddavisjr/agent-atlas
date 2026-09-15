@@ -185,7 +185,7 @@ export const HUB_RIG = {
    * disc and the key ever visibly disagree in temperature, this is the number
    * that moved and the sky is the thing to check against.
    */
-  key: { color: '#ffe7bc', intensity: 1.83 },
+  key: { color: '#fff2dc', intensity: 1.83 },
   /**
    * The sky fill, 0.25 to 0.12.
    *

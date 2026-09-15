@@ -23,7 +23,7 @@ export function QualitySelector() {
   const { tier, setTier } = useQualityTier()
 
   return (
-    <div style={styles.wrap}>
+    <div className="hud-quality" style={styles.wrap}>
       <span style={styles.label}>Graphics</span>
       <div style={styles.group}>
         {TIERS.map((t) => (
@@ -42,7 +42,7 @@ export function QualitySelector() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  wrap: { display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 },
+  wrap: { display: 'flex', alignItems: 'center', gap: 10, marginTop: 0 },
   label: { fontSize: '0.74rem', opacity: 0.62 },
   group: {
     display: 'flex',
@@ -59,7 +59,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#eaf2ff',
     fontFamily: 'inherit',
     fontSize: '0.7rem',
-    padding: '3px 9px',
+    padding: '7px 10px',
     cursor: 'pointer',
   },
   active: { background: 'rgba(120,190,255,0.32)', fontWeight: 600 },

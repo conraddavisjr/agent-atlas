@@ -235,6 +235,10 @@ export const WADDLE = {
 } as const
 
 export const CAMERA = {
+  fov: 40,
+  initialPitch: -0.08,
+  collisionRadius: 0.28,
+  collisionSkin: 0.08,
   /**
    * Resting offset behind and above the player, before orbit is applied.
    *

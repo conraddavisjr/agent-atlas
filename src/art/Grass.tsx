@@ -126,9 +126,9 @@ const BLADE = {
  */
 const CONTACT = {
   /** Value at the very root, as a fraction of the blade's own tint. */
-  shade: 0.24,
+  shade: 0.55,
   /** How far up the blade the darkening reaches, as a fraction of its height. */
-  height: 0.34,
+  height: 0.28,
   /** How far the root's hue is pulled back toward neutral, 0 to 1. */
   neutralise: 0.45,
 } as const

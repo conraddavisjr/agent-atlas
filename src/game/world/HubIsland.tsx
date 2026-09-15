@@ -1769,7 +1769,7 @@ function CoreNode({ shells, completed, total }: { shells: boolean; completed: nu
         render that as white.
       */}
       <mesh geometry={geometries.core}>
-        <meshPhysicalMaterial {...emissive(NODE_CORE, 0.5)} />
+        <meshPhysicalMaterial {...emissive(NODE_CORE, 1.35)} />
       </mesh>
       {shells && (
         <mesh geometry={geometries.shell}>

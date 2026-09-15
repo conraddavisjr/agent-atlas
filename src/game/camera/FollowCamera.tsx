@@ -5,26 +5,9 @@ import { Vector3, type Group, type PerspectiveCamera } from 'three'
 import { CAMERA } from '../player/tuning'
 import { stepCameraYaw } from '../player/movement'
 import { cameraFrame, resetCameraFrame } from './cameraFrame'
+import { cameraClearance } from './cameraCollision'
 
-/**
- * Third-person follow camera with spring damping, collision pull-in, and
- * automatic realignment behind the direction of travel.
- *
- * The collision handling is not a later polish item here. Portal scenes are
- * interiors such as caves and rooms, so the camera spends most of its life close
- * to walls. Without a pull-in raycast the player would spend that time looking
- * through geometry at the skybox.
- *
- * Realignment defers to the player without needing a timer. Dragging the mouse
- * suppresses it for exactly the frames the mouse is moving, and moving the
- * character resumes it immediately, which is the behaviour players expect from
- * a third-person platformer: the camera tidies up after you, but never argues
- * while you are actively aiming it.
- *
- * This component owns both angles in cameraFrame. The distinction between them
- * is the difference between a camera that trails the player forever and one
- * that arrives; the reasoning lives in cameraFrame.ts and stepInputYaw.
- */
+/** Follow the robot with damped orbit, manual-look priority, and swept-volume collision. */
 export function FollowCamera({
   target,
   consumeLook,
@@ -50,10 +33,10 @@ export function FollowCamera({
   cameraScale: number
 }) {
   const camera = useThree((s) => s.camera)
-  const { world, rapier } = useRapier()
+  const { world } = useRapier()
 
   const yaw = useRef(0)
-  const pitch = useRef(0.25)
+  const pitch = useRef<number>(CAMERA.initialPitch)
 
   /**
    * Seconds of realignment suppression still owed to a manual orbit.
@@ -111,10 +94,6 @@ export function FollowCamera({
    */
   const smoothLook = useRef(new Vector3())
   const initialised = useRef(false)
-
-  /** Reused collision ray. Rapier's Ray is a plain JS object, so no free is needed. */
-  const rayRef = useRef<InstanceType<typeof rapier.Ray> | null>(null)
-
 
   useFrame((state, delta) => {
     const focus = target.current
@@ -176,6 +155,11 @@ export function FollowCamera({
       return
     }
 
+    const cam = state.camera as PerspectiveCamera
+    if (cam.isPerspectiveCamera && cam.fov !== CAMERA.fov) {
+      cam.fov = CAMERA.fov
+      cam.updateProjectionMatrix()
+    }
     const dt = Math.min(delta, 0.05)
 
     /*
@@ -256,31 +240,8 @@ export function FollowCamera({
     const idealDistance = scratch.dir.length()
     scratch.dir.normalize()
 
-    let allowed = idealDistance
+    const allowed = cameraClearance(world, scratch.lookAt, scratch.dir, idealDistance)
 
-    // The ray is allocated once and mutated, rather than constructed each frame.
-    // A fresh Ray plus two vector literals every frame is 180 short-lived objects
-    // a second for no benefit, and that garbage shows up as collection stutter in
-    // exactly the moments the camera is working hardest.
-    if (rayRef.current === null) {
-      rayRef.current = new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 })
-    }
-    const ray = rayRef.current
-    ray.origin.x = scratch.lookAt.x
-    ray.origin.y = scratch.lookAt.y
-    ray.origin.z = scratch.lookAt.z
-    ray.dir.x = scratch.dir.x
-    ray.dir.y = scratch.dir.y
-    ray.dir.z = scratch.dir.z
-    // solid = true so a ray starting inside geometry still reports a hit rather
-    // than passing straight through and leaving the camera embedded in a wall.
-    const hit = world.castRay(ray, idealDistance, true)
-    if (hit) {
-      allowed = Math.max(CAMERA.minDistance, hit.timeOfImpact - CAMERA.collisionPadding)
-    }
-
-    // Pull in immediately to avoid clipping, but ease back out. Snapping outward
-    // the instant an obstruction clears is jarring and draws attention to the camera.
     if (allowed < distance.current) {
       distance.current = allowed
     } else {
@@ -307,6 +268,16 @@ export function FollowCamera({
       smoothLook.current.lerp(scratch.lookAt, lookT)
     }
 
+    // Damping traces a chord around corners, so check the final position too.
+    scratch.dir.copy(camera.position).sub(scratch.lookAt)
+    const actualDistance = scratch.dir.length()
+    if (actualDistance > 0.001) {
+      scratch.dir.multiplyScalar(1 / actualDistance)
+      const safeDistance = cameraClearance(world, scratch.lookAt, scratch.dir, actualDistance)
+      if (safeDistance < actualDistance) {
+        camera.position.copy(scratch.lookAt).addScaledVector(scratch.dir, safeDistance)
+      }
+    }
     camera.lookAt(smoothLook.current)
   })
 

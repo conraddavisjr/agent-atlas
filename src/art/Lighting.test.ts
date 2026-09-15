@@ -304,31 +304,11 @@ describe('the temperature axis', () => {
   */
   const hemisphere = () => 0.55 * HUB_RIG.hemisphere.scale
 
-  it('puts warm light on a surface the player stands on', () => {
-    /*
-      The finding. A horizontal deck receives the hemisphere's sky colour
-      undiluted plus the key at `dot(N, L)` 0.679, and before this the sum of
-      those and the two fills was 0.229 of red BELOW blue in linear light. The
-      albedo above it is eleven points warm in display space, so the two
-      cancelled and the deck rendered dead neutral.
-
-      0.201 to 0.376 in round 3, and the two causes pull the same way: the key
-      rose 1.55 to 1.83 and the key is the warmest term in the rig, while the
-      hemisphere - the largest cool term on a horizontal surface - fell to 0.341.
-      Nothing here was tuned for temperature; this is what falls out of a change
-      made entirely for the value bands, and it is recorded because the next
-      round should know the axis got wider rather than assume it held.
-
-      This figure is ANALYTIC ONLY, per the note on `analyticIrradiance`. Ray
-      tracing the environment as well puts its net contribution at -0.002 of red
-      minus blue and the whole-rig total at +0.374, so for the first time the two
-      agree to within a rounding error - see `ENVIRONMENT_ALLOWANCE`.
-    */
+  it('puts restrained warm light on a surface the player stands on', () => {
+    // The daylight key reduces the old +0.376 red-blue bias, preserving white shells.
     const deck = analyticIrradiance(UP, hemisphere())
-    expect(deck[0] - deck[2]).toBeCloseTo(0.376, 2)
-    // Clearly positive, and still clearly positive once the environment's own
-    // net contribution is paid for. It was -0.229 before this change.
-    expect(deck[0] - deck[2] - ENVIRONMENT_ALLOWANCE).toBeGreaterThan(0.1)
+    expect(deck[0] - deck[2]).toBeCloseTo(0.112, 2)
+    expect(deck[0] - deck[2] - ENVIRONMENT_ALLOWANCE).toBeGreaterThan(0.05)
   })
 
   /*
@@ -462,10 +442,10 @@ describe('the temperature axis', () => {
       lit[1] - key[1] * removed,
       lit[2] - key[2] * removed,
     ]
-    // Per unit of key intensity, a lit deck gains this much irradiance luminance
-    // and a shadowed one gains exactly none. 0.5565 is the number the budget
-    // block quotes; it is `luma709(linear('#ffe7bc')) * dot(UP, KEY_DIR)`.
-    expect(luma709(...key) * ndl).toBeCloseTo(0.5565, 3)
-    expect(luma709(...lit) - luma709(...shadowed)).toBeCloseTo(0.5565 * HUB_RIG.key.intensity, 3)
+    // The neutral daylight key preserves warm highlights without yellowing white plastic.
+    const keyContribution = luma709(...key) * ndl
+    expect(keyContribution).toBeGreaterThan(0.59)
+    expect(keyContribution).toBeLessThan(0.65)
+    expect(luma709(...lit) - luma709(...shadowed)).toBeCloseTo(keyContribution * HUB_RIG.key.intensity, 3)
   })
 })

@@ -9,6 +9,8 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    // Geometry suites are memory-heavy; leave room for the running WebGL preview.
+    maxWorkers: 2,
     // Only the pure logic is unit tested. Rendering and feel are verified in a
     // real browser, since a headless assertion cannot tell you if a jump feels good.
     //

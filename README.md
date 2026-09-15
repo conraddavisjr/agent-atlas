@@ -99,7 +99,8 @@ Turning and driving are independent axes, so holding forward and a turn together
 Neither input taxes the other, which is the property `inputAxes.ts` exists to protect.
 
 The camera swings back behind the direction you are travelling on its own, and it arrives rather than trailing.
-Dragging always wins while you are dragging, and auto-alignment resumes the moment you move again, with no cooldown in between.
+Dragging takes priority, with a short hold before auto-alignment resumes.
+The camera sweeps a small sphere against solid geometry to keep its near plane clear of walls.
 
 Graphics quality is guessed from your GPU on first load and can be changed in the top right, or forced with `?quality=low|medium|high`.
 

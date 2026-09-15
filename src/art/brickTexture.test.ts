@@ -397,12 +397,11 @@ describe('the albedo, which is the channel that actually lands on a floor', () =
       byte of 255 is neutral and there is nothing above it. A map centred on mid
       grey would halve the albedo of every walkable surface in the game.
     */
+    const invalid: number[] = []
     for (let i = 0; i < size * size; i++) {
-      expect(bytes[i * 4], `red at ${i}`).toBeLessThanOrEqual(255)
-      expect(bytes[i * 4 + 1], `green at ${i}`).toBeLessThanOrEqual(255)
-      expect(bytes[i * 4 + 2], `blue at ${i}`).toBeLessThanOrEqual(255)
-      expect(bytes[i * 4 + 3]).toBe(255)
+      if (bytes[i * 4] > 255 || bytes[i * 4 + 1] > 255 || bytes[i * 4 + 2] > 255 || bytes[i * 4 + 3] !== 255) invalid.push(i)
     }
+    expect(invalid, 'invalid albedo pixel indices').toEqual([])
   })
 
   it('keeps its p5 to p95 inside the gameplay band on the deck', () => {
