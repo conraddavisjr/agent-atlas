@@ -111,7 +111,7 @@ const MAX_TOTEMS = 8
  * work, which is exactly the pale-core-and-coloured-shell construction the art
  * bible prescribes for hues in this luminance range.
  */
-const NODE_GLOW = 0.42
+const NODE_GLOW = 0.62
 
 /**
  * The plinth, as one merged geometry with its base at the lobe surface.
@@ -229,6 +229,7 @@ export function LessonTotems({
     [],
   )
 
+  const hoverScale = useRef(new Float32Array(MAX_TOTEMS).fill(1))
   const scratch = useRef({
     matrix: new Matrix4(),
     position: new Vector3(),
@@ -248,7 +249,7 @@ export function LessonTotems({
     no such value to modify, allocates nothing per frame, and reads the props
     directly.
   */
-  useFrame((state) => {
+  useFrame((state, delta) => {
     const t = state.clock.elapsedTime
     const { matrix, position, quaternion, euler, scale } = scratch.current
     const shellMesh = shells.current
@@ -267,7 +268,9 @@ export function LessonTotems({
         be alive.
       */
       const bob = Math.sin(t * 1.6 + totem.position[0]) * 0.12
-      scale.setScalar(nearId === totem.lesson.id ? 1.18 : 1)
+      const targetScale = nearId === totem.lesson.id ? 1.18 : 1
+      hoverScale.current[i] += (targetScale - hoverScale.current[i]) * (1 - Math.exp(-12 * Math.min(delta, 0.05)))
+      scale.setScalar(hoverScale.current[i])
 
       // The node, which floats and spins about its own axis.
       position.set(totem.position[0], totem.position[1] + TOTEM.nodeY + bob, totem.position[2])
@@ -393,7 +396,7 @@ export function LessonTotems({
           <meshPhysicalMaterial
             {...(near.completed
               ? emissive(palette.unlocked, GLOW.bloom)
-              : emissive(palette.nodeGlow, GLOW.source))}
+              : emissive(palette.nodeGlow, GLOW.bloom))}
           />
         </mesh>
       )}

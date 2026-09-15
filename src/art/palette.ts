@@ -242,7 +242,7 @@ export const palette = {
    * rather than into a brighter one.
    */
   skyTop: '#5aa8e8',
-  skyHorizon: '#b9cdda',
+  skyHorizon: '#9dccec',
   cloud: '#ffffff',
   cloudShadow: '#c2d8ea',
 

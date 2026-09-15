@@ -7,6 +7,7 @@ import { NoToneMapping, VSMShadowMap } from 'three'
 import { useInput } from './game/input/useInput'
 import { PlayerController } from './game/player/PlayerController'
 import { FollowCamera } from './game/camera/FollowCamera'
+import { CAMERA } from './game/player/tuning'
 import { GameContext } from './game/GameContext'
 import { useSceneTravel, type TravelRequest } from './game/scenes/SceneHost'
 import { getScene } from './game/scenes/registry'
@@ -177,6 +178,8 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return
+      if (e.target instanceof Element && (e.target.closest('input, select, textarea, [contenteditable=true]') || (e.code === 'Enter' && e.target.closest('button')))) return
       if (e.code !== 'KeyE' && e.code !== 'Enter') return
       onInteract()
     }
@@ -259,7 +262,7 @@ export default function App() {
           move together or the framing is wrong; the arithmetic is in the
           comment above them.
         */
-        camera={{ fov: 40, near: 0.1, far: 250, position: [0, 6, 14] }}
+        camera={{ fov: CAMERA.fov, near: 0.1, far: 250, position: [0, 6, 14] }}
         /*
           Tone mapping is disabled on the renderer and applied once at the end of
           the effect chain instead. Leaving it on here means ACES runs twice, once
@@ -403,7 +406,7 @@ export default function App() {
         {!FX.disabled && <PostFX />}
       </Canvas>
 
-      <HUD />
+      <HUD onInteract={onInteract} />
       {/*
         Outside the HUD rather than inside it. The HUD's root is a full-viewport
         `pointerEvents: none` layer whose children opt back in one at a time, and

@@ -373,7 +373,7 @@ export function PostFX() {
         levels={quality.bloomLevels}
       />
 
-      <Vignette offset={0.3} darkness={0.42} />
+      <Vignette offset={0.25} darkness={0.28} />
 
       {/*
         The boundary. Everything above this line is light, everything below it

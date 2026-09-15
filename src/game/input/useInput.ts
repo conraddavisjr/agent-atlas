@@ -84,6 +84,7 @@ export function useInput() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof Element && (e.target.closest('input, select, textarea, [contenteditable=true]') || ((e.code === 'Space' || e.code === 'Enter') && e.target.closest('button')))) return
       // Space scrolls the page by default, which would fight the jump.
       if (JUMP_KEYS.includes(e.code) || e.code.startsWith('Arrow')) e.preventDefault()
       if (keys.current.has(e.code)) return // ignore auto-repeat
@@ -108,6 +109,7 @@ export function useInput() {
     }
 
     const onMouseMove = (e: MouseEvent) => {
+      if (e.target instanceof Element && e.target.closest('[data-hud]')) return
       // Only orbit while dragging or pointer-locked, so casual mouse movement
       // across the page does not spin the camera.
       if (!pointerLocked.current && e.buttons === 0) return
@@ -137,6 +139,7 @@ export function useInput() {
      * scrolls under the canvas while the camera turns.
      */
     const onWheel = (e: WheelEvent) => {
+      if (e.target instanceof Element && e.target.closest('[data-hud]')) return
       e.preventDefault()
       const toPixels = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1
       intent.current.lookX += e.deltaX * toPixels * WHEEL_LOOK_SCALE

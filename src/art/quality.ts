@@ -452,8 +452,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     faceAnimation: false,
   },
   medium: {
-    grassBlades: 70_000,
-    flowers: 4_500,
+    grassBlades: 55_000,
+    flowers: 3_000,
     grassCastShadow: false,
     grassRadius: 16,
     shadowMapSize: 2048,
@@ -510,8 +510,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     faceAnimation: false,
   },
   high: {
-    grassBlades: 220_000,
-    flowers: 14_000,
+    grassBlades: 120_000,
+    flowers: 6_500,
     grassCastShadow: false,
     grassRadius: 16,
     shadowMapSize: 4096,
